@@ -35,6 +35,7 @@ public:
     RecoveryBackend::RecoveryBlockingEvent::TriggerI&,
     crimson::osd::PglogBasedRecovery &recover_op,
     size_t max_to_start);
+  void on_activate_complete();
   void on_backfill_reserved();
   void dispatch_backfill_event(
     boost::intrusive_ptr<const boost::statechart::event_base> evt);
