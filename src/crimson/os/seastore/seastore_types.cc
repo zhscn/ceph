@@ -89,6 +89,17 @@ std::ostream& operator<<(std::ostream& out, segment_seq_printer_t seq)
   }
 }
 
+std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr)
+{
+  out << "pladdr(";
+  if (pladdr.is_laddr()) {
+    out << pladdr.get_laddr();
+  } else {
+    out << pladdr.get_paddr();
+  }
+  return out << ")";
+}
+
 std::ostream &operator<<(std::ostream &out, const paddr_t &rhs)
 {
   auto id = rhs.get_device_id();

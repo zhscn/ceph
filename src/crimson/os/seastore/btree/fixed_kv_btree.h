@@ -197,7 +197,10 @@ public:
       if constexpr (
         std::is_same_v<crimson::os::seastore::lba_manager::btree::lba_map_val_t,
                        node_val_t>) {
-        ret.paddr = ret.paddr.maybe_relative_to(leaf.node->get_paddr());
+        if (ret.pladdr.is_paddr()) {
+          ret.pladdr = ret.pladdr.get_paddr().maybe_relative_to(
+            leaf.node->get_paddr());
+        }
       }
       return ret;
     }
@@ -502,9 +505,11 @@ public:
           &child_node);
       } else {
         if constexpr (leaf_has_children) {
-          ret = c.trans.get_extent(
-            i->get_val().paddr.maybe_relative_to(node->get_paddr()),
-            &child_node);
+          if (i->get_val().pladdr.is_paddr()) {
+            ret = c.trans.get_extent(
+              i->get_val().pladdr.get_paddr().maybe_relative_to(node->get_paddr()),
+              &child_node);
+          }
         }
       }
       if (ret == Transaction::get_extent_ret::PRESENT) {
@@ -577,7 +582,10 @@ public:
             assert(!c.cache.query_cache(i->get_val(), nullptr));
           } else {
             if constexpr (leaf_has_children) {
-              assert(!c.cache.query_cache(i->get_val().paddr, nullptr));
+              assert(i->get_val().pladdr.is_paddr()
+                ? (bool)!c.cache.query_cache(
+                    i->get_val().pladdr.get_paddr(), nullptr)
+                : true);
             }
           }
         }
