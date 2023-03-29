@@ -80,7 +80,7 @@ public:
     Transaction &t,
     laddr_t hint,
     extent_len_t len,
-    paddr_t addr,
+    pladdr_t addr
     LogicalCachedExtent *nextent) = 0;
 
   struct ref_update_result_t {

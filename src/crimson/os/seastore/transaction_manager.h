@@ -370,6 +370,41 @@ public:
       nullptr);
   }
 
+  /*
+   * clone_extent
+   *
+   * create an indirect lba mapping pointing to the physical
+   * lba mapping whose key is clone_offset. Resort to btree_lba_manager.h
+   * for the definition of "indirect lba mapping" and "physical lba mapping"
+   *
+   */
+  using clone_extent_iertr = alloc_extent_iertr;
+  using clone_extent_ret = clone_extent_iertr::future<LBAMappingRef>;
+  clone_extent_ret clone_extent(
+    Transaction &t,
+    laddr_t hint,
+    laddr_t clone_offset,
+    extent_len_t len) {
+    LOG_PREFIX(TransactionManager::clone_extent);
+    SUBDEBUGT(seastore_tm, "len={}, laddr_hint={}, clone_offset {}",
+      t, len, hint, clone_offset);
+    ceph_assert(is_aligned(hint, epm->get_block_size()));
+    return lba_manager->alloc_extent(
+      t,
+      hint,
+      len,
+      clone_offset
+    ).si_then([this, &t, clone_offset](auto pin) {
+      return inc_ref(t, clone_offset
+      ).si_then([pin=std::move(pin)](auto) mutable {
+	return std::move(pin);
+      }).handle_error_interruptible(
+	crimson::ct_error::input_output_error::pass_further(),
+	crimson::ct_error::assert_all("not possible")
+      );
+    });
+  }
+
   /* alloc_extents
    *
    * allocates more than one new blocks of type T.
