@@ -183,6 +183,22 @@ public:
     const std::list<LogicalCachedExtentRef>& extents);
 
   /**
+   * split_mapping
+   *
+   * split an lba entry into two
+   */
+  using split_mapping_iertr = alloc_extent_iertr;
+  using split_mapping_ret = split_mapping_iertr::future<
+    std::pair<LBAMappingRef, LBAMappingRef>>;
+  virtual split_mapping_ret split_mapping(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t left_len,
+    extent_len_t right_len,
+    LogicalCachedExtent *lnextent,
+    LogicalCachedExtent *rnextent) = 0;
+
+  /**
    * get_physical_extent_if_live
    *
    * Returns extent at addr/laddr if still live (if laddr
