@@ -149,8 +149,8 @@ BtreeLBAManager::get_mappings(
 	    return LBABtree::iterate_repeat_ret_inner(
 	      interruptible::ready_future_marker{},
 	      seastar::stop_iteration::no);
-	  }).si_then([this, &ret, c, &pin_list] {
-	    return _get_original_mappings(c, pin_list
+	  }).si_then([this, &ret, c, &pin_list, length, offset] {
+	    return _get_original_mappings(c, pin_list, offset, length
 	    ).si_then([&ret](auto _ret) {
 	      ret = std::move(_ret);
 	    });
@@ -162,14 +162,16 @@ BtreeLBAManager::get_mappings(
 BtreeLBAManager::_get_original_mappings_ret
 BtreeLBAManager::_get_original_mappings(
   op_context_t<laddr_t> c,
-  std::list<BtreeLBAPinRef> &pin_list)
+  std::list<BtreeLBAMappingRef> &pin_list,
+  laddr_t offset,
+  extent_len_t length)
 {
   return seastar::do_with(
     lba_pin_list_t(),
-    [this, c, &pin_list](auto &ret) {
+    [this, c, &pin_list, length, offset](auto &ret) {
     return trans_intr::do_for_each(
       pin_list,
-      [this, c, &ret](auto &pin) {
+      [this, c, &ret, length, offset](auto &pin) {
 	LOG_PREFIX(BtreeLBAManager::get_mappings);
 	if (pin->get_raw_val().is_laddr()) {
 	  TRACET(
@@ -177,9 +179,18 @@ BtreeLBAManager::_get_original_mappings(
 	    c.trans, pin->get_key(), pin->get_length());
 	  return this->get_mappings(
 	    c.trans, pin->get_raw_val().get_laddr(), pin->get_length()
-	  ).si_then([&pin, &ret, c](auto new_pin_list) {
+	  ).si_then([&pin, &ret, c, offset, length](auto new_pin_list) {
 	    auto off = 0;
 	    for (auto &new_pin : new_pin_list) {
+	      if (pin->get_key() + off + new_pin->get_length() <= offset) {
+		// exclude mappings outside `offset`~`length`
+		off += new_pin->get_length();
+		continue;
+	      }
+	      if (pin->get_key() + off >= offset + length) {
+		break;
+	      }
+
 	      LOG_PREFIX(BtreeLBAManager::get_mappings);
 	      static_cast<BtreeLBAMapping&>(*new_pin).set_key_for_indirect(
 		pin->get_key() + off);
@@ -289,24 +300,30 @@ BtreeLBAManager::_get_mapping(
     });
 }
 
-BtreeLBAManager::alloc_extent_re
+BtreeLBAManager::alloc_extent_ret
 BtreeLBAManager::alloc_extent(
   Transaction &t,
   laddr_t hint,
   extent_len_t len,
   pladdr_t addr,
+  paddr_t actual_addr,
   LogicalCachedExtent* nextent)
 {
-  return _alloc_extent(t, hint, len, addr, 1);
+  return _alloc_extent(t, hint, len, addr, actual_addr, 1, nextent
+  ).si_then([](auto pin) {
+    return alloc_extent_iertr::make_ready_future<LBAMappingRef>(pin.release());
+  });
 }
 
-BtreeLBAManager::_alloc_extent_ret
+BtreeLBAManager::alloc_extent_iertr::future<BtreeLBAMappingRef>
 BtreeLBAManager::_alloc_extent(
   Transaction &t,
   laddr_t hint,
   extent_len_t len,
-  paddr_t addr,
-  uint32_t refcnt)
+  pladdr_t addr,
+  paddr_t actual_addr,
+  uint32_t refcnt,
+  LogicalCachedExtent* nextent)
 {
   struct state_t {
     laddr_t last_end;
@@ -375,15 +392,24 @@ BtreeLBAManager::_alloc_extent(
 	    TRACET("{}~{}, hint={}, inserted at {}",
 	           c.trans, addr, len, hint, state.last_end);
 	    if (nextent) {
+	      ceph_assert(addr.is_paddr());
 	      nextent->set_laddr(iter.get_key());
 	    }
 	    ceph_assert(inserted);
 	    state.ret = iter;
 	  });
 	});
-    }).si_then([c](auto &&state) {
-      return alloc_extent_iertr::make_ready_future<LBAPinRef>(
-	state.ret->get_pin(c).release());
+    }).si_then([c, actual_addr, addr](auto &&state)
+      -> alloc_extent_iertr::future<BtreeLBAMappingRef> {
+      auto ret_pin = state.ret->get_pin(c);
+      if (actual_addr != P_ADDR_NULL) {
+	ceph_assert(addr.is_laddr());
+	ret_pin->set_paddr(actual_addr);
+      } else {
+	ceph_assert(addr.is_paddr());
+      }
+      return alloc_extent_iertr::make_ready_future<BtreeLBAMappingRef>(
+	std::move(ret_pin));
     });
 }
 

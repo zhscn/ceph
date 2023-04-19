@@ -282,6 +282,7 @@ public:
       laddr_hint,
       len,
       ext->get_paddr(),
+      P_ADDR_NULL,
       ext.get()
     ).si_then([ext=std::move(ext), laddr_hint, &t](auto &&) mutable {
       LOG_PREFIX(TransactionManager::alloc_extent);
@@ -291,6 +292,10 @@ public:
     });
   }
 
+  struct indirect_info_t {
+    laddr_t indirect_key = L_ADDR_NULL;
+    LBAMappingRef orig_pin;
+  };
   /**
    * map_existing_extent
    *
@@ -310,48 +315,160 @@ public:
     Transaction &t,
     laddr_t laddr_hint,
     paddr_t existing_paddr,
-    extent_len_t length) {
+    extent_len_t length,
+    indirect_info_t iinfo) {
     LOG_PREFIX(TransactionManager::map_existing_extent);
     // FIXME: existing_paddr can be absolute and pending
     ceph_assert(existing_paddr.is_absolute());
-    assert(t.is_retired(existing_paddr, length));
+    assert(t.is_retired(existing_paddr, length)
+      || iinfo.indirect_key != L_ADDR_NULL);
 
-    SUBDEBUGT(seastore_tm, " laddr_hint: {} existing_paddr: {} length: {}",
-	      t, laddr_hint, existing_paddr, length);
-    auto bp = ceph::bufferptr(buffer::create_page_aligned(length));
-    bp.zero();
+    SUBDEBUGT(seastore_tm,
+	      " laddr_hint: {} existing_paddr: {} length: {} indirect_key {}",
+	      t, laddr_hint, existing_paddr, length, iinfo.indirect_key);
+    if (iinfo.indirect_key == L_ADDR_NULL) {
+      auto bp = ceph::bufferptr(buffer::create_page_aligned(length));
+      bp.zero();
 
-    // ExtentPlacementManager::alloc_new_extent will make a new
-    // (relative/temp) paddr, so make extent directly
-    auto ext = CachedExtent::make_cached_extent_ref<T>(std::move(bp));
+      // ExtentPlacementManager::alloc_new_extent will make a new
+      // (relative/temp) paddr, so make extent directly
+      auto ext = CachedExtent::make_cached_extent_ref<T>(std::move(bp));
 
-    ext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
-	      existing_paddr,
-	      PLACEMENT_HINT_NULL,
-	      NULL_GENERATION,
-	      t.get_trans_id());
+      ext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
+		existing_paddr,
+		PLACEMENT_HINT_NULL,
+		NULL_GENERATION,
+		t.get_trans_id());
 
-    t.add_fresh_extent(ext);
+      t.add_fresh_extent(ext);
 
-    return lba_manager->alloc_extent(
-      t,
-      laddr_hint,
-      length,
-      existing_paddr,
-      ext.get()
-    ).si_then([ext=std::move(ext), laddr_hint, this](auto &&ref) {
-      ceph_assert(laddr_hint == ref->get_key());
-      return epm->read(
-        ext->get_paddr(),
-	ext->get_length(),
-	ext->get_bptr()
-      ).safe_then([ext=std::move(ext)] {
-	return map_existing_extent_iertr::make_ready_future<TCachedExtentRef<T>>
-	  (std::move(ext));
+      return lba_manager->alloc_extent(
+	t,
+	laddr_hint,
+	length,
+	existing_paddr,
+	P_ADDR_NULL,
+	ext.get()
+      ).si_then([ext=std::move(ext), iinfo=std::move(iinfo),
+			  laddr_hint, this, &t](auto &&ref) mutable {
+	LOG_PREFIX(TransactionManager::map_existing_extent);
+	ceph_assert(laddr_hint == ref->get_key());
+	SUBDEBUGT(seastore_tm,
+		  " mapped existing extent, laddr_hint: {} indirect_key {}, {}",
+		  t, laddr_hint, iinfo.indirect_key, *ext);
+	return epm->read(
+	  ext->get_paddr(),
+	  ext->get_length(),
+	  ext->get_bptr()
+	).safe_then([ext=std::move(ext)] {
+	  return map_existing_extent_iertr::make_ready_future<
+	    TCachedExtentRef<T>>(
+	      std::move(ext));
+	});
+      });
+    } else {
+      return lba_manager->alloc_extent(
+	t,
+	laddr_hint,
+	length,
+	iinfo.indirect_key,
+	existing_paddr,
+	nullptr
+      ).si_then([this, &t, indirect_key=iinfo.indirect_key](auto mapping) {
+	ceph_assert(indirect_key == mapping->get_intermediate_key());
+	return inc_ref(t, indirect_key
+	).si_then([](auto) {
+	  return TCachedExtentRef<T>();
+	});
+      });
+    }
+  }
+
+  using split_extent_iertr = alloc_extent_iertr;
+  using split_extent_ret = split_extent_iertr::future<
+    std::pair<LBAMappingRef, LBAMappingRef>>;
+  template<typename T>
+  split_extent_ret split_extent(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t left_len,
+    extent_len_t right_len) {
+    LOG_PREFIX(TransactionManager::split_extent);
+
+    auto lbp = ceph::bufferptr(buffer::create_page_aligned(left_len));
+    lbp.zero();
+    auto rbp = ceph::bufferptr(buffer::create_page_aligned(right_len));
+    rbp.zero();
+
+    auto lext = CachedExtent::make_cached_extent_ref<T>(std::move(lbp));
+    lext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
+	       P_ADDR_ZERO,
+	       PLACEMENT_HINT_NULL,
+	       NULL_GENERATION,
+	       t.get_trans_id());
+    auto rext = CachedExtent::make_cached_extent_ref<T>(std::move(rbp));
+    rext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
+	       P_ADDR_ZERO,
+	       PLACEMENT_HINT_NULL,
+	       NULL_GENERATION,
+	       t.get_trans_id());
+
+    lext->set_laddr(laddr);
+    rext->set_laddr(laddr + left_len);
+
+    SUBDEBUGT(seastore_tm,
+	      " new extent, lext: {}, rext{}",
+	      t, *lext, *rext);
+    return lba_manager->split_mapping(
+      t, laddr, left_len, right_len, lext.get(), rext.get()
+    ).si_then([this, &t, left_len, right_len](auto p) {
+      auto &pin = p.first;
+      //FIXME: currently, only splitting cloned extents will call
+      //this method, so no lba entry should be removed, which means
+      //both pins returned by LBAManager::split_mapping() shouldn't be
+      //null. However, in the future, if head extents are also splitted
+      //by this method, this line should be an 'if' clause instead of
+      //an assert.
+      ceph_assert(pin);
+      return cache->retire_extent_addr(
+	t, pin->get_val(), left_len + right_len
+      ).si_then([p=std::move(p)]() mutable {
+	return std::move(p);
+      });
+    }).si_then([this, &t, lext, rext](auto p) {
+      ceph_assert(p.first);
+      ceph_assert(p.second);
+      auto &lmapping = p.first;
+      auto &rmapping = p.second;
+
+      lext->set_paddr(lmapping->get_val());
+      rext->set_paddr(rmapping->get_val());
+      t.add_fresh_extent(lext);
+      t.add_fresh_extent(rext);
+
+      std::vector<TCachedExtentRef<T>> ext_vec = {lext, rext};
+      return seastar::do_with(
+	std::move(ext_vec),
+	[this](auto &ext_vec) mutable {
+	return trans_intr::parallel_for_each(
+	  ext_vec,
+	  [this](auto ext) mutable {
+	  return trans_intr::make_interruptible(
+	    epm->read(
+	      ext->get_paddr(),
+	      ext->get_length(),
+	      ext->get_bptr()
+	    ).handle_error(
+	      crimson::ct_error::input_output_error::pass_further(),
+	      crimson::ct_error::assert_all("unexpected error splitting extents")
+	    )
+	  );
+	});
+      }).si_then([p=std::move(p)]() mutable {
+	return std::move(p);
       });
     });
   }
-
 
   using reserve_extent_iertr = alloc_extent_iertr;
   using reserve_extent_ret = reserve_extent_iertr::future<LBAMappingRef>;
@@ -367,6 +484,7 @@ public:
       hint,
       len,
       P_ADDR_ZERO,
+      P_ADDR_NULL,
       nullptr);
   }
 
@@ -384,7 +502,8 @@ public:
     Transaction &t,
     laddr_t hint,
     laddr_t clone_offset,
-    extent_len_t len) {
+    extent_len_t len,
+    paddr_t actual_addr) {
     LOG_PREFIX(TransactionManager::clone_extent);
     SUBDEBUGT(seastore_tm, "len={}, laddr_hint={}, clone_offset {}",
       t, len, hint, clone_offset);
@@ -393,7 +512,9 @@ public:
       t,
       hint,
       len,
-      clone_offset
+      clone_offset,
+      actual_addr,
+      nullptr
     ).si_then([this, &t, clone_offset](auto pin) {
       return inc_ref(t, clone_offset
       ).si_then([pin=std::move(pin)](auto) mutable {
@@ -666,7 +787,10 @@ private:
 	assert(!pin->has_been_invalidated());
 	assert(pin->get_parent());
 	pin->link_child(&extent);
-	extent.set_laddr(pin->get_key());
+	extent.set_laddr(
+	  pin->is_indirect()
+	  ? pin->get_intermediate_key()
+	  : pin->get_key());
       }
     ).si_then([FNAME, &t](auto ref) mutable -> ret {
       SUBTRACET(seastore_tm, "got extent -- {}", t, *ref);
@@ -706,7 +830,10 @@ private:
 	assert(pin->get_parent());
 	assert(!pin->get_parent()->is_pending());
 	pin->link_child(&lextent);
-	lextent.set_laddr(pin->get_key());
+	lextent.set_laddr(
+	  pin->is_indirect()
+	  ? pin->get_intermediate_key()
+	  : pin->get_key());
       }
     ).si_then([FNAME, &t](auto ref) {
       SUBTRACET(seastore_tm, "got extent -- {}", t, *ref);

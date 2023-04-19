@@ -42,12 +42,27 @@ struct extent_to_write_t {
   type_t type;
   laddr_t addr;
   extent_len_t len;
+  laddr_t indirect_key;
   /// non-nullopt if and only if type == DATA
   std::optional<bufferlist> to_write;
   /// non-nullopt if and only if type == EXISTING
   std::optional<paddr_t> existing_paddr;
+  /// if the extent is an indirect one, we want the extent
+  /// to pin the original lba branch, instead of the branch
+  /// of the indirect one.
+  LBAMappingRef existing_pin;
 
-  extent_to_write_t(const extent_to_write_t &) = default;
+  extent_to_write_t(const extent_to_write_t &other) {
+    type = other.type;
+    addr = other.addr;
+    len = other.len;
+    indirect_key = other.indirect_key;
+    to_write = other.to_write;
+    existing_paddr = other.existing_paddr;
+    if (other.existing_pin) {
+      existing_pin = other.existing_pin->duplicate();
+    }
+  }
   extent_to_write_t(extent_to_write_t &&) = default;
 
   bool is_data() const {
@@ -77,8 +92,17 @@ struct extent_to_write_t {
   }
 
   static extent_to_write_t create_existing(
-      laddr_t addr, paddr_t existing_paddr, extent_len_t len) {
-    return extent_to_write_t(addr, existing_paddr, len);
+      laddr_t addr,
+      paddr_t existing_paddr,
+      extent_len_t len,
+      laddr_t indirect_key,
+      LBAMappingRef &&existing_pin) {
+    return extent_to_write_t(
+      addr,
+      existing_paddr,
+      len,
+      indirect_key,
+      std::move(existing_pin));
   }
 
 private:
@@ -89,9 +113,15 @@ private:
   extent_to_write_t(laddr_t addr, extent_len_t len)
     : type(type_t::ZERO), addr(addr), len(len) {}
 
-  extent_to_write_t(laddr_t addr, paddr_t existing_paddr, extent_len_t len)
+  extent_to_write_t(
+    laddr_t addr,
+    paddr_t existing_paddr,
+    extent_len_t len,
+    laddr_t indirect_key,
+    LBAMappingRef &&existing_pin)
     : type(type_t::EXISTING), addr(addr), len(len),
-      to_write(std::nullopt), existing_paddr(existing_paddr) {}
+      indirect_key(indirect_key), to_write(std::nullopt),
+      existing_paddr(existing_paddr), existing_pin(std::move(existing_pin)) {}
 };
 using extent_to_write_list_t = std::list<extent_to_write_t>;
 
@@ -220,19 +250,27 @@ ObjectDataHandler::write_ret do_insertions(
 	DEBUGT("map existing extent: laddr {} len {} {}",
 	       ctx.t, region.addr, region.len, *region.existing_paddr);
 	return ctx.tm.map_existing_extent<ObjectDataBlock>(
-	  ctx.t, region.addr, *region.existing_paddr, region.len
+	  ctx.t, region.addr, *region.existing_paddr,
+	  region.len, {region.indirect_key, std::move(region.existing_pin)}
 	).handle_error_interruptible(
 	  TransactionManager::alloc_extent_iertr::pass_further{},
 	  Device::read_ertr::assert_all{"ignore read error"}
 	).si_then([FNAME, ctx, &region](auto extent) {
-	  if (extent->get_laddr() != region.addr) {
+	  if (!extent) {
+	    ceph_assert(region.indirect_key != L_ADDR_NULL);
+	    return ObjectDataHandler::write_iertr::now();
+	  }
+	  if (extent->get_laddr() != region.addr
+	      && extent->get_laddr() != region.indirect_key) {
 	    ERRORT(
-	      "inconsistent laddr: extent: {} region {}",
+	      "inconsistent laddr: extent: {} region {}/{}",
 	      ctx.t,
 	      extent->get_laddr(),
-	      region.addr);
+	      region.addr,
+	      region.indirect_key);
 	  }
-	  ceph_assert(extent->get_laddr() == region.addr);
+	  ceph_assert(extent->get_laddr() == region.addr
+	    || extent->get_laddr() == region.indirect_key);
 	  return ObjectDataHandler::write_iertr::now();
 	});
       }
@@ -290,6 +328,9 @@ struct overwrite_plan_t {
   laddr_t data_end;
   laddr_t aligned_data_begin;
   laddr_t aligned_data_end;
+  laddr_t left_indirect_key = L_ADDR_NULL;
+  laddr_t right_indirect_key = L_ADDR_NULL;
+  laddr_t right_indirect_len = 0;
 
   // operations
   overwrite_operation_t left_operation;
@@ -343,6 +384,9 @@ public:
 	       << ", data_end=" << overwrite_plan.data_end
 	       << ", aligned_data_begin=" << overwrite_plan.aligned_data_begin
 	       << ", aligned_data_end=" << overwrite_plan.aligned_data_end
+	       << ", left_indirect_key=" << overwrite_plan.left_indirect_key
+	       << ", right_indirect_key=" << overwrite_plan.right_indirect_key
+	       << ", right_indirect_len=" << overwrite_plan.right_indirect_len
 	       << ", left_operation=" << overwrite_plan.left_operation
 	       << ", right_operation=" << overwrite_plan.right_operation
 	       << ", block_size=" << overwrite_plan.block_size
@@ -361,6 +405,18 @@ public:
       data_end(offset + len),
       aligned_data_begin(p2align((uint64_t)data_begin, (uint64_t)block_size)),
       aligned_data_end(p2roundup((uint64_t)data_end, (uint64_t)block_size)),
+      left_indirect_key(
+	pins.front()->is_indirect()
+	  ? pins.front()->get_intermediate_key()
+	  : L_ADDR_NULL),
+      right_indirect_key(
+	pins.back()->is_indirect()
+	  ? pins.back()->get_intermediate_key()
+	  : L_ADDR_NULL),
+      right_indirect_len(
+	pins.back()->is_indirect()
+	  ? pins.back()->get_length()
+	  : 0),
       left_operation(overwrite_operation_t::UNKNOWN),
       right_operation(overwrite_operation_t::UNKNOWN),
       block_size(block_size) {
@@ -438,6 +494,12 @@ private:
         actual_write_size -= left_ext_size;
         left_ext_size = 0;
         left_operation = overwrite_operation_t::SPLIT_EXISTING;
+	if (right_indirect_key != L_ADDR_NULL
+	    && right_indirect_key == left_indirect_key) {
+	  // split an extent at both the left and the right side
+	  right_indirect_key += get_left_extent_size();
+	  right_indirect_len -= get_left_extent_size();
+	}
       } else { // left_ext_size < right_ext_size
         // split right
         assert(right_operation == overwrite_operation_t::UNKNOWN);
@@ -521,32 +583,52 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
     assert(overwrite_plan.left_operation == overwrite_operation_t::SPLIT_EXISTING);
 
     auto extent_len = overwrite_plan.get_left_extent_size();
-    assert(extent_len);
-    std::optional<extent_to_write_t> left_to_write_extent =
-      std::make_optional(extent_to_write_t::create_existing(
-        overwrite_plan.pin_begin,
-        overwrite_plan.left_paddr,
-        extent_len));
-
-    auto prepend_len = overwrite_plan.get_left_alignment_size();
-    if (prepend_len == 0) {
-      return get_iertr::make_ready_future<operate_ret_bare>(
-        left_to_write_extent,
-        std::nullopt);
-    } else {
-      return ctx.tm.read_pin<ObjectDataBlock>(
-	ctx.t, pin->duplicate()
-      ).si_then([prepend_offset=extent_len, prepend_len,
-                 left_to_write_extent=std::move(left_to_write_extent)]
-                (auto left_extent) mutable {
-        return get_iertr::make_ready_future<operate_ret_bare>(
-          left_to_write_extent,
-          std::make_optional(bufferptr(
-            left_extent->get_bptr(),
-            prepend_offset,
-            prepend_len)));
-      });
+    assert(extent_len && extent_len < pin->get_length());
+    auto fut = TransactionManager::split_extent_iertr::make_ready_future<
+      std::pair<LBAMappingRef, LBAMappingRef>>();
+    if (overwrite_plan.left_indirect_key != L_ADDR_NULL) {
+      fut = ctx.tm.split_extent<ObjectDataBlock>(
+	ctx.t,
+	overwrite_plan.left_indirect_key,
+	extent_len,
+	pin->get_length() - extent_len);
     }
+
+    return fut.si_then([overwrite_plan=std::move(overwrite_plan),
+			extent_len, ctx, pin=pin->duplicate()](auto p) mutable {
+      std::optional<extent_to_write_t> left_to_write_extent =
+	std::make_optional(extent_to_write_t::create_existing(
+	  overwrite_plan.pin_begin,
+	  overwrite_plan.left_paddr,
+	  extent_len,
+	  overwrite_plan.left_indirect_key,
+	  std::move(p.first)));
+      auto prepend_len = overwrite_plan.get_left_alignment_size();
+      if (prepend_len == 0) {
+	return get_iertr::make_ready_future<operate_ret_bare>(
+	  left_to_write_extent,
+	  std::nullopt);
+      } else {
+	auto read_pin = std::move(pin);
+	auto prepend_offset = extent_len;
+	if (p.second) {
+	  auto pin = p.second->duplicate();
+	  read_pin.swap(pin);
+	  prepend_offset = 0;
+	}
+	return ctx.tm.read_pin<ObjectDataBlock>(ctx.t, std::move(read_pin)
+	).si_then([prepend_offset, prepend_len,
+		   left_to_write_extent=std::move(left_to_write_extent)]
+		  (auto left_extent) mutable {
+	  return get_iertr::make_ready_future<operate_ret_bare>(
+	    left_to_write_extent,
+	    std::make_optional(bufferptr(
+	      left_extent->get_bptr(),
+	      prepend_offset,
+	      prepend_len)));
+	});
+      }
+    });
   }
 };
 
@@ -604,32 +686,55 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
 
     auto extent_len = overwrite_plan.get_right_extent_size();
     assert(extent_len);
-    std::optional<extent_to_write_t> right_to_write_extent =
-      std::make_optional(extent_to_write_t::create_existing(
-        overwrite_plan.aligned_data_end,
-        overwrite_plan.right_paddr.add_offset(overwrite_plan.aligned_data_end - right_pin_begin),
-        extent_len));
-
-    auto append_len = overwrite_plan.get_right_alignment_size();
-    if (append_len == 0) {
-      return get_iertr::make_ready_future<operate_ret_bare>(
-        right_to_write_extent,
-        std::nullopt);
-    } else {
-      auto append_offset = overwrite_plan.data_end - right_pin_begin;
-      return ctx.tm.read_pin<ObjectDataBlock>(
-	ctx.t, pin->duplicate()
-      ).si_then([append_offset, append_len,
-                 right_to_write_extent=std::move(right_to_write_extent)]
-                (auto right_extent) mutable {
-        return get_iertr::make_ready_future<operate_ret_bare>(
-          right_to_write_extent,
-          std::make_optional(bufferptr(
-            right_extent->get_bptr(),
-            append_offset,
-            append_len)));
-      });
+    auto fut = TransactionManager::split_extent_iertr::make_ready_future<
+      std::pair<LBAMappingRef, LBAMappingRef>>();
+    if (overwrite_plan.right_indirect_key != L_ADDR_NULL) {
+      fut = ctx.tm.split_extent<ObjectDataBlock>(
+	ctx.t,
+	overwrite_plan.right_indirect_key,
+	overwrite_plan.right_indirect_len - extent_len,
+	extent_len);
     }
+
+    return fut.si_then([overwrite_plan=std::move(overwrite_plan),
+			extent_len, pin=pin->duplicate(),
+			right_pin_begin, ctx](auto p) mutable {
+      std::optional<extent_to_write_t> right_to_write_extent =
+	std::make_optional(extent_to_write_t::create_existing(
+	  overwrite_plan.aligned_data_end,
+	  overwrite_plan.right_paddr.add_offset(overwrite_plan.aligned_data_end - right_pin_begin),
+	  extent_len,
+	  overwrite_plan.right_indirect_key != L_ADDR_NULL
+	    ? overwrite_plan.right_indirect_key
+	      + overwrite_plan.right_indirect_len - extent_len
+	    : L_ADDR_NULL,
+	  std::move(p.second)));
+      auto append_len = overwrite_plan.get_right_alignment_size();
+      if (append_len == 0) {
+	return get_iertr::make_ready_future<operate_ret_bare>(
+	  right_to_write_extent,
+	  std::nullopt);
+      } else {
+	auto read_pin = std::move(pin);
+	auto append_offset = overwrite_plan.data_end - right_pin_begin;
+	if (p.first) {
+	  auto pin = p.first->duplicate();
+	  read_pin.swap(pin);
+	  append_offset = overwrite_plan.data_end - overwrite_plan.aligned_data_begin;
+	}
+	return ctx.tm.read_pin<ObjectDataBlock>(ctx.t, std::move(read_pin)
+	).si_then([append_offset, append_len,
+		   right_to_write_extent=std::move(right_to_write_extent)]
+		  (auto right_extent) mutable {
+	  return get_iertr::make_ready_future<operate_ret_bare>(
+	    right_to_write_extent,
+	    std::make_optional(bufferptr(
+	      right_extent->get_bptr(),
+	      append_offset,
+	      append_len)));
+	});
+      }
+    });
   }
 };
 
@@ -1081,6 +1186,11 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		      pin->get_key() + pin->get_length(),
 		      loffset + len);
 		    if (pin->get_val().is_zero()) {
+		      LOG_PREFIX(ObjectDataHandler::read);
+		      DEBUGT("reading {}~{}, zero",
+			ctx.t,
+			pin->get_key(),
+			pin->get_length());
 		      ceph_assert(end > current); // See LBAManager::get_mappings
 		      ret.append_zero(end - current);
 		      current = end;
@@ -1088,6 +1198,12 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		    } else {
 		      auto key = pin->get_key();
 		      bool is_indirect = pin->is_indirect();
+		      LOG_PREFIX(ObjectDataHandler::read);
+		      DEBUGT("reading {}~{}, indirect: {}",
+			ctx.t,
+			key,
+			pin->get_length(),
+			is_indirect);
 		      return ctx.tm.read_pin<ObjectDataBlock>(
 			ctx.t,
 			std::move(pin)
@@ -1260,7 +1376,8 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone_extents(
 	      pin->is_indirect()
 		? pin->get_intermediate_key()
 		: pin->get_key(),
-	      pin->get_length()
+	      pin->get_length(),
+	      pin->get_val()
 	    ).si_then([&last_pos, &pin, offset](auto) {
 	      last_pos = offset + pin->get_length();
 	      return seastar::now();

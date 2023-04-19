@@ -937,7 +937,8 @@ struct transaction_manager_test_t :
       return std::nullopt;
     }
     auto extent = with_trans_intr(*(t.t), [&](auto& trans) {
-      return tm->map_existing_extent<TestBlock>(trans, hint, existing_paddr, length);
+      return tm->map_existing_extent<TestBlock>(
+	trans, hint, existing_paddr, length, {});
     }).handle_error(crimson::ct_error::eagain::handle([] {
       return TCachedExtentRef<TestBlock>(new TestBlock(0));
     }), crimson::ct_error::pass_further_all{}).unsafe_get0();

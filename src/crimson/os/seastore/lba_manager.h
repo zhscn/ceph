@@ -86,7 +86,8 @@ public:
     Transaction &t,
     laddr_t hint,
     extent_len_t len,
-    pladdr_t addr
+    pladdr_t addr,
+    paddr_t act_addr,
     LogicalCachedExtent *nextent) = 0;
 
   struct ref_update_result_t {

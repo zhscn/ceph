@@ -175,6 +175,7 @@ public:
     laddr_t hint,
     extent_len_t len,
     pladdr_t addr,
+    paddr_t actual_addr,
     LogicalCachedExtent*) final;
 
   ref_ret decref_extent(
@@ -287,16 +288,19 @@ private:
   using _get_original_mappings_ret = get_mappings_ret;
   _get_original_mappings_ret _get_original_mappings(
     op_context_t<laddr_t> c,
-    std::list<BtreeLBAMappingRef> &pin_list);
+    std::list<BtreeLBAMappingRef> &pin_list,
+    laddr_t offset,
+    extent_len_t length);
 
-  using _alloc_extent_ret = alloc_extent_ret;
-  _alloc_extent_ret _alloc_extent(
+  alloc_extent_iertr::future<BtreeLBAMappingRef>
+  _alloc_extent(
     Transaction &t,
     laddr_t hint,
     extent_len_t len,
-    paddr_t addr,
-    uint32_t refcnt);
-
+    pladdr_t addr,
+    paddr_t actual_addr,
+    uint32_t refcnt,
+    LogicalCachedExtent*);
 };
 using BtreeLBAManagerRef = std::unique_ptr<BtreeLBAManager>;
 
