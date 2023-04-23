@@ -223,62 +223,64 @@ struct overwrite_ops_t {
 overwrite_ops_t prepare_ops_list(
   lba_pin_list_t &pins_to_remove,
   extent_to_write_list_t &to_write) {
-  assert(to_write.size() != 0 && pins_to_remove.size() != 0);
+  assert(pins_to_remove.size() != 0);
   overwrite_ops_t ops;
   ops.to_remove.swap(pins_to_remove);
-  auto& front = to_write.front();
-  auto& back = to_write.back();
   long unsigned int visitted = 0;
+  if (!to_write.empty()) {
+    auto& front = to_write.front();
+    auto& back = to_write.back();
 
-  // prepare overwrite, happens in one original extent.
-  if (ops.to_remove.size() == 1 &&
-      front.is_existing() && back.is_existing()) {
-      visitted += 2;
-      assert(to_write.size() > 2);
-      assert(front.addr == front.pin->get_key());
-      assert(back.addr > back.pin->get_key());
-      ops.to_remap.push_back(extent_to_remap_t::create_overwrite(
-        std::move(front.pin),
-        front.len,
-        back.addr - front.addr - front.len));
-      ops.to_remove.pop_front();
-  } else {
-    // prepare to_remap, happens in one or multiple extents
-    if (front.is_existing()) {
-      visitted++;
-      assert(to_write.size() > 1);
-      assert(front.addr == front.pin->get_key());
-      ops.to_remap.push_back(extent_to_remap_t::create_remap(
-        std::move(front.pin),
-        0,
-        front.len));
-      ops.to_remove.pop_front();
+    // prepare overwrite, happens in one original extent.
+    if (ops.to_remove.size() == 1 &&
+	front.is_existing() && back.is_existing()) {
+	visitted += 2;
+	assert(to_write.size() > 2);
+	assert(front.addr == front.pin->get_key());
+	assert(back.addr > back.pin->get_key());
+	ops.to_remap.push_back(extent_to_remap_t::create_overwrite(
+	  std::move(front.pin),
+	  front.len,
+	  back.addr - front.addr - front.len));
+	ops.to_remove.pop_front();
+    } else {
+      // prepare to_remap, happens in one or multiple extents
+      if (front.is_existing()) {
+	visitted++;
+	assert(to_write.size() > 1);
+	assert(front.addr == front.pin->get_key());
+	ops.to_remap.push_back(extent_to_remap_t::create_remap(
+	  std::move(front.pin),
+	  0,
+	  front.len));
+	ops.to_remove.pop_front();
+      }
+      if (back.is_existing()) {
+	visitted++;
+	assert(to_write.size() > 1);
+	assert(back.addr + back.len ==
+	  back.pin->get_key() + back.pin->get_length());
+	ops.to_remap.push_back(extent_to_remap_t::create_remap(
+	  std::move(back.pin),
+	  back.addr - back.pin->get_key(),
+	  back.len));
+	ops.to_remove.pop_back();
+      }
     }
-    if (back.is_existing()) {
-      visitted++;
-      assert(to_write.size() > 1);
-      assert(back.addr + back.len ==
-        back.pin->get_key() + back.pin->get_length());
-      ops.to_remap.push_back(extent_to_remap_t::create_remap(
-        std::move(back.pin),
-        back.addr - back.pin->get_key(),
-        back.len));
-      ops.to_remove.pop_back();
-    }
-  }
 
-  // prepare to_insert
-  for (auto &region : to_write) {
-    if (region.is_data()) {
-      visitted++;
-      assert(region.to_write.has_value());
-      ops.to_insert.push_back(extent_to_insert_t::create_data(
-        region.addr, region.len, region.to_write));
-    } else if (region.is_zero()) {
-      visitted++;
-      assert(!(region.to_write.has_value()));
-      ops.to_insert.push_back(extent_to_insert_t::create_zero(
-        region.addr, region.len));
+    // prepare to_insert
+    for (auto &region : to_write) {
+      if (region.is_data()) {
+	visitted++;
+	assert(region.to_write.has_value());
+	ops.to_insert.push_back(extent_to_insert_t::create_data(
+	  region.addr, region.len, region.to_write));
+      } else if (region.is_zero()) {
+	visitted++;
+	assert(!(region.to_write.has_value()));
+	ops.to_insert.push_back(extent_to_insert_t::create_zero(
+	  region.addr, region.len));
+      }
     }
   }
 
@@ -951,6 +953,11 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
       ).si_then([ctx, size, &pins, &object_data, &to_write](auto _pins) {
 	_pins.swap(pins);
 	ceph_assert(pins.size());
+	if (!size) {
+	  // no need to reserve region if we are truncating the object's
+	  // size to 0
+	  return clear_iertr::now();
+	}
 	auto &pin = *pins.front();
 	ceph_assert(pin.get_key() >= object_data.get_reserved_data_base());
 	ceph_assert(
@@ -1012,7 +1019,6 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
           }
 	}
       }).si_then([ctx, size, &to_write, &object_data, &pins] {
-        assert(to_write.size());
         return seastar::do_with(
           prepare_ops_list(pins, to_write),
           [ctx, size, &object_data](auto &ops) {
