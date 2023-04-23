@@ -836,6 +836,11 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
       ).si_then([ctx, size, &pins, &object_data, &to_write](auto _pins) {
 	_pins.swap(pins);
 	ceph_assert(pins.size());
+	if (!size) {
+	  // no need to reserve region if we are truncating the object's
+	  // size to 0
+	  return clear_iertr::now();
+	}
 	auto &pin = *pins.front();
 	ceph_assert(pin.get_key() >= object_data.get_reserved_data_base());
 	ceph_assert(
