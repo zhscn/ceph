@@ -188,7 +188,7 @@ TransactionManager::ref_ret TransactionManager::inc_ref(
   ).si_then([FNAME, ref, &t](auto result) {
     DEBUGT("extent refcount is incremented to {} -- {}",
            t, result.refcount, *ref);
-    return result.refcount;
+    return result;
   }).handle_error_interruptible(
     ref_iertr::pass_further{},
     ct_error::all_same_way([](auto e) {
@@ -206,7 +206,7 @@ TransactionManager::ref_ret TransactionManager::inc_ref(
   ).si_then([FNAME, offset, &t](auto result) {
     DEBUGT("extent refcount is incremented to {} -- {}~{}, {}",
            t, result.refcount, offset, result.length, result.addr);
-    return result.refcount;
+    return result;
   });
 }
 
@@ -223,7 +223,7 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
     if (result.refcount == 0) {
       cache->retire_extent(t, ref);
     }
-    return result.refcount;
+    return result;
   });
 }
 
@@ -242,15 +242,15 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
          !result.addr.get_paddr().is_zero())) {
       return cache->retire_extent_addr(
 	t, result.addr.get_paddr(), result.length
-      ).si_then([] {
+      ).si_then([result] {
 	return ref_ret(
 	  interruptible::ready_future_marker{},
-	  0);
+	  result);
       });
     } else {
       return ref_ret(
 	interruptible::ready_future_marker{},
-	result.refcount);
+	result);
     }
   });
 }
@@ -266,7 +266,7 @@ TransactionManager::refs_ret TransactionManager::dec_ref(
       return trans_intr::do_for_each(offsets.begin(), offsets.end(),
         [this, &t, &refcnt] (auto &laddr) {
         return this->dec_ref(t, laddr).si_then([&refcnt] (auto ref) {
-          refcnt.push_back(ref);
+          refcnt.push_back(ref.refcount);
           return ref_iertr::now();
         });
       }).si_then([&refcnt] {

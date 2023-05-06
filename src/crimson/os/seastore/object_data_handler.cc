@@ -169,10 +169,32 @@ ObjectDataHandler::write_ret do_removals(
   context_t ctx,
   lba_pin_list_t &pins)
 {
-  return trans_intr::do_for_each(
-    pins,
-    [ctx](auto &pin) {
+  return seastar::do_with(
+    pins.front()->get_key(),
+    pins.front()->get_key(),
+    [ctx, &pins](auto &next_laddr, auto &last_laddr) {
+    return trans_intr::do_for_each(
+      pins,
+      [ctx, &next_laddr, &last_laddr](auto &pin) {
       LOG_PREFIX(object_data_handler.cc::do_removals);
+      if (pin->get_key() < next_laddr) {
+	// with lba indirect in place, chances are that
+	// one lba mapping corresponds to multiple pins.
+	// For example:
+	// 	lba_mapping for clone1: laddr_1a ~ 4096, laddr_1b ~ 4096
+	// 	lba_mapping for clone2: laddr_2a ~ 8192(indirection of
+	// 						laddr_2a is laddr_1a)
+	// Although clone2 has only one lba_mapping laddr_2a ~ 8192, transaction
+	// manager's get_pins() will return two pins: laddr_2a~4096,laddr_2a+4096~4096
+	//
+	// So when removing pins, we may skip some pins
+	DEBUGT("decreasing ref: {}, skipped",
+	       ctx.t,
+	       pin->get_key());
+	ceph_assert(pin->get_key() > last_laddr);
+	return ObjectDataHandler::write_iertr::now();
+      }
+      ceph_assert(pin->get_key() == next_laddr);
       DEBUGT("decreasing ref: {}",
 	     ctx.t,
 	     pin->get_key());
@@ -180,13 +202,17 @@ ObjectDataHandler::write_ret do_removals(
 	ctx.t,
 	pin->get_key()
       ).si_then(
-	[](auto){},
+	[&next_laddr, &last_laddr](auto result){
+	  last_laddr = next_laddr;
+	  next_laddr += result.length;
+	},
 	ObjectDataHandler::write_iertr::pass_further{},
 	crimson::ct_error::assert_all{
 	  "object_data_handler::do_removals invalid error"
 	}
       );
     });
+  });
 }
 
 /// Creates zero/data extents in to_write

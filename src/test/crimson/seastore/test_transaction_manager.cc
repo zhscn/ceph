@@ -520,7 +520,7 @@ struct transaction_manager_test_t :
 
     auto refcnt = with_trans_intr(*(t.t), [&](auto& trans) {
       return tm->inc_ref(trans, offset);
-    }).unsafe_get0();
+    }).unsafe_get0().refcount;
     auto check_refcnt = test_mappings.inc_ref(offset, t.mapping_delta);
     EXPECT_EQ(refcnt, check_refcnt);
   }
@@ -531,7 +531,7 @@ struct transaction_manager_test_t :
 
     auto refcnt = with_trans_intr(*(t.t), [&](auto& trans) {
       return tm->dec_ref(trans, offset);
-    }).unsafe_get0();
+    }).unsafe_get0().refcount;
     auto check_refcnt = test_mappings.dec_ref(offset, t.mapping_delta);
     EXPECT_EQ(refcnt, check_refcnt);
     if (refcnt == 0)
