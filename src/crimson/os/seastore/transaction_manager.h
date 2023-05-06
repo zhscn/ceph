@@ -178,7 +178,15 @@ public:
   {
     auto v = pin->get_logical_extent(t);
     if (v.has_child()) {
-      return v.get_child_fut().safe_then([](auto extent) {
+      return v.get_child_fut().safe_then([pin=std::move(pin)](auto extent) {
+#ifndef NDEBUG
+        auto lextent = extent->template cast<LogicalCachedExtent>();
+        auto pin_laddr = pin->get_key();
+        if (pin->is_indirect()) {
+          pin_laddr = pin->get_intermediate_key();
+        }
+        assert(lextent->get_laddr() == pin_laddr);
+#endif
 	return extent->template cast<T>();
       });
     } else {
@@ -283,6 +291,7 @@ public:
       len,
       ext->get_paddr(),
       P_ADDR_NULL,
+      L_ADDR_NULL,
       ext.get()
     ).si_then([ext=std::move(ext), laddr_hint, &t](auto &&) mutable {
       LOG_PREFIX(TransactionManager::alloc_extent);
@@ -342,6 +351,7 @@ public:
       t, pin->get_val(), T::TYPE
     ).si_then([this, &t, remaps,
               original_laddr = pin->get_key(),
+	      intermediate_base = pin->get_intermediate_base(),
               original_paddr = pin->get_val(),
               original_len = pin->get_length()](auto ext) {
       std::optional<ceph::bufferptr> original_bptr;
@@ -362,15 +372,15 @@ public:
         0,
         std::move(original_bptr),
         std::vector<remap_entry>(remaps.begin(), remaps.end()),
-        [this, &t, original_laddr, original_paddr, original_len]
+        [this, &t, original_laddr, original_paddr, original_len, intermediate_base]
         (auto &ret, auto &count, auto &original_bptr, auto &remaps) {
         return dec_ref(t, original_laddr
-        ).si_then([this, &t, &original_bptr, &ret, &count, &remaps,
+        ).si_then([this, &t, &original_bptr, &ret, &count, &remaps, intermediate_base,
                    original_laddr, original_paddr, original_len](auto) {
           return trans_intr::do_for_each(
             remaps.begin(),
             remaps.end(),
-            [this, &t, &original_bptr, &ret, &count,
+            [this, &t, &original_bptr, &ret, &count, intermediate_base,
               original_laddr, original_paddr, original_len](auto &remap) {
             LOG_PREFIX(TransactionManager::remap_pin);
             auto remap_offset = remap.offset;
@@ -391,6 +401,7 @@ public:
               remap_paddr,
               remap_len,
               original_laddr,
+	      intermediate_base,
               std::move(original_bptr)
             ).si_then([&ret, &count, remap_laddr](auto &&npin) {
               ceph_assert(npin->get_key() == remap_laddr);
@@ -426,6 +437,7 @@ public:
       len,
       P_ADDR_ZERO,
       P_ADDR_NULL,
+      L_ADDR_NULL,
       nullptr);
   }
 
@@ -458,6 +470,7 @@ public:
       mapping.get_length(),
       clone_offset,
       mapping.get_val(),
+      clone_offset,
       nullptr
     ).si_then([this, &t, clone_offset](auto pin) {
       return inc_ref(t, clone_offset
@@ -731,7 +744,10 @@ private:
 	assert(!pin->has_been_invalidated());
 	assert(pin->get_parent());
 	pin->link_child(&extent);
-	extent.set_laddr(pin->get_key());
+	extent.set_laddr(
+	  pin->is_indirect()
+	  ? pin->get_intermediate_key()
+	  : pin->get_key());
       }
     ).si_then([FNAME, &t](auto ref) mutable -> ret {
       SUBTRACET(seastore_tm, "got extent -- {}", t, *ref);
@@ -772,7 +788,10 @@ private:
 	assert(pin->get_parent());
 	assert(!pin->get_parent()->is_pending());
 	pin->link_child(&lextent);
-	lextent.set_laddr(pin->get_key());
+	lextent.set_laddr(
+	  pin->is_indirect()
+	  ? pin->get_intermediate_key()
+	  : pin->get_key());
       }
     ).si_then([FNAME, &t](auto ref) {
       SUBTRACET(seastore_tm, "got extent -- {}", t, *ref);
@@ -805,6 +824,7 @@ private:
     paddr_t remap_paddr,
     extent_len_t remap_length,
     laddr_t original_laddr,
+    laddr_t intermediate_base,
     std::optional<ceph::bufferptr> &&original_bptr) {
     LOG_PREFIX(TransactionManager::alloc_remapped_extent);
     SUBDEBUG(seastore_tm, "alloc remapped extent: remap_laddr: {}, "
@@ -824,6 +844,7 @@ private:
       remap_length,
       remap_paddr,
       P_ADDR_NULL,
+      intermediate_base,
       ext.get()
     ).si_then([remap_laddr, remap_length, remap_paddr](auto &&ref) {
       assert(ref->get_key() == remap_laddr);

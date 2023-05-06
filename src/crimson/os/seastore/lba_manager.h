@@ -39,6 +39,8 @@ public:
    * Fetches mappings for laddr_t in range [offset, offset + len)
    *
    * Future will not resolve until all pins have resolved (set_paddr called)
+   * For indirect lba mappings, get_mappings will always retrieve the original
+   * lba value.
    */
   using get_mappings_iertr = base_iertr;
   using get_mappings_ret = get_mappings_iertr::future<lba_pin_list_t>;
@@ -50,6 +52,8 @@ public:
    * Fetches mappings for a list of laddr_t in range [offset, offset + len)
    *
    * Future will not resolve until all pins have resolved (set_paddr called)
+   * For indirect lba mappings, get_mappings will always retrieve the original
+   * lba value.
    */
   virtual get_mappings_ret get_mappings(
     Transaction &t,
@@ -59,6 +63,8 @@ public:
    * Fetches the mapping for laddr_t
    *
    * Future will not resolve until the pin has resolved (set_paddr called)
+   * For indirect lba mappings, get_mapping will always retrieve the original
+   * lba value.
    */
   using get_mapping_iertr = base_iertr::extend<
     crimson::ct_error::enoent>;
@@ -82,11 +88,12 @@ public:
     extent_len_t len,
     pladdr_t addr,
     paddr_t actual_addr,
+    laddr_t intermediate_base,
     LogicalCachedExtent *nextent) = 0;
 
   struct ref_update_result_t {
     unsigned refcount = 0;
-    paddr_t addr;
+    pladdr_t addr;
     extent_len_t length = 0;
   };
   using ref_iertr = base_iertr::extend<
