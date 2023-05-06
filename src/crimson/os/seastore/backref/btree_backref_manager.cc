@@ -117,7 +117,7 @@ BtreeBackrefManager::get_mapping(
 	auto e = iter.get_pin(c);
 	return get_mapping_ret(
 	  interruptible::ready_future_marker{},
-	  std::move(e));
+	  e.release());
       }
     });
   });
@@ -151,7 +151,7 @@ BtreeBackrefManager::get_mappings(
 	  TRACET("{}~{} got {}, {}, repeat ...",
 	         c.trans, offset, end, pos.get_key(), pos.get_val());
 	  ceph_assert((pos.get_key().add_offset(pos.get_val().len)) > offset);
-	  ret.push_back(pos.get_pin(c));
+	  ret.emplace_back(pos.get_pin(c).release());
 	  return BackrefBtree::iterate_repeat_ret_inner(
 	    interruptible::ready_future_marker{},
 	    seastar::stop_iteration::no);
@@ -248,7 +248,8 @@ BtreeBackrefManager::new_mapping(
 	  });
 	});
     }).si_then([c](auto &&state) {
-      return state.ret->get_pin(c);
+      return new_mapping_iertr::make_ready_future<BackrefMappingRef>(
+	state.ret->get_pin(c));
     });
 }
 

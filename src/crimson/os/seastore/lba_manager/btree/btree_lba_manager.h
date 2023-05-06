@@ -26,6 +26,31 @@
 namespace crimson::os::seastore::lba_manager::btree {
 
 class BtreeLBAMapping : public BtreeNodeMapping<laddr_t, paddr_t> {
+// To support cloning, there are two kinds of lba mappings:
+// 	1. physical lba mapping: the pladdr in the value of which is the paddr of
+// 	   the corresponding extent;
+// 	2. indirect lba mapping: the pladdr in the value of which is an laddr pointing
+// 	   to the physical lba mapping that's pointing to the actual paddr of the
+// 	   extent being searched;
+//
+// Accordingly, BtreeLBAMapping may also work under two modes: indirect or direct
+// 	1. BtreeLBAMappings that come from quering an indirect lba mapping in the lba tree
+// 	   are indirect;
+// 	2. BtreeLBAMappings that come from quering a physical lba mapping in the lba tree
+// 	   are direct.
+//
+// For direct BtreeLBAMappings, there are two important fields:
+//      1. key: the laddr of the lba mapping being queried;
+//      2. paddr: the paddr recorded in the value of the lba mapping being queried.
+// For indirect BtreeLBAMappings, BtreeLBAMapping has three important fields:
+// 	1. key: the laddr key of the lba entry being queried;
+// 	2. intermediate_key: the laddr key of the physical lba mapping that
+// 	   the current indirect lba mapping points to;
+// 	3. paddr: the paddr recorded in the physical lba mapping pointed to by the
+// 	   indirect lba mapping being queried;
+//
+// NOTE THAT, for direct BtreeLBAMappings, their intermediate_keys are the same as
+// their keys.
 public:
   BtreeLBAMapping(op_context_t<laddr_t> ctx)
     : BtreeNodeMapping(ctx) {}
@@ -34,16 +59,72 @@ public:
     CachedExtentRef parent,
     uint16_t pos,
     lba_map_val_t &val,
-    lba_node_meta_t &&meta)
+    lba_node_meta_t meta)
     : BtreeNodeMapping(
 	c,
 	parent,
 	pos,
 	val.pladdr,
 	val.len,
-	std::forward<lba_node_meta_t>(meta))
+	meta),
+      key(meta.begin),
+      indirect(val.pladdr.is_laddr() ? true : false),
+      intermediate_key(val.pladdr.is_laddr() ? val.pladdr.get_laddr() : meta.begin),
+      map_val(val)
   {}
+
+  lba_map_val_t get_map_val() const {
+    return map_val;
+  }
+
+  bool is_indirect() const final {
+    return indirect;
+  }
+
+  void set_key_for_indirect(laddr_t laddr) {
+    turn_indirect();
+    key = laddr;
+  }
+
+  laddr_t get_key() const final {
+    return key;
+  }
+
+  pladdr_t get_raw_val() const {
+    return value;
+  }
+
+  void set_paddr(paddr_t addr) {
+    value = addr;
+  }
+
+  laddr_t get_intermediate_key() const {
+    assert(is_indirect());
+    return intermediate_key;
+  }
+
+protected:
+  std::unique_ptr<BtreeNodeMapping<laddr_t, paddr_t>> _duplicate(
+    op_context_t<laddr_t> ctx) const final {
+    auto pin = std::unique_ptr<BtreeLBAMapping>(new BtreeLBAMapping(ctx));
+    pin->key = key;
+    pin->indirect = indirect;
+    pin->intermediate_key = intermediate_key;
+    pin->map_val = map_val;
+    return pin;
+  }
+private:
+  void turn_indirect() {
+    intermediate_key = key;
+    indirect = true;
+  }
+  laddr_t key = L_ADDR_NULL;
+  bool indirect = false;
+  laddr_t intermediate_key = L_ADDR_NULL;
+  lba_map_val_t map_val;
 };
+
+using BtreeLBAMappingRef = std::unique_ptr<BtreeLBAMapping>;
 
 using LBABtree = FixedKVBtree<
   laddr_t, lba_map_val_t, LBAInternalNode,
@@ -187,6 +268,17 @@ private:
     laddr_t addr,
     update_func_t &&f,
     LogicalCachedExtent*);
+
+  using _get_mapping_ret = get_mapping_iertr::future<BtreeLBAMappingRef>;
+  _get_mapping_ret _get_mapping(
+    Transaction &t,
+    laddr_t offset);
+
+  using _get_original_mappings_ret = get_mappings_ret;
+  _get_original_mappings_ret _get_original_mappings(
+    op_context_t<laddr_t> c,
+    std::list<BtreeLBAMappingRef> &pin_list);
+
 };
 using BtreeLBAManagerRef = std::unique_ptr<BtreeLBAManager>;
 
