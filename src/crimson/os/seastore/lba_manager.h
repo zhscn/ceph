@@ -95,6 +95,7 @@ public:
     unsigned refcount = 0;
     pladdr_t addr;
     extent_len_t length = 0;
+    std::optional<std::pair<paddr_t, extent_len_t>> removed_intermediate_mappings;
   };
   using ref_iertr = base_iertr::extend<
     crimson::ct_error::enoent>;
