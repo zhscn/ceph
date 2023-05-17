@@ -683,6 +683,79 @@ void BtreeLBAManager::register_metrics()
   );
 }
 
+BtreeLBAManager::ref_iertr::future<std::list<std::pair<paddr_t, extent_len_t>>>
+BtreeLBAManager::_decref_intermediate(
+  Transaction &t,
+  laddr_t addr,
+  extent_len_t len)
+{
+  auto c = get_context(t);
+  return with_btree<LBABtree>(
+    cache,
+    c,
+    [c, addr, len](auto &btree) mutable {
+    return btree.lower_bound(
+      c, addr
+    ).si_then([&btree, addr, len, c](auto iter) {
+      return seastar::do_with(
+	std::move(iter),
+	(extent_len_t)0,
+	std::list<std::pair<paddr_t, extent_len_t>>(),
+	[&btree, addr, len, c](auto &iter, auto &scanned, auto &removed) {
+	return trans_intr::repeat([&iter, &btree, &scanned,
+				  addr, len, c, &removed] {
+	  ceph_assert(!iter.is_end() && iter.get_key() == addr + scanned);
+	  auto val = iter.get_val();
+	  ceph_assert(val.refcount >= 1);
+	  val.refcount -= 1;
+	  LOG_PREFIX(BtreeLBAManager::_decref_intermediate);
+	  TRACET("decreased refcount of intermediate key {} -- {}",
+	    c.trans,
+	    iter.get_key(),
+	    val);
+
+	  auto after_decref = [val, &iter, &scanned, len, c]
+			      (auto it, bool step_forward) {
+	    scanned += val.len;
+	    if (scanned == len) {
+	      return base_iertr::make_ready_future<
+		seastar::stop_iteration>(
+		  seastar::stop_iteration::yes);
+	    } else {
+	      ceph_assert(scanned < len);
+	      ceph_assert(!it.is_end());
+	      if (step_forward) {
+		return it.next(c).si_then([&iter](auto it) {
+		  iter = std::move(it);
+		  return seastar::stop_iteration::no;
+		});
+	      } else {
+		iter = std::move(it);
+		return base_iertr::make_ready_future<
+		  seastar::stop_iteration>(seastar::stop_iteration::no);
+	      }
+	    }
+	  };
+	  if (!val.refcount) {
+	    removed.emplace_back(val.pladdr.get_paddr(), val.len);
+	    return btree.remove(c, iter
+	    ).si_then([f=std::move(after_decref)](auto it) {
+	      return f(std::move(it), false);
+	    });
+	  } else {
+	    return btree.update(c, iter, val, nullptr
+	    ).si_then([f=std::move(after_decref)](auto it) {
+	      return f(std::move(it), true);
+	    });
+	  }
+	}).si_then([&removed] {
+	  return std::move(removed);
+	});
+      });
+    });
+  });
+}
+
 BtreeLBAManager::update_refcount_ret
 BtreeLBAManager::update_refcount(
   Transaction &t,
@@ -701,15 +774,27 @@ BtreeLBAManager::update_refcount(
       return out;
     },
     nullptr
-  ).si_then([&t, addr, delta, FNAME](auto result) {
+  ).si_then([&t, addr, delta, FNAME, this](auto result) {
     auto ret_val = (result.index() == 0) ? std::get<0>(result)
 					 : std::get<1>(result)->get_map_val();
     DEBUGT("laddr={}, delta={} done -- {}", t, addr, delta, ret_val);
-    return ref_update_result_t{
-      ret_val.refcount,
-      ret_val.pladdr,
-      ret_val.len
-    };
+    auto fut = ref_iertr::make_ready_future<
+      std::list<std::pair<paddr_t, extent_len_t>>>();
+    if (!ret_val.refcount && ret_val.pladdr.is_laddr()) {
+      fut = _decref_intermediate(
+	t,
+	ret_val.pladdr.get_laddr(),
+	ret_val.len
+      );
+    }
+    return fut.si_then([ret_val](auto removed) {
+      return ref_update_result_t{
+	ret_val.refcount,
+	ret_val.pladdr,
+	ret_val.len,
+	std::move(removed)
+      };
+    });
   });
 }
 
