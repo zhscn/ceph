@@ -661,7 +661,7 @@ BtreeLBAManager::_decref_intermediate(
 
 	if (!val.refcount) {
 	  return btree.remove(c, iter
-	  ).si_then([val] {
+	  ).si_then([val](auto) {
 	    return std::make_optional<
 	      std::pair<paddr_t, extent_len_t>>(
 		val.pladdr.get_paddr(), val.len);
@@ -746,7 +746,7 @@ BtreeLBAManager::_update_mapping(
 	  return btree.remove(
 	    c,
 	    iter
-	  ).si_then([ret] {
+	  ).si_then([ret](auto) {
 	    return ret;
 	  });
 	} else {
