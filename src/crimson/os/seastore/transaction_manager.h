@@ -683,6 +683,43 @@ public:
     croot->get_root().collection_root.update(cmroot);
   }
 
+  bool maybe_update_non_volatile_cache(
+    laddr_t laddr,
+    paddr_t paddr,
+    extent_len_t length,
+    extent_types_t type) {
+    if (!nv_cache) {
+      return true;
+    }
+
+    auto ret = paddr.is_absolute() &&
+      !epm->is_cold_device(paddr.get_device_id());
+    if (ret) {
+      nv_cache->move_to_top(laddr, length, type);
+    }
+    return ret;
+  }
+
+  bool update_non_volatile_cache_if_cached(
+    laddr_t laddr,
+    extent_len_t length,
+    extent_types_t type) {
+    if (!nv_cache) {
+      return true;
+    }
+    return nv_cache->move_to_top_if_cached(laddr, length, type);
+  }
+
+  void remove_non_volatile_cache(
+    laddr_t laddr,
+    extent_len_t length,
+    extent_types_t type) {
+    if (!nv_cache) {
+      return;
+    }
+    nv_cache->remove(laddr, length, type);
+  }
+
   extent_len_t get_block_size() const {
     return epm->get_block_size();
   }

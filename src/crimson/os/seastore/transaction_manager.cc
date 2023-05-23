@@ -6,6 +6,7 @@
 
 #include "crimson/os/seastore/logging.h"
 #include "crimson/os/seastore/transaction_manager.h"
+#include "crimson/os/seastore/object_data_handler.h"
 #include "crimson/os/seastore/journal.h"
 #include "crimson/os/seastore/journal/circular_bounded_journal.h"
 #include "crimson/os/seastore/lba_manager/btree/lba_btree_node.h"
@@ -410,6 +411,12 @@ TransactionManager::do_submit_transaction(
           submit_result.record_block_base,
           start_seq);
 
+      if (nv_cache) {
+	for (auto &[laddr, pair] : tref.get_non_volatile_cache()) {
+	  nv_cache->move_to_top_if_not_cached(laddr, pair.first, pair.second);
+	}
+      }
+
       std::vector<CachedExtentRef> lba_to_clear;
       std::vector<CachedExtentRef> backref_to_clear;
       lba_to_clear.reserve(tref.get_retired_set().size());
@@ -611,7 +618,13 @@ TransactionManager::promote_extent(
     cold_ext->get_bptr().c_str());
   cold_ext->set_modify_time(extent->get_modify_time());
 
-  auto lextent = extent->cast<LogicalCachedExtent>();
+  auto lextent = extent->cast<ObjectDataBlock>();
+  assert(lextent->onode_info);
+
+  t.update_non_volatile_cache(
+    lextent->onode_info->onode_base,
+    lextent->onode_info->onode_length,
+    lextent->get_type());
 
   return lba_manager->alloc_shadow_extent(
     t,

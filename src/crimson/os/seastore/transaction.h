@@ -397,6 +397,7 @@ public:
     backref_tree_stats = {};
     ool_write_stats = {};
     rewrite_version_stats = {};
+    non_volatile_cache.clear();
     conflicted = false;
     if (!has_reset) {
       has_reset = true;
@@ -486,6 +487,20 @@ public:
     return trans_id;
   }
 
+  void update_non_volatile_cache(
+    laddr_t laddr,
+    extent_len_t length,
+    extent_types_t type) {
+    assert(laddr != L_ADDR_NULL);
+    if (!non_volatile_cache.contains(laddr)) {
+      non_volatile_cache[laddr] = std::make_pair(length, type);
+    }
+  }
+
+  auto& get_non_volatile_cache() {
+    return non_volatile_cache;
+  }
+
 private:
   friend class Cache;
   friend Ref make_test_transaction();
@@ -553,6 +568,8 @@ private:
    * Set of extents retired by *this.
    */
   pextent_set_t retired_set;
+
+  std::map<laddr_t, std::pair<extent_len_t, extent_types_t>> non_volatile_cache;
 
   /// stats to collect when commit or invalidate
   tree_stats_t onode_tree_stats;
