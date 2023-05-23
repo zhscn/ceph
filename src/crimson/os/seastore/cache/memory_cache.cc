@@ -77,7 +77,8 @@ class LRUMemoryCache : public MemoryCache {
       remove_impl(lru.front(), /*need_to_promote=*/ true);
     }
     if (should_promote()) {
-      // TODO: wake up promote background process
+      ceph_assert(listener);
+      listener->maybe_wake_promote();
     }
   }
 
