@@ -693,6 +693,16 @@ void Cache::register_metrics()
         stats.committed_reclaim_version.version,
         sm::description("sum of the version from rewrite-reclaim extents")
       ),
+      sm::make_counter(
+        "version_count_promote",
+        stats.committed_promote_version.num,
+        sm::description("total number of rewrite-promote extents")
+      ),
+      sm::make_counter(
+        "version_sum_promote",
+        stats.committed_promote_version.version,
+        sm::description("sum of the version from rewrite-promote extents")
+      ),
     }
   );
 }
@@ -989,6 +999,33 @@ CachedExtentRef Cache::alloc_new_extent_by_type(
     ceph_assert(0 == "NONE is an invalid extent type");
     return CachedExtentRef();
   }
+  default:
+    ceph_assert(0 == "impossible");
+    return CachedExtentRef();
+  }
+}
+
+CachedExtentRef Cache::alloc_existing_extent_by_type(
+    Transaction &t,
+    extent_types_t type,
+    paddr_t paddr,
+    extent_len_t length)
+{
+  switch (type) {
+  case extent_types_t::ONODE_BLOCK_STAGED:
+    return alloc_existing_extent<onode::SeastoreNodeExtent>(t, paddr, length);
+  case extent_types_t::OMAP_INNER:
+    return alloc_existing_extent<omap_manager::OMapInnerNode>(t, paddr, length);
+  case extent_types_t::OMAP_LEAF:
+    return alloc_existing_extent<omap_manager::OMapLeafNode>(t, paddr, length);
+  case extent_types_t::COLL_BLOCK:
+    return alloc_existing_extent<collection_manager::CollectionNode>(t, paddr, length);
+  case extent_types_t::OBJECT_DATA_BLOCK:
+    return alloc_existing_extent<ObjectDataBlock>(t, paddr, length);
+  case extent_types_t::TEST_BLOCK:
+    return alloc_existing_extent<TestBlock>(t, paddr, length);
+  case extent_types_t::TEST_BLOCK_PHYSICAL:
+    return alloc_existing_extent<TestBlockPhysical>(t, paddr, length);
   default:
     ceph_assert(0 == "impossible");
     return CachedExtentRef();
@@ -1403,6 +1440,8 @@ record_t Cache::prepare_record(
   } else if (trans_src == Transaction::src_t::CLEANER_MAIN ||
              trans_src == Transaction::src_t::CLEANER_COLD) {
     stats.committed_reclaim_version.increment_stat(rewrite_version_stats);
+  } else if (trans_src == Transaction::src_t::PROMOTE) {
+    stats.committed_promote_version.increment_stat(rewrite_version_stats);
   } else {
     assert(rewrite_version_stats.is_clear());
   }

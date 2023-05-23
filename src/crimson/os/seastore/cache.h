@@ -856,6 +856,40 @@ public:
     rewrite_gen_t gen      ///< [in] rewrite generation
     );
 
+  template <typename T>
+  TCachedExtentRef<T> alloc_existing_extent(
+    Transaction &t,
+    paddr_t paddr,
+    extent_len_t length
+  ) {
+    LOG_PREFIX(Cache::alloc_existing_extent);
+    // FIXME: paddr can be absolute and pending
+    ceph_assert(paddr.is_absolute());
+
+    SUBDEBUGT(seastore_tm, "paddr: {} length: {}", t, paddr, length);
+    auto bp = ceph::bufferptr(buffer::create_page_aligned(length));
+    bp.zero();
+
+    // ExtentPlacementManager::alloc_new_extent will make a new
+    // (relative/temp) paddr, so make extent directly
+    auto ext = CachedExtent::make_cached_extent_ref<T>(std::move(bp));
+
+    ext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
+	      paddr,
+	      PLACEMENT_HINT_NULL,
+	      NULL_GENERATION,
+	      t.get_trans_id());
+
+    t.add_fresh_extent(ext);
+    return ext;
+  }
+
+  CachedExtentRef alloc_existing_extent_by_type(
+    Transaction &t,
+    extent_types_t type,
+    paddr_t paddr,
+    extent_len_t length);
+
   /**
    * Allocates mutable buffer from extent_set on offset~len
    *
@@ -1339,6 +1373,7 @@ private:
 
     version_stat_t committed_dirty_version;
     version_stat_t committed_reclaim_version;
+    version_stat_t committed_promote_version;
   } stats;
 
   template <typename CounterT>

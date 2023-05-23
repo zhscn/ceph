@@ -329,21 +329,7 @@ public:
 	      " laddr_hint: {} existing_paddr: {} length: {} indirect_key {}",
 	      t, laddr_hint, existing_paddr, length, indirect_key);
     if (indirect_key == L_ADDR_NULL) {
-      auto bp = ceph::bufferptr(buffer::create_page_aligned(length));
-      bp.zero();
-
-      // ExtentPlacementManager::alloc_new_extent will make a new
-      // (relative/temp) paddr, so make extent directly
-      auto ext = CachedExtent::make_cached_extent_ref<T>(std::move(bp));
-
-      ext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
-		existing_paddr,
-		PLACEMENT_HINT_NULL,
-		NULL_GENERATION,
-		t.get_trans_id());
-
-      t.add_fresh_extent(ext);
-
+      auto ext = cache->alloc_existing_extent<T>(t, existing_paddr, length);
       return lba_manager->alloc_extent(
 	t,
 	laddr_hint,
