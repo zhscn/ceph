@@ -38,6 +38,7 @@ struct extent_to_write_t {
     ZERO,
     EXISTING,
     SPLIT,
+    SHADOW_EXISTING
   };
 
   type_t type;
@@ -69,7 +70,11 @@ struct extent_to_write_t {
   }
 
   bool is_existing() const {
-    return type == type_t::EXISTING;
+    return type == type_t::EXISTING || type == type_t::SHADOW_EXISTING;
+  }
+
+  bool is_shadow_exsiting() const {
+    return type == type_t::SHADOW_EXISTING;
   }
 
   bool is_split() const {
@@ -112,6 +117,17 @@ struct extent_to_write_t {
       right_len);
   }
 
+  static extent_to_write_t create_shadow_existing(
+      laddr_t addr, paddr_t existing_paddr, extent_len_t len) {
+    auto res = extent_to_write_t(
+      addr,
+      existing_paddr,
+      len,
+      L_ADDR_NULL,
+      nullptr);
+    res.type = type_t::SHADOW_EXISTING;
+    return res;
+  }
 
 private:
   extent_to_write_t(laddr_t addr, bufferlist to_write)
@@ -146,7 +162,9 @@ void append_extent_to_write(
   extent_to_write_list_t &to_write, extent_to_write_t &&to_append)
 {
   assert(to_write.empty() ||
-         to_write.back().get_end_addr() == to_append.addr);
+         to_write.back().get_end_addr() == to_append.addr ||
+	 to_append.is_shadow_exsiting() ||
+	 to_write.back().is_shadow_exsiting());
   if (to_write.empty() ||
       to_write.back().is_data() ||
       to_append.is_data() ||
@@ -208,6 +226,9 @@ ObjectDataHandler::write_ret do_removals(
       DEBUGT("decreasing ref: {}",
 	     ctx.t,
 	     pin->get_key());
+      if (pin->is_shadow_mapping()) {
+	return ObjectDataHandler::write_iertr::now();
+      }
       return ctx.tm.dec_ref(
 	ctx.t,
 	pin->get_key()
@@ -288,7 +309,8 @@ ObjectDataHandler::write_ret do_insertions(
 	       ctx.t, region.addr, region.len, *region.existing_paddr);
 	return ctx.tm.map_existing_extent<ObjectDataBlock>(
 	  ctx.t, region.addr, *region.existing_paddr,
-	  region.len, region.indirect_key
+	  region.len, region.indirect_key,
+	  region.is_shadow_exsiting()
 	).handle_error_interruptible(
 	  TransactionManager::alloc_extent_iertr::pass_further{},
 	  Device::read_ertr::assert_all{"ignore read error"}
@@ -455,6 +477,8 @@ struct overwrite_plan_t {
   laddr_t pin_end;
   paddr_t left_paddr;
   paddr_t right_paddr;
+  paddr_t shadow_left_paddr;
+  paddr_t shadow_right_paddr;
   laddr_t data_begin;
   laddr_t data_end;
   laddr_t aligned_data_begin;
@@ -528,9 +552,11 @@ public:
 		   const lba_pin_list_t& pins,
 		   extent_len_t block_size) :
       pin_begin(pins.front()->get_key()),
-      pin_end(pins.back()->get_key() + pins.back()->get_length()),
+      pin_end(L_ADDR_NULL),
       left_paddr(pins.front()->get_val()),
-      right_paddr(pins.back()->get_val()),
+      right_paddr(P_ADDR_NULL),
+      shadow_left_paddr(P_ADDR_NULL),
+      shadow_right_paddr(P_ADDR_NULL),
       data_begin(offset),
       data_end(offset + len),
       aligned_data_begin(p2align((uint64_t)data_begin, (uint64_t)block_size)),
@@ -546,6 +572,21 @@ public:
       left_operation(overwrite_operation_t::UNKNOWN),
       right_operation(overwrite_operation_t::UNKNOWN),
       block_size(block_size) {
+    auto b = pins.begin();
+    b++;
+    if (b != pins.end() && (*b)->is_shadow_mapping()) {
+      shadow_left_paddr = (*b)->get_val();
+    }
+    auto e = pins.rbegin();
+    assert(e != pins.rend());
+    if ((*e)->is_shadow_mapping()) {
+      shadow_right_paddr = (*e)->get_val();
+      e++;
+      assert(e != pins.rend());
+    }
+    pin_end = (*e)->get_key() + (*e)->get_length();
+    right_paddr = (*e)->get_val();
+
     validate();
     evaluate_operations();
     assert(left_operation != overwrite_operation_t::UNKNOWN);
@@ -658,6 +699,7 @@ struct operate_ret_bare_t {
   std::optional<extent_to_write_t> op = std::nullopt;
   std::optional<bufferptr> bp = std::nullopt;
   std::optional<extent_to_write_t> split_op = std::nullopt;
+  std::optional<extent_to_write_t> shadow_op = std::nullopt;
 };
 using operate_ret = get_iertr::future<operate_ret_bare_t>;
 operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan_t &overwrite_plan)
@@ -718,6 +760,14 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
           overwrite_plan.left_paddr,
           extent_len,
           overwrite_plan.left_indirect_key));
+
+    if (overwrite_plan.shadow_left_paddr != P_ADDR_NULL) {
+      assert(overwrite_plan.shadow_left_paddr.is_absolute());
+      res.shadow_op.emplace(extent_to_write_t::create_shadow_existing(
+	  overwrite_plan.pin_begin,
+          overwrite_plan.shadow_left_paddr,
+          extent_len));
+    }
 
     auto prepend_len = overwrite_plan.get_left_alignment_size();
     if (prepend_len == 0) {
@@ -810,6 +860,14 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
             overwrite_plan.aligned_data_end - right_pin_begin),
           extent_len,
           right_indirect_key));
+    if (overwrite_plan.shadow_right_paddr != P_ADDR_NULL) {
+      assert(overwrite_plan.shadow_right_paddr.is_absolute());
+      res.shadow_op.emplace(extent_to_write_t::create_shadow_existing(
+	  overwrite_plan.aligned_data_end,
+          overwrite_plan.shadow_right_paddr.add_offset(
+	    overwrite_plan.aligned_data_end - right_pin_begin),
+          extent_len));
+    }
 
     auto append_len = overwrite_plan.get_right_alignment_size();
     if (append_len == 0) {
@@ -1127,6 +1185,7 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
       if (auto &headptr = p.bp; headptr) {
         assert(headptr->length() > 0);
       }
+
       if (auto &split_op = p.split_op; split_op) {
         assert(split_op->is_split());
         split_ops[split_op->addr].emplace_back(
@@ -1135,9 +1194,22 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
 	  split_op->right_len,
 	  drop_part_t::NONE);
       }
+
+      if (auto &shadow_left_extent = p.shadow_op; shadow_left_extent) {
+        ceph_assert(shadow_left_extent->existing_paddr &&
+		    *shadow_left_extent->existing_paddr ==
+		    overwrite_plan.shadow_left_paddr);
+        append_extent_to_write(to_write, std::move(*shadow_left_extent));
+      }
+      auto iter = pins.rbegin();
+      if (auto &pin = *iter;
+	  pin->is_shadow_mapping()) {
+	iter++;
+	ceph_assert(iter != pins.rend());
+      }
       return operate_right(
         ctx,
-        pins.back(),
+        *iter,
         overwrite_plan
       ).si_then([ctx, len, offset, &pins,
                  pin_begin=overwrite_plan.pin_begin,
@@ -1171,6 +1243,7 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
               std::move(left_p.bp),
               std::move(p.bp)));
         }
+
         if (auto &right_extent = p.op; right_extent) {
           ceph_assert(right_extent->get_end_addr() == pin_end);
 	  if (right_extent->is_existing()) {
@@ -1187,6 +1260,9 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
 	    append_extent_to_write(to_write, std::move(*right_extent));
 	  }
         }
+	if (auto shadow_right_extent = p.shadow_op; shadow_right_extent) {
+	  append_extent_to_write(to_write, std::move(*shadow_right_extent));
+	}
         if (auto &split_op = p.split_op; split_op) {
           assert(split_op->is_split());
           split_ops[split_op->addr].emplace_back(
@@ -1316,6 +1392,9 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		  pins,
 		  [ctx, loffset, len, &current, &ret](auto &pin)
 		  -> read_iertr::future<> {
+		    if (pin->is_shadow_mapping()) {
+		      return seastar::now();
+		    }
 		    ceph_assert(current <= (loffset + len));
 		    ceph_assert(
 		      (loffset + len) > pin->get_key());

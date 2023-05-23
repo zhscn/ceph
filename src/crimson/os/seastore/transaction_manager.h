@@ -319,7 +319,8 @@ public:
     laddr_t laddr_hint,
     paddr_t existing_paddr,
     extent_len_t length,
-    laddr_t indirect_key = L_ADDR_NULL) {
+    laddr_t indirect_key = L_ADDR_NULL,
+    bool is_shadow = false) {
     LOG_PREFIX(TransactionManager::map_existing_extent);
     // FIXME: existing_paddr can be absolute and pending
     ceph_assert(existing_paddr.is_absolute());
@@ -331,17 +332,21 @@ public:
 	      t, laddr_hint, existing_paddr, length, indirect_key);
     if (indirect_key == L_ADDR_NULL) {
       auto ext = cache->alloc_existing_extent<T>(t, existing_paddr, length);
-      return lba_manager->alloc_extent(
-	t,
-	laddr_hint,
-	length,
-	existing_paddr,
-	P_ADDR_NULL,
-	ext.get()
-      ).si_then([ext=std::move(ext), indirect_key,
-		 laddr_hint, this, &t](auto &&ref) mutable {
+      auto fut = alloc_extent_iertr::make_ready_future<LBAMappingRef>();
+      if (is_shadow) {
+	ceph_assert(epm->is_cold_device(existing_paddr.get_device_id()));
+	fut = lba_manager->alloc_shadow_extent(
+	  t, laddr_hint, length, existing_paddr, ext.get());
+      } else {
+	fut = lba_manager->alloc_extent(
+	  t, laddr_hint, length, existing_paddr, P_ADDR_NULL, ext.get());
+      }
+
+      return fut.si_then([ext=std::move(ext), indirect_key,
+                          is_shadow, laddr_hint, this, &t](auto &&ref) mutable {
 	LOG_PREFIX(TransactionManager::map_existing_extent);
-	ceph_assert(laddr_hint == ref->get_key());
+	ceph_assert(laddr_hint == ref->get_key() ||
+		    (is_shadow && ref->is_shadow_mapping()));
 	SUBDEBUGT(seastore_tm,
 		  " mapped existing extent, laddr_hint: {} indirect_key {}, {}",
 		  t, laddr_hint, indirect_key, *ext);
