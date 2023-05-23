@@ -90,11 +90,31 @@ public:
     paddr_t act_addr,
     LogicalCachedExtent *nextent) = 0;
 
+  /**
+   * Allocates a new shadow mapping for given laddr
+   *
+   * The shadow laddr is not L_ADDR_ALIGNMENT aligned. It represents
+   * the same extent as the original mapping but with a different paddr.
+   */
+  virtual alloc_extent_ret alloc_shadow_extent(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t len,
+    paddr_t paddr,
+    LogicalCachedExtent *nextent) = 0;
+
+  struct intermediate_mappings_t{
+    paddr_t paddr = P_ADDR_NULL;
+    extent_len_t len = 0;
+    paddr_t shadow_addr = P_ADDR_NULL;
+  };
+
   struct ref_update_result_t {
     unsigned refcount = 0;
     pladdr_t addr;
+    paddr_t shadow_addr = P_ADDR_NULL;
     extent_len_t length = 0;
-    std::list<std::pair<paddr_t, extent_len_t>> removed_intermediate_mappings;
+    std::list<intermediate_mappings_t> removed_intermediate_mappings;
   };
   using ref_iertr = base_iertr::extend<
     crimson::ct_error::enoent>;
@@ -226,7 +246,9 @@ using LBAManagerRef = std::unique_ptr<LBAManager>;
 
 class Cache;
 namespace lba_manager {
-LBAManagerRef create_lba_manager(Cache &cache);
+LBAManagerRef create_lba_manager(
+  Cache &cache,
+  bool enable_shadow_entry);
 }
 
 }

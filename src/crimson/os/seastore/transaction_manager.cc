@@ -222,8 +222,16 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
            t, result.refcount, *ref);
     if (result.refcount == 0) {
       cache->retire_extent(t, ref);
+      if (result.shadow_addr != P_ADDR_NULL) {
+	return cache->retire_extent_addr(
+          t, result.shadow_addr, result.length
+        ).si_then([result] {
+          return result;
+        });
+     }
     }
-    return result;
+    return base_iertr::make_ready_future<
+      LBAManager::ref_update_result_t>(result);
   });
 }
 
@@ -252,19 +260,34 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
           fut = trans_intr::do_for_each(
             result.removed_intermediate_mappings,
             [this, &t](auto &removed) {
-            if (!removed.first.is_zero()) {
+            if (!removed.paddr.is_zero()) {
               return cache->retire_extent_addr(
-                t, removed.first, removed.second);
+                t, removed.paddr, removed.len
+              ).si_then([this, removed, &t] {
+                if (removed.shadow_addr != P_ADDR_NULL) {
+                  return cache->retire_extent_addr(
+                    t, removed.shadow_addr, removed.len);
+                } else {
+                  return Cache::retire_extent_iertr::now();
+                }
+              });
             } else {
               return Cache::retire_extent_iertr::now();
             }
           });
         }
       }
-      return fut.si_then([&result] {
-        return ref_ret(
-          interruptible::ready_future_marker{},
-          std::move(result));
+      return fut.si_then([&result, this, &t] {
+        auto fut = Cache::retire_extent_iertr::now();
+	if (result.shadow_addr != P_ADDR_NULL) {
+	  fut = cache->retire_extent_addr(
+            t, result.shadow_addr, result.length);
+	}
+        return fut.si_then([&result] {
+          return ref_ret(
+            interruptible::ready_future_marker{},
+            std::move(result));
+        });
       });
     });
   });
@@ -656,7 +679,8 @@ TransactionManagerRef make_transaction_manager(
 {
   auto epm = std::make_unique<ExtentPlacementManager>();
   auto cache = std::make_unique<Cache>(*epm);
-  auto lba_manager = lba_manager::create_lba_manager(*cache);
+  auto lba_manager = lba_manager::create_lba_manager(
+    *cache, !secondary_devices.empty());
   auto sms = std::make_unique<SegmentManagerGroup>();
   auto rbs = std::make_unique<RBMDeviceGroup>();
   auto backref_manager = create_backref_manager(*cache);

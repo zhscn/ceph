@@ -963,6 +963,7 @@ public:
   // An lba pin may be indirect, see comments in lba_manager/btree/btree_lba_manager.h
   virtual bool is_indirect() const { return false; }
   virtual key_t get_intermediate_key() const { return min_max_t<key_t>::null; }
+  virtual bool is_shadow_mapping() const = 0;
 
   virtual get_child_ret_t<LogicalCachedExtent>
   get_logical_extent(Transaction &t) = 0;
@@ -1132,6 +1133,11 @@ public:
 
   void set_laddr(laddr_t nladdr) {
     laddr = nladdr;
+  }
+
+  bool is_shadow_extent() const {
+    assert(laddr != L_ADDR_NULL);
+    return is_shadow_laddr(laddr);
   }
 
   void apply_delta_and_adjust_crc(
