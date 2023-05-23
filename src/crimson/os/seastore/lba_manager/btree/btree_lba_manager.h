@@ -197,6 +197,14 @@ public:
     paddr_t paddr,
     LogicalCachedExtent *nextent) final;
 
+  demote_region_ret demote_region(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t length,
+    extent_len_t max_discard_size,
+    retire_promotion_func_t retire_func,
+    update_nextent_func_t update_func) final;
+
   ref_ret decref_extent(
     Transaction &t,
     laddr_t addr) final {
@@ -288,10 +296,17 @@ private:
    *
    * Updates mapping, removes if f returns nullopt
    */
-  using _update_mapping_ret_bare =
-    std::variant<lba_map_val_t, BtreeLBAMappingRef>;
+  struct update_res_t {
+    std::variant<lba_map_val_t, BtreeLBAMappingRef> val;
+    bool has_shadow_entry;
+    update_res_t() = default;
+    update_res_t(lba_map_val_t val, bool has_shadow_entry)
+      : val(val), has_shadow_entry(has_shadow_entry) {}
+    update_res_t(BtreeLBAMappingRef val, bool has_shadow_entry)
+      : val(std::move(val)), has_shadow_entry(has_shadow_entry) {}
+  };
   using _update_mapping_iertr = ref_iertr;
-  using _update_mapping_ret = ref_iertr::future<_update_mapping_ret_bare>;
+  using _update_mapping_ret = ref_iertr::future<update_res_t>;
   using update_func_t = std::function<
     lba_map_val_t(const lba_map_val_t &v)
     >;

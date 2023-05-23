@@ -383,85 +383,23 @@ public:
     extent_len_t left_len,
     extent_len_t right_len,
     bool mapping_only = false) {
-    if (mapping_only) {
-      return lba_manager->split_mapping(
-	t, laddr, paddr, left_len, right_len, nullptr, nullptr);
-    } else {
-      LOG_PREFIX(TransactionManager::split_extent);
-      auto lbp = ceph::bufferptr(buffer::create_page_aligned(left_len));
-      lbp.zero();
-      auto rbp = ceph::bufferptr(buffer::create_page_aligned(right_len));
-      rbp.zero();
-
-      auto lext = CachedExtent::make_cached_extent_ref<T>(std::move(lbp));
-      lext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
-		 P_ADDR_ZERO,
-		 PLACEMENT_HINT_NULL,
-		 NULL_GENERATION,
-		 t.get_trans_id());
-      auto rext = CachedExtent::make_cached_extent_ref<T>(std::move(rbp));
-      rext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
-		 P_ADDR_ZERO,
-		 PLACEMENT_HINT_NULL,
-		 NULL_GENERATION,
-		 t.get_trans_id());
-
-      lext->set_laddr(laddr);
-      rext->set_laddr(laddr + left_len);
-
-      SUBDEBUGT(seastore_tm,
-		" new extent, lext: {}, rext{}",
-		t, *lext, *rext);
-      return lba_manager->split_mapping(
-	t, laddr, paddr, left_len, right_len, lext.get(), rext.get()
-      ).si_then([this, &t, left_len, right_len](auto p) {
-	auto &pin = p.first;
-	//FIXME: currently, only splitting cloned extents will call
-	//this method, so no lba entry should be removed, which means
-	//both pins returned by LBAManager::split_mapping() shouldn't be
-	//null. However, in the future, if head extents are also splitted
-	//by this method, this line should be an 'if' clause instead of
-	//an assert.
-	ceph_assert(pin);
-	return cache->retire_extent_addr(
-	  t, pin->get_val(), left_len + right_len
-	).si_then([p=std::move(p)]() mutable {
-	  return std::move(p);
-	});
-      }).si_then([this, &t, lext, rext](auto p) {
-	ceph_assert(p.first);
-	ceph_assert(p.second);
-	auto &lmapping = p.first;
-	auto &rmapping = p.second;
-
-	lext->set_paddr(lmapping->get_val());
-	rext->set_paddr(rmapping->get_val());
-	t.add_fresh_extent(lext);
-	t.add_fresh_extent(rext);
-
-	std::vector<TCachedExtentRef<T>> ext_vec = {lext, rext};
-	return seastar::do_with(
-	  std::move(ext_vec),
-	  [this](auto &ext_vec) mutable {
-	  return trans_intr::parallel_for_each(
-	    ext_vec,
-	    [this](auto ext) mutable {
-	    return trans_intr::make_interruptible(
-	      epm->read(
-		ext->get_paddr(),
-		ext->get_length(),
-		ext->get_bptr()
-	      ).handle_error(
-		crimson::ct_error::input_output_error::pass_further(),
-		crimson::ct_error::assert_all("unexpected error splitting extents")
-	      )
-	    );
-	  });
-	}).si_then([p=std::move(p)]() mutable {
-	  return std::move(p);
-	});
+    return _split_extent<T>(t, laddr, paddr, left_len, right_len, mapping_only
+    ).si_then([this, left_len, right_len, paddr, mapping_only, &t](auto result) {
+      auto fut = split_extent_iertr::make_ready_future<
+	LBAManager::split_mapping_result_t>();
+      if (result.shadow) {
+	fut = _split_extent<T>(
+	  t,
+	  *result.shadow,
+	  paddr,
+	  left_len,
+	  right_len,
+	  mapping_only);
+      }
+      return fut.si_then([result=std::move(result)](auto) mutable {
+	return std::make_pair(std::move(result.left), std::move(result.right));
       });
-    }
+    });
   }
 
   using reserve_extent_iertr = alloc_extent_iertr;
@@ -764,6 +702,96 @@ private:
     Transaction &t,
     ExtentPlacementManager::dispatch_result_t dispatch_result,
     std::optional<journal_seq_t> seq_to_trim = std::nullopt);
+
+  template<typename T>
+  split_extent_iertr::future<LBAManager::split_mapping_result_t>
+  _split_extent(
+    Transaction &t,
+    laddr_t laddr,
+    paddr_t paddr,
+    extent_len_t left_len,
+    extent_len_t right_len,
+    bool mapping_only = false) {
+    if (mapping_only) {
+      return lba_manager->split_mapping(
+	t, laddr, paddr, left_len, right_len, nullptr, nullptr);
+    } else {
+      LOG_PREFIX(TransactionManager::split_extent);
+      auto lbp = ceph::bufferptr(buffer::create_page_aligned(left_len));
+      lbp.zero();
+      auto rbp = ceph::bufferptr(buffer::create_page_aligned(right_len));
+      rbp.zero();
+
+      auto lext = CachedExtent::make_cached_extent_ref<T>(std::move(lbp));
+      lext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
+		 P_ADDR_ZERO,
+		 PLACEMENT_HINT_NULL,
+		 NULL_GENERATION,
+		 t.get_trans_id());
+      auto rext = CachedExtent::make_cached_extent_ref<T>(std::move(rbp));
+      rext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
+		 P_ADDR_ZERO,
+		 PLACEMENT_HINT_NULL,
+		 NULL_GENERATION,
+		 t.get_trans_id());
+
+      lext->set_laddr(laddr);
+      rext->set_laddr(laddr + left_len);
+
+      SUBDEBUGT(seastore_tm,
+		" new extent, lext: {}, rext{}",
+		t, *lext, *rext);
+      return lba_manager->split_mapping(
+	t, laddr, paddr, left_len, right_len, lext.get(), rext.get()
+      ).si_then([this, &t, left_len, right_len](auto p) {
+	auto &pin = p.left;
+	//FIXME: currently, only splitting cloned extents will call
+	//this method, so no lba entry should be removed, which means
+	//both pins returned by LBAManager::split_mapping() shouldn't be
+	//null. However, in the future, if head extents are also splitted
+	//by this method, this line should be an 'if' clause instead of
+	//an assert.
+	ceph_assert(pin);
+	return cache->retire_extent_addr(
+	  t, pin->get_val(), left_len + right_len
+	).si_then([p=std::move(p)]() mutable {
+	  return std::move(p);
+	});
+      }).si_then([this, &t, lext, rext](auto p) {
+	ceph_assert(p.left);
+	ceph_assert(p.right);
+	auto &lmapping = p.left;
+	auto &rmapping = p.right;
+
+	lext->set_paddr(lmapping->get_val());
+	rext->set_paddr(rmapping->get_val());
+	t.add_fresh_extent(lext);
+	t.add_fresh_extent(rext);
+
+	std::vector<TCachedExtentRef<T>> ext_vec = {lext, rext};
+	return seastar::do_with(
+	  std::move(ext_vec),
+	  [this](auto &ext_vec) mutable {
+	  return trans_intr::parallel_for_each(
+	    ext_vec,
+	    [this](auto ext) mutable {
+	    return trans_intr::make_interruptible(
+	      epm->read(
+		ext->get_paddr(),
+		ext->get_length(),
+		ext->get_bptr()
+	      ).handle_error(
+		crimson::ct_error::input_output_error::pass_further(),
+		crimson::ct_error::assert_all("unexpected error splitting extents")
+	      )
+	    );
+	  });
+	}).si_then([p=std::move(p)]() mutable {
+	  return std::move(p);
+	});
+      });
+    }
+  }
 
   /**
    * pin_to_extent

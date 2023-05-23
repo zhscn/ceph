@@ -480,6 +480,156 @@ BtreeLBAManager::alloc_shadow_extent(
     });
 }
 
+BtreeLBAManager::demote_region_ret
+BtreeLBAManager::demote_region(
+  Transaction &t,
+  laddr_t laddr,
+  extent_len_t length,
+  extent_len_t max_demote_size,
+  retire_promotion_func_t retire_func,
+  update_nextent_func_t update_func)
+{
+  struct state_t {
+    struct shadow_info_t {
+      paddr_t paddr = P_ADDR_NULL;
+      LogicalCachedExtent *nextent = nullptr;
+    };
+    std::map<laddr_t, shadow_info_t> shadow_entries;
+    demote_region_res_t res;
+    retire_promotion_func_t retire_func;
+    update_nextent_func_t update_func;
+  };
+  LOG_PREFIX(BtreeLBAManager::demote_region);
+  TRACET("demote {}~{} max_demote_size={}",
+         t, laddr, length, max_demote_size);
+  auto c = get_context(t);
+  return with_btree_state<LBABtree, state_t>(
+    cache,
+    c,
+    [c, laddr, length, max_demote_size, &t, FNAME,
+     retire_func=std::move(retire_func),
+     update_func=std::move(update_func)]
+    (LBABtree &btree, state_t &state) {
+      state.retire_func = std::move(retire_func);
+      state.update_func = std::move(update_func);
+      return LBABtree::iterate_repeat(
+        c,
+        btree.upper_bound_right(c, laddr),
+        [laddr, length, max_demote_size,
+         &state, &t, FNAME](auto pos) {
+          if (pos.is_end() ||
+              (pos.get_key() >= laddr + length) ||
+              (state.res.demote_size >= max_demote_size)) {
+            state.res.completed = pos.is_end() ||
+              pos.get_key() >= laddr + length;
+            return LBABtree::iterate_repeat_ret_inner(
+              interruptible::ready_future_marker{},
+              seastar::stop_iteration::yes);
+          } else {
+	    laddr_t key = pos.get_key();
+	    lba_map_val_t val = pos.get_val();
+            if (is_shadow_laddr(pos.get_key())) {
+	      assert(get_shadow_mapping(pos.get_key()) ==
+		     shadow_mapping_t::COLD_MIRROR);
+              TRACET("shadow entry: laddr={}, pladdr={}, length={}",
+                     t, key, val.pladdr, val.len);
+              state.shadow_entries.insert({key, {val.pladdr.get_paddr(), nullptr}});
+              state.res.demote_size += val.len;
+            } else {
+              TRACET("normal entry: laddr={}, pladdr={}, length={}",
+                     t, key, val.pladdr, val.len);
+              state.res.proceed_size += val.len;
+            }
+            return LBABtree::iterate_repeat_ret_inner(
+              interruptible::ready_future_marker{},
+              seastar::stop_iteration::no);
+          }
+        }).si_then([c, &btree, &state, &t, FNAME] {
+          return trans_intr::do_for_each(
+            state.shadow_entries,
+            [c, &btree, &t, &state, FNAME]
+	    (std::pair<const unsigned long,
+	     state_t::shadow_info_t> p) mutable {
+              return btree.lower_bound(c, p.first
+              ).si_then([c, &btree, &t, &state, p, FNAME](auto iter) mutable {
+		auto &[laddr, shadow_info] = p;
+		auto key = iter.get_key();
+		auto val = iter.get_val();
+                assert(key == laddr);
+		DEBUGT("remove shadow entry: laddr={}, pladdr={}, length={}",
+		       t, key, val.pladdr, val.len);
+
+		auto ext = iter.get_pin(c)->get_logical_extent(t);
+		if (ext.has_child()) {
+		  ceph_assert(val.pladdr.is_paddr());
+                  return trans_intr::make_interruptible(
+                    std::move(ext.get_child_fut())
+                  ).then_interruptible([val, key, &state] (auto extent) mutable {
+		    return state.update_func(
+		      extent.get(),
+		      val.pladdr.get_paddr(),
+		      val.len
+		    ).si_then([&state, key](auto nextent) mutable {
+		      assert(nextent);
+		      state.shadow_entries[key].nextent = nextent;
+		    });
+                  }).si_then([&btree, c, iter] {
+		    return btree.remove(c, iter
+		    ).si_then([](auto) {
+		      return seastar::now();
+		    });
+		  });
+		} else {
+		  if (val.pladdr.is_paddr()) {
+		    return state.update_func(
+		      nullptr,
+		      val.pladdr.get_paddr(),
+		      val.len
+		    ).si_then([&btree, &state, key, c, iter](auto nextent)mutable {
+		      assert(nextent);
+		      state.shadow_entries[key].nextent = nextent;
+		      return btree.remove(c, iter
+		      ).si_then([](auto) {
+			return seastar::now();
+		      });
+		    });
+		  } else {
+		    return base_iertr::now();
+		  }
+		}
+              });
+            });
+        }).si_then([c, &btree, &state, &t, FNAME,
+                    retire_func = std::move(retire_func)] {
+          return trans_intr::do_for_each(
+            state.shadow_entries,
+            [c, &btree, &t, FNAME, &state](auto p) {
+              return btree.lower_bound(c, reset_shadow_mapping(p.first)
+              ).si_then([c, &btree, &t, FNAME, p, &state] (auto iter) {
+                assert(iter.get_key() == reset_shadow_mapping(p.first));
+		auto val = iter.get_val();
+		auto retired_pladdr = val.pladdr;
+		auto retired_length = val.len;
+		DEBUGT("update primary entry. laddr: {}, pladdr: {} => {}, length: {}",
+		       t, iter.get_key(), val.pladdr, p.second.paddr, val.len);
+		val.pladdr = p.second.paddr;
+		assert(p.second.nextent);
+		return btree.update(c, iter, val, p.second.nextent
+		).si_then([&state, retired_pladdr, retired_length,
+			   nextent=p.second.nextent](auto niter) mutable {
+		  assert(nextent);
+		  assert(!is_shadow_laddr(niter.get_key()));
+		  nextent->set_laddr(niter.get_key());
+		  return state.retire_func(retired_pladdr.get_paddr(), retired_length);
+		});
+              });
+            });
+        });
+    }).si_then([](auto &&state) {
+      return std::move(state.res);
+    });
+}
+
 static bool is_lba_node(const CachedExtent &e)
 {
   return is_lba_node(e.get_type());
@@ -638,9 +788,9 @@ BtreeLBAManager::update_mapping(
   ).si_then([&t, laddr, prev_addr, addr, FNAME](auto result) {
       DEBUGT("laddr={}, paddr {} => {} done -- {}",
              t, laddr, prev_addr, addr,
-	     result.index() == 0
-	      ? std::get<0>(result)
-	      : std::get<1>(result)->get_map_val());
+	     result.val.index() == 0
+	      ? std::get<0>(result.val)
+	      : std::get<1>(result.val)->get_map_val());
     },
     update_mapping_iertr::pass_further{},
     /* ENOENT in particular should be impossible */
@@ -676,7 +826,8 @@ BtreeLBAManager::split_mapping(
       return ret;
     },
     lnextent
-  ).si_then([&t, laddr, left_len, right_len, this, rnextent, paddr](auto v) {
+  ).si_then([&t, laddr, left_len, right_len, this, rnextent, paddr](auto result) {
+    auto &v = result.val;
     ceph_assert(v.index() == 1);
     auto &mapping = std::get<1>(v);
     auto left_val = mapping->get_map_val();
@@ -693,10 +844,15 @@ BtreeLBAManager::split_mapping(
       (pladdr.is_paddr() ? P_ADDR_NULL : paddr),
       left_val.refcount,
       rnextent
-    ).si_then([v=std::move(v)](auto ret) mutable {
-      return std::make_pair<LBAMappingRef, LBAMappingRef>(
+    ).si_then([has_shadow=result.has_shadow_entry, laddr,
+	      v=std::move(v)](auto ret) mutable {
+      return split_mapping_result_t{
 	LBAMappingRef(std::get<1>(v).release()),
-	std::move(ret));
+	std::move(ret),
+	has_shadow
+	  ? (std::make_optional<laddr_t>(
+	      map_shadow_laddr(laddr, shadow_mapping_t::COLD_MIRROR)))
+	  : std::nullopt};
     });
   },
   update_mapping_iertr::pass_further{},
@@ -773,11 +929,13 @@ BtreeLBAManager::_decref_intermediate(
       return seastar::do_with(
 	std::move(iter),
 	(extent_len_t)0,
-	std::list<std::pair<paddr_t, extent_len_t>>(),
+	std::list<intermediate_mappings_t>(),
 	[&btree, addr, len, c](auto &iter, auto &scanned, auto &removed) {
 	return trans_intr::repeat([&iter, &btree, &scanned,
 				  addr, len, c, &removed] {
-	  ceph_assert(!iter.is_end() && iter.get_key() == addr + scanned);
+	  ceph_assert(!iter.is_end() &&
+		      (iter.get_key() == addr + scanned ||
+		       is_shadow_laddr(iter.get_key())));
 	  auto val = iter.get_val();
 	  ceph_assert(val.refcount >= 1);
 	  val.refcount -= 1;
@@ -787,9 +945,11 @@ BtreeLBAManager::_decref_intermediate(
 	    iter.get_key(),
 	    val);
 
-	  auto after_decref = [val, &iter, &scanned, len, c]
+	  auto after_decref = [val, &iter, &scanned, len, c, k=iter.get_key()]
 			      (auto it, bool step_forward) {
-	    scanned += val.len;
+	    if (!is_shadow_laddr(k)) {
+	      scanned += val.len;
+	    }
 	    if (scanned == len) {
 	      return base_iertr::make_ready_future<
 		seastar::stop_iteration>(
@@ -810,7 +970,18 @@ BtreeLBAManager::_decref_intermediate(
 	    }
 	  };
 	  if (!val.refcount) {
-	    removed.emplace_back(val.pladdr.get_paddr(), val.len);
+	    if (is_shadow_laddr(iter.get_key())) {
+	      auto &mapping = removed.back();
+	      assert(mapping.key == reset_shadow_mapping(iter.get_key())
+		&& mapping.shadow_addr == P_ADDR_NULL);
+	      mapping.shadow_addr = val.pladdr.get_paddr();
+	    } else {
+	      removed.emplace_back(
+		iter.get_key(),
+		val.pladdr.get_paddr(),
+		val.len,
+		P_ADDR_NULL);
+	    }
 	    return btree.remove(c, iter
 	    ).si_then([f=std::move(after_decref)](auto it) {
 	      return f(std::move(it), false);
@@ -837,39 +1008,62 @@ BtreeLBAManager::update_refcount(
 {
   LOG_PREFIX(BtreeLBAManager::update_refcount);
   TRACET("laddr={}, delta={}", t, addr, delta);
-  return _update_mapping(
-    t,
-    addr,
-    [delta](const lba_map_val_t &in) {
-      lba_map_val_t out = in;
-      ceph_assert((int)out.refcount + delta >= 0);
-      out.refcount += delta;
-      return out;
-    },
-    nullptr
-  ).si_then([&t, addr, delta, FNAME, this](auto result) {
-    auto ret_val = (result.index() == 0) ? std::get<0>(result)
-					 : std::get<1>(result)->get_map_val();
+  assert(!is_shadow_laddr(addr));
+  auto update_mapping = [this, &t, delta](laddr_t addr) {
+    return _update_mapping(
+      t,
+      addr,
+      [delta](const lba_map_val_t &in) {
+	lba_map_val_t out = in;
+	ceph_assert((int)out.refcount + delta >= 0);
+	out.refcount += delta;
+	return out;
+      },
+      nullptr);
+  };
+  return update_mapping(addr
+  ).si_then([&t, addr, delta, FNAME, this,
+	     update_mapping=std::move(update_mapping)](auto result)
+	     -> update_refcount_ret {
+    auto ret_val = (result.val.index() == 0)
+      ? std::get<0>(result.val)
+      : std::get<1>(result.val)->get_map_val();
     DEBUGT("laddr={}, delta={} done -- {}", t, addr, delta, ret_val);
-    auto fut = ref_iertr::make_ready_future<
-      std::list<std::pair<paddr_t, extent_len_t>>>();
-    if (!ret_val.refcount && ret_val.pladdr.is_laddr()) {
-      fut = _decref_intermediate(
+    if (result.has_shadow_entry) {
+      ceph_assert(ret_val.pladdr.is_paddr());
+      return update_mapping(
+        map_shadow_laddr(addr, shadow_mapping_t::COLD_MIRROR)
+      ).si_then([ret_val](auto result) mutable {
+	auto rval = (result.val.index() == 0)
+	  ? std::get<0>(result.val)
+	  : std::get<1>(result.val)->get_map_val();
+	return ref_update_result_t{
+	  ret_val.refcount,
+	  ret_val.pladdr,
+	  rval.pladdr.get_paddr(),
+	  ret_val.len,
+	  {}};
+      });
+    } else if (!ret_val.refcount && ret_val.pladdr.is_laddr()) {
+      return _decref_intermediate(
 	t,
 	ret_val.pladdr.get_laddr(),
 	ret_val.len
-      );
+      ).si_then([ret_val](auto removed) {
+	return ref_update_result_t{
+	  ret_val.refcount,
+	  ret_val.pladdr,
+	  P_ADDR_NULL,
+	  ret_val.len,
+	  std::move(removed)};
+      });
     }
-    return fut.si_then([ret_val](auto removed) {
-      return ref_update_result_t{
-	ret_val.refcount,
-	ret_val.pladdr,
-	// TODO: handle shadow entry
-	P_ADDR_NULL,
-	ret_val.len,
-	std::move(removed)
-      };
-    });
+    return ref_iertr::make_ready_future<ref_update_result_t>(
+      ret_val.refcount,
+      ret_val.pladdr,
+      P_ADDR_NULL,
+      ret_val.len,
+      std::list<intermediate_mappings_t>());
   });
 }
 
@@ -881,13 +1075,13 @@ BtreeLBAManager::_update_mapping(
   LogicalCachedExtent* nextent)
 {
   auto c = get_context(t);
-  return with_btree_ret<LBABtree, _update_mapping_ret_bare>(
+  return with_btree_ret<LBABtree, update_res_t>(
     cache,
     c,
-    [f=std::move(f), c, addr, nextent](auto &btree) mutable {
+    [f=std::move(f), c, addr, nextent, this](auto &btree) mutable {
       return btree.lower_bound(
 	c, addr
-      ).si_then([&btree, f=std::move(f), c, addr, nextent](auto iter)
+      ).si_then([&btree, f=std::move(f), c, addr, nextent, this](auto iter)
 		-> _update_mapping_ret {
 	if (iter.is_end() || iter.get_key() != addr) {
 	  LOG_PREFIX(BtreeLBAManager::_update_mapping);
@@ -895,23 +1089,38 @@ BtreeLBAManager::_update_mapping(
 	  return crimson::ct_error::enoent::make();
 	}
 
-	auto ret = f(iter.get_val());
-	if (ret.refcount == 0) {
-	  return btree.remove(
-	    c,
-	    iter
-	  ).si_then([ret](auto) {
-	    return _update_mapping_ret_bare(ret);
+	auto fun = [&btree, f=std::move(f), c, iter, nextent](bool has_shadow) {
+          auto ret = f(iter.get_val());
+          if (ret.refcount == 0) {
+            return btree.remove(
+              c,
+              iter
+            ).si_then([ret, has_shadow](auto) {
+              return update_res_t(ret, has_shadow);
+            });
+          } else {
+            return btree.update(
+              c,
+              iter,
+              ret,
+	      nextent
+            ).si_then([has_shadow, c](auto iter) {
+              return update_res_t(iter.get_pin(c), has_shadow);
+            });
+          }
+	};
+
+	if (enable_shadow_entry &&
+	    !is_shadow_laddr(addr)) {
+	  return iter.next(c
+	  ).si_then([fun=std::move(fun), iter](auto niter) {
+	    bool has_shadow = !niter.is_end() &&
+	      niter.get_key() == map_shadow_laddr(
+	        iter.get_key(), shadow_mapping_t::COLD_MIRROR);
+	    return fun(has_shadow);
 	  });
 	} else {
-	  return btree.update(
-	    c,
-	    iter,
-	    ret,
-	    nextent
-	  ).si_then([c](auto iter) {
-	    return _update_mapping_ret_bare(iter.get_pin(c));
-	  });
+	  return fun(/*has_shadow=*/ false);
 	}
       });
     });

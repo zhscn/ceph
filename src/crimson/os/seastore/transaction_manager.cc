@@ -637,9 +637,63 @@ TransactionManager::demote_region(
   extent_len_t length,
   extent_len_t max_demote_size)
 {
-  // TODO
-  return demote_region_iertr::make_ready_future<demote_region_res_t>(
-    demote_region_res_t{0, 0, false});
+  return lba_manager->demote_region(
+    t,
+    laddr,
+    length,
+    max_demote_size,
+    [this, &t](paddr_t paddr, extent_len_t length) {
+      assert(!epm->is_cold_device(paddr.get_device_id()));
+      return cache->retire_extent_addr(t, paddr, length);
+    },
+    [this, &t](LogicalCachedExtent *extent,
+	       paddr_t paddr,
+	       extent_len_t length)
+    -> base_iertr::future<LogicalCachedExtent*> {
+      assert(epm->is_cold_device(paddr.get_device_id()));
+      if (!extent) {
+	return cache->retire_extent_addr(t, paddr, length
+	).si_then([&t, paddr, length, this] {
+	  auto nextent = cache->alloc_existing_extent_by_type(
+            t,
+	    extent_types_t::OBJECT_DATA_BLOCK,
+	    paddr,
+	    length)->cast<LogicalCachedExtent>();
+	  return trans_intr::make_interruptible(
+	    epm->read(paddr, length, nextent->get_bptr()
+	    ).safe_then(
+	      [nextent] {
+		assert(nextent);
+		return base_ertr::make_ready_future<
+		  LogicalCachedExtent*>(nextent.get());
+	      },
+	      base_ertr::pass_further{},
+	      crimson::ct_error::assert_all{
+		"read invalid error"
+	      }));
+	});
+      }
+      cache->retire_extent(t, extent);
+      auto nextent = cache->alloc_existing_extent_by_type(
+        t,
+	extent->get_type(),
+	extent->get_paddr(),
+	extent->get_length())->cast<LogicalCachedExtent>();
+      extent->get_bptr().copy_out(
+        0,
+	extent->get_length(),
+	nextent->get_bptr().c_str());
+      nextent->set_laddr(extent->get_laddr());
+      return base_iertr::make_ready_future<
+	LogicalCachedExtent*>(nextent.get());
+    }
+  ).si_then([](auto &&res) {
+    return demote_region_res_t{
+      res.proceed_size,
+      res.demote_size,
+      res.completed
+    };
+  });
 }
 
 TransactionManager::get_extents_if_live_ret

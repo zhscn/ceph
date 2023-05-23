@@ -103,12 +103,40 @@ public:
     paddr_t paddr,
     LogicalCachedExtent *nextent) = 0;
 
+  struct demote_region_res_t {
+    extent_len_t demote_size;
+    extent_len_t proceed_size;
+    bool completed;
+  };
+  using demote_region_iertr = base_iertr;
+  using demote_region_ret = demote_region_iertr::future<
+    demote_region_res_t>;
+  using retire_promotion_func_t = std::function<
+    base_iertr::future<>(paddr_t, extent_len_t)>;
+  using update_nextent_func_t = std::function<
+    base_iertr::future<LogicalCachedExtent*>(
+      LogicalCachedExtent*, paddr_t, extent_len_t)>;
+
+  /**
+   * Demote the shadow mapping located in given range.
+   *
+   * Move the paddr of shadow mapping to the primary mapping.
+   * Retire the original paddr of primary mapping.
+   */
+  virtual demote_region_ret demote_region(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t length,
+    extent_len_t max_demote_size,
+    retire_promotion_func_t retire_func,
+    update_nextent_func_t update_func) = 0;
+
   struct intermediate_mappings_t{
+    laddr_t key = L_ADDR_NULL;
     paddr_t paddr = P_ADDR_NULL;
     extent_len_t len = 0;
     paddr_t shadow_addr = P_ADDR_NULL;
   };
-
   struct ref_update_result_t {
     unsigned refcount = 0;
     pladdr_t addr;
@@ -204,6 +232,11 @@ public:
     Transaction& t,
     const std::list<LogicalCachedExtentRef>& extents);
 
+  struct split_mapping_result_t {
+    LBAMappingRef left;
+    LBAMappingRef right;
+    std::optional<laddr_t> shadow = std::nullopt;
+  };
   /**
    * split_mapping
    *
@@ -211,7 +244,7 @@ public:
    */
   using split_mapping_iertr = alloc_extent_iertr;
   using split_mapping_ret = split_mapping_iertr::future<
-    std::pair<LBAMappingRef, LBAMappingRef>>;
+    split_mapping_result_t>;
   virtual split_mapping_ret split_mapping(
     Transaction &t,
     laddr_t laddr,
