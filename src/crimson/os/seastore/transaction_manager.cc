@@ -234,24 +234,39 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
   LOG_PREFIX(TransactionManager::dec_ref);
   TRACET("{}", t, offset);
   return lba_manager->decref_extent(t, offset
-  ).si_then([this, FNAME, offset, &t](auto result) -> ref_ret {
-    DEBUGT("extent refcount is decremented to {} -- {}~{}, {}",
-           t, result.refcount, offset, result.length, result.addr);
-    if (result.refcount == 0 &&
-        (result.addr.is_paddr() &&
-         !result.addr.get_paddr().is_zero())) {
-      return cache->retire_extent_addr(
-	t, result.addr.get_paddr(), result.length
-      ).si_then([result] {
-	return ref_ret(
-	  interruptible::ready_future_marker{},
-	  result);
+  ).si_then([this, offset, &t](auto result) -> ref_ret {
+    return seastar::do_with(
+      std::move(result),
+      [this, offset, &t](auto &result) {
+      LOG_PREFIX(TransactionManager::dec_ref);
+      DEBUGT("extent refcount is decremented to {} -- {}~{}, {}",
+             t, result.refcount, offset, result.length, result.addr);
+      auto fut = ref_iertr::now();
+      if (result.refcount == 0) {
+        if (result.addr.is_paddr() &&
+            !result.addr.get_paddr().is_zero()) {
+          ceph_assert(result.removed_intermediate_mappings.empty());
+          fut = cache->retire_extent_addr(
+            t, result.addr.get_paddr(), result.length);
+        } else {
+          fut = trans_intr::do_for_each(
+            result.removed_intermediate_mappings,
+            [this, &t](auto &removed) {
+            if (!removed.first.is_zero()) {
+              return cache->retire_extent_addr(
+                t, removed.first, removed.second);
+            } else {
+              return Cache::retire_extent_iertr::now();
+            }
+          });
+        }
+      }
+      return fut.si_then([&result] {
+        return ref_ret(
+          interruptible::ready_future_marker{},
+          std::move(result));
       });
-    } else {
-      return ref_ret(
-	interruptible::ready_future_marker{},
-	result);
-    }
+    });
   });
 }
 
