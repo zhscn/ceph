@@ -157,3 +157,8 @@ options:
   level: advanced
   desc: Begin fast eviction when the used ratio of the main tier reaches this value.
   default: 0.7
+- name: seastore_max_extent_size
+  type: uint
+  level: advanced
+  desc: maximum size of an extent in seastore
+  default: 16384

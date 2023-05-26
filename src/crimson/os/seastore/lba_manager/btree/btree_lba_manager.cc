@@ -650,6 +650,116 @@ BtreeLBAManager::demote_region(
     });
 }
 
+BtreeLBAManager::alloc_extents_ret
+BtreeLBAManager::alloc_extents(
+  Transaction &t,
+  laddr_t hint,
+  extent_len_t len,
+  paddr_t addr,
+  extent_len_t max_extent_size,
+  std::vector<LogicalCachedExtent*> nextents)
+{
+  struct state_t {
+    laddr_t last_end;
+
+    std::optional<LBABtree::iterator> insert_iter;
+    lba_pin_list_t ret;
+    std::vector<LogicalCachedExtent*> nextents;
+
+    state_t(laddr_t hint) : last_end(hint) {}
+  };
+
+  LOG_PREFIX(BtreeLBAManager::alloc_extents);
+  TRACET("{}~{}, hint={}", t, addr, len, hint);
+  auto c = get_context(t);
+  ++stats.num_alloc_extents;
+  auto lookup_attempts = stats.num_alloc_extents_iter_nexts;
+  return crimson::os::seastore::with_btree_state<LBABtree, state_t>(
+    cache,
+    c,
+    hint,
+    [this, FNAME, c, hint, len, addr, lookup_attempts,
+     nextents=std::move(nextents),
+     &t, max_extent_size](auto &btree, auto &state) {
+      state.nextents = std::move(nextents);
+      return LBABtree::iterate_repeat(
+	c,
+	btree.upper_bound_right(c, hint),
+	[this, &state, len, addr, &t, hint, FNAME, lookup_attempts](auto &pos) {
+	  ++stats.num_alloc_extents_iter_nexts;
+	  if (pos.is_end()) {
+	    DEBUGT("{}~{}, hint={}, state: end, done with {} attempts, insert at {}",
+                   t, addr, len, hint,
+                   stats.num_alloc_extents_iter_nexts - lookup_attempts,
+                   state.last_end);
+	    state.insert_iter = pos;
+	    return LBABtree::iterate_repeat_ret_inner(
+	      interruptible::ready_future_marker{},
+	      seastar::stop_iteration::yes);
+	  } else if (pos.get_key() >= (state.last_end + len)) {
+	    DEBUGT("{}~{}, hint={}, state: {}~{}, done with {} attempts, insert at {} -- {}",
+                   t, addr, len, hint,
+                   pos.get_key(), pos.get_val().len,
+                   stats.num_alloc_extents_iter_nexts - lookup_attempts,
+                   state.last_end,
+                   pos.get_val());
+	    state.insert_iter = pos;
+	    return LBABtree::iterate_repeat_ret_inner(
+	      interruptible::ready_future_marker{},
+	      seastar::stop_iteration::yes);
+	  } else {
+	    state.last_end = pos.get_key() + pos.get_val().len;
+	    TRACET("{}~{}, hint={}, state: {}~{}, repeat ... -- {}",
+                   t, addr, len, hint,
+                   pos.get_key(), pos.get_val().len,
+                   pos.get_val());
+	    return LBABtree::iterate_repeat_ret_inner(
+	      interruptible::ready_future_marker{},
+	      seastar::stop_iteration::no);
+	  }
+	}).si_then([FNAME, c, addr, len, hint,
+		    &btree, &state, max_extent_size] {
+	  auto num_extents = (len + max_extent_size -1 ) / max_extent_size;
+	  return trans_intr::do_for_each(
+	    boost::make_counting_iterator((extent_len_t)0),
+	    boost::make_counting_iterator(num_extents),
+	    [len, num_extents, max_extent_size, &btree,
+	    c, &state, addr, FNAME, hint](auto i) {
+	    ceph_assert(len > i * max_extent_size);
+	    return btree.insert(
+	      c,
+	      *state.insert_iter,
+	      state.last_end + i * max_extent_size,
+	      lba_map_val_t{
+		(i == num_extents - 1)
+		  ? len - i * max_extent_size
+		  : max_extent_size,
+		addr + i * max_extent_size,
+		1,
+		0},
+	      state.nextents[i]
+	    ).si_then([&state, FNAME, c, addr, len,
+		      i, max_extent_size, hint](auto &&p) {
+	      auto [iter, inserted] = std::move(p);
+	      TRACET("{}~{}, hint={}, inserted at {}",
+		     c.trans,
+		     addr + i * max_extent_size,
+		     len - i * max_extent_size,
+		     hint,
+		     state.last_end + i * max_extent_size);
+	      ceph_assert(inserted);
+	      state.ret.emplace_back(iter.get_pin(c));
+	      return iter.next(c);
+	    }).si_then([&state](auto iter) {
+	      state.insert_iter = iter;
+	    });
+	  });
+	});
+    }).si_then([](auto &&state) {
+      return std::move(state.ret);
+    });
+}
+
 static bool is_lba_node(const CachedExtent &e)
 {
   return is_lba_node(e.get_type());

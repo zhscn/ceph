@@ -30,13 +30,15 @@ TransactionManager::TransactionManager(
   CacheRef _cache,
   LBAManagerRef _lba_manager,
   ExtentPlacementManagerRef &&_epm,
-  BackrefManagerRef&& _backref_manager)
+  BackrefManagerRef&& _backref_manager,
+  extent_len_t max_extent_size)
   : cache(std::move(_cache)),
     lba_manager(std::move(_lba_manager)),
     journal(std::move(_journal)),
     epm(std::move(_epm)),
     backref_manager(std::move(_backref_manager)),
-    nv_cache(nullptr)
+    nv_cache(nullptr),
+    max_extent_size(max_extent_size)
 {
   epm->set_extent_callback(this);
   journal->set_write_pipeline(&write_pipeline);
@@ -1021,12 +1023,17 @@ TransactionManagerRef make_transaction_manager(
 	    cache->get_memory_cache());
   epm->set_primary_device(primary_device);
 
+  extent_len_t max_extent_size = crimson::common::get_conf<uint64_t>("seastore_max_extent_size");
+  if (is_test) {
+    max_extent_size = 64 << 20;
+  }
   return std::make_unique<TransactionManager>(
     std::move(journal),
     std::move(cache),
     std::move(lba_manager),
     std::move(epm),
-    std::move(backref_manager));
+    std::move(backref_manager),
+    max_extent_size);
 }
 
 }

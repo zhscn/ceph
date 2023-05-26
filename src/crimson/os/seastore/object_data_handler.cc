@@ -457,26 +457,31 @@ ObjectDataHandler::write_ret do_insertions(
 	       ctx.t,
 	       region.addr,
 	       region.len);
-	return ctx.tm.alloc_extent<ObjectDataBlock>(
+	return ctx.tm.alloc_extents<ObjectDataBlock>(
 	  ctx.t,
 	  region.addr,
 	  region.len
-	).si_then([ctx, &region](auto extent) {
-	  if (extent->get_laddr() != region.addr) {
+	).si_then([&region, ctx](auto extents) {
+	  auto iter = region.bl->cbegin();
+	  if (extents.front()->get_laddr() != region.addr) {
 	    logger().debug(
 	      "object_data_handler::do_insertions alloc got addr {},"
 	      " should have been {}",
-	      extent->get_laddr(),
+	      extents.front()->get_laddr(),
 	      region.addr);
 	  }
-	  ceph_assert(extent->get_laddr() == region.addr);
-	  ceph_assert(extent->get_length() == region.len);
-	  auto &i = ctx.t.get_cur_onode_info();
-	  ceph_assert(i.laddr <= extent->get_laddr() &&
-		      i.laddr + i.length >= extent->get_laddr() + extent->get_length());
-	  extent->set_logical_cache_info(i.laddr, i.length);
-	  auto iter = region.bl->cbegin();
-	  iter.copy(region.len, extent->get_bptr().c_str());
+	  ceph_assert(extents.front()->get_laddr() == region.addr);
+	  auto total_length = 0;
+	  for (auto &extent : extents) {
+	    total_length += extent->get_length();
+	    auto &i = ctx.t.get_cur_onode_info();
+	    ceph_assert(i.laddr <= extent->get_laddr() &&
+			i.laddr + i.length >= extent->get_laddr() + extent->get_length());
+	    extent->set_logical_cache_info(i.laddr, i.length);
+	    iter.copy(extent->get_length(), extent->get_bptr().c_str());
+	  }
+	  ceph_assert(total_length == region.len);
+	  assert(iter == region.bl->end());
 	  return ObjectDataHandler::write_iertr::now();
 	});
       } else if (region.is_zero()) {
