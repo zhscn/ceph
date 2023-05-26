@@ -128,6 +128,16 @@ public:
     retire_promotion_func_t retire_func,
     update_nextent_func_t update_func) = 0;
 
+  using alloc_extents_iertr = base_iertr;
+  using alloc_extents_ret = alloc_extents_iertr::future<lba_pin_list_t>;
+  virtual alloc_extents_ret alloc_extents(
+    Transaction &t,
+    laddr_t hint,
+    extent_len_t len,
+    paddr_t addr,
+    extent_len_t max_extent_size,
+    std::vector<LogicalCachedExtent*> nextents) = 0;
+
   struct ref_update_result_t {
     unsigned refcount = 0;
     paddr_t addr;
