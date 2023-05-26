@@ -1364,12 +1364,30 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		      current = end;
 		      return seastar::now();
 		    } else {
+		      LOG_PREFIX(ObjectDataHandler::read);
 		      auto key = pin->get_key();
 		      bool is_indirect = pin->is_indirect();
                       extent_len_t off = 0;
                       if (pin->is_indirect()) {
                         off = pin->get_intermediate_offset();
-                      }
+			DEBUGT("reading {}~{}, indirect: {}, "
+			  "intermediate offset: {}, current: {}, end: {}",
+			  ctx.t,
+			  key,
+			  pin->get_length(),
+			  is_indirect,
+			  off,
+			  current,
+			  end);
+                      } else {
+			DEBUGT("reading {}~{}, indirect: {}, current: {}, end: {}",
+			  ctx.t,
+			  key,
+			  pin->get_length(),
+			  is_indirect,
+			  current,
+			  end);
+		      }
 		      return ctx.tm.read_pin<ObjectDataBlock>(
 			ctx.t,
 			std::move(pin)
