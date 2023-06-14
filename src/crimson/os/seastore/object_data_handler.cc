@@ -123,8 +123,7 @@ struct extent_to_write_t {
       addr,
       existing_paddr,
       len,
-      L_ADDR_NULL,
-      nullptr);
+      L_ADDR_NULL);
     res.type = type_t::SHADOW_EXISTING;
     return res;
   }
