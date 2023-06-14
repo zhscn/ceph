@@ -758,7 +758,9 @@ TransactionManager::get_extents_if_live(
   extent_len_t len)
 {
   LOG_PREFIX(TransactionManager::get_extent_if_live);
-  TRACET("{} {}~{} {}", t, type, laddr, len, paddr);
+  auto new_laddr = reset_shadow_mapping(laddr);
+  TRACET("{} {}(new_laddr={})~{} {}", t, type, laddr, new_laddr, len, paddr);
+  laddr = new_laddr;
 
   // This only works with segments to check if alive,
   // as parallel transactions may split the extent at the same time.
@@ -794,6 +796,7 @@ TransactionManager::get_extents_if_live(
             [=, this, &list, &t](
               LBAMappingRef &pin) -> Cache::get_extent_iertr::future<>
           {
+	    ceph_assert(!pin->is_indirect());
             auto pin_paddr = pin->get_val();
             auto &pin_seg_paddr = pin_paddr.as_seg_paddr();
             auto pin_paddr_seg_id = pin_seg_paddr.get_segment_id();
