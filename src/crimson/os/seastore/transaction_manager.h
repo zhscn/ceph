@@ -402,7 +402,8 @@ public:
       auto fut = split_extent_iertr::make_ready_future<
 	LBAManager::split_mapping_result_t>();
       if (result.shadow) {
-	fut = _split_extent<T>(
+	// make clang happy
+	fut = this->_split_extent<T>(
 	  t,
 	  *result.shadow,
 	  paddr,

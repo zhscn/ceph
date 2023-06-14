@@ -23,6 +23,12 @@
 using std::map;
 using std::string;
 
+namespace {
+  seastar::logger& logger() {
+    return crimson::get_logger(ceph_subsys_osd);
+  }
+}
+
 #define dout_context ClassHandler::get_instance().cct
 
 static constexpr int dout_subsys = ceph_subsys_objclass;
@@ -161,8 +167,19 @@ int cls_cxx_read2(cls_method_context_t hctx,
   op.op.extent.length = len;
   op.op.flags = op_flags;
   if (const auto ret = execute_osd_op(hctx, op); ret < 0) {
+    logger().debug("{} {}, ofs {}, len {}, ret {}",
+      __func__,
+      reinterpret_cast<crimson::osd::OpsExecuter*>(hctx)->get_obc()->obs.oi,
+      ofs,
+      len,
+      ret);
     return ret;
   }
+  logger().debug("{} {}, ofs {}, len {}",
+    __func__,
+    reinterpret_cast<crimson::osd::OpsExecuter*>(hctx)->get_obc()->obs.oi,
+    ofs,
+    len);
   *outbl = std::move(op.outdata);
   return outbl->length();
 }

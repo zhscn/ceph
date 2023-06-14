@@ -678,8 +678,8 @@ void IOHandler::do_in_dispatch()
               auto _last_keepalive_ack =
                 seastar::lowres_system_clock::time_point{keepalive_ack_frame.timestamp()};
               set_last_keepalive_ack(_last_keepalive_ack);
-              logger().debug("{} GOT KeepAliveFrameAck: timestamp={}",
-                             conn, _last_keepalive_ack);
+              // logger().debug("{} GOT KeepAliveFrameAck: timestamp={}",
+              //                conn, _last_keepalive_ack);
             });
           default: {
             logger().warn("{} do_in_dispatch() received unexpected tag: {}",

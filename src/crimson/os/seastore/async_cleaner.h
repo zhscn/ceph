@@ -1242,7 +1242,7 @@ public:
       return config_t{
         .99,  // available_ratio_gc_max
         .2,   // available_ratio_hard_limit
-        .6,   // reclaim_ratio_gc_threshold
+        .1,   // reclaim_ratio_gc_threshold
         1<<20 // reclaim_bytes_per_cycle
       };
     }
