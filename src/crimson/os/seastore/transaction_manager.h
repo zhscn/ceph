@@ -292,10 +292,6 @@ public:
     });
   }
 
-  struct indirect_info_t {
-    laddr_t indirect_key = L_ADDR_NULL;
-    LBAMappingRef orig_pin;
-  };
   /**
    * map_existing_extent
    *
@@ -316,17 +312,17 @@ public:
     laddr_t laddr_hint,
     paddr_t existing_paddr,
     extent_len_t length,
-    indirect_info_t iinfo) {
+    laddr_t indirect_key = L_ADDR_NULL) {
     LOG_PREFIX(TransactionManager::map_existing_extent);
     // FIXME: existing_paddr can be absolute and pending
     ceph_assert(existing_paddr.is_absolute());
     assert(t.is_retired(existing_paddr, length)
-      || iinfo.indirect_key != L_ADDR_NULL);
+      || indirect_key != L_ADDR_NULL);
 
     SUBDEBUGT(seastore_tm,
 	      " laddr_hint: {} existing_paddr: {} length: {} indirect_key {}",
-	      t, laddr_hint, existing_paddr, length, iinfo.indirect_key);
-    if (iinfo.indirect_key == L_ADDR_NULL) {
+	      t, laddr_hint, existing_paddr, length, indirect_key);
+    if (indirect_key == L_ADDR_NULL) {
       auto bp = ceph::bufferptr(buffer::create_page_aligned(length));
       bp.zero();
 
@@ -349,13 +345,13 @@ public:
 	existing_paddr,
 	P_ADDR_NULL,
 	ext.get()
-      ).si_then([ext=std::move(ext), iinfo=std::move(iinfo),
-			  laddr_hint, this, &t](auto &&ref) mutable {
+      ).si_then([ext=std::move(ext), indirect_key,
+		 laddr_hint, this, &t](auto &&ref) mutable {
 	LOG_PREFIX(TransactionManager::map_existing_extent);
 	ceph_assert(laddr_hint == ref->get_key());
 	SUBDEBUGT(seastore_tm,
 		  " mapped existing extent, laddr_hint: {} indirect_key {}, {}",
-		  t, laddr_hint, iinfo.indirect_key, *ext);
+		  t, laddr_hint, indirect_key, *ext);
 	return epm->read(
 	  ext->get_paddr(),
 	  ext->get_length(),
@@ -371,10 +367,10 @@ public:
 	t,
 	laddr_hint,
 	length,
-	iinfo.indirect_key,
+	indirect_key,
 	existing_paddr,
 	nullptr
-      ).si_then([this, &t, indirect_key=iinfo.indirect_key](auto mapping) {
+      ).si_then([this, &t, indirect_key](auto mapping) {
 	ceph_assert(indirect_key == mapping->get_intermediate_key());
 	return inc_ref(t, indirect_key
 	).si_then([](auto) {

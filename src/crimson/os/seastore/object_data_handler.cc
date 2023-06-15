@@ -47,10 +47,6 @@ struct extent_to_write_t {
   std::optional<bufferlist> to_write;
   /// non-nullopt if and only if type == EXISTING
   std::optional<paddr_t> existing_paddr;
-  /// if the extent is an indirect one, we want the extent
-  /// to pin the original lba branch, instead of the branch
-  /// of the indirect one.
-  LBAMappingRef existing_pin;
 
   extent_to_write_t(const extent_to_write_t &other) {
     type = other.type;
@@ -59,9 +55,6 @@ struct extent_to_write_t {
     indirect_key = other.indirect_key;
     to_write = other.to_write;
     existing_paddr = other.existing_paddr;
-    if (other.existing_pin) {
-      existing_pin = other.existing_pin->duplicate();
-    }
   }
   extent_to_write_t(extent_to_write_t &&) = default;
 
@@ -95,14 +88,12 @@ struct extent_to_write_t {
       laddr_t addr,
       paddr_t existing_paddr,
       extent_len_t len,
-      laddr_t indirect_key,
-      LBAMappingRef &&existing_pin) {
+      laddr_t indirect_key) {
     return extent_to_write_t(
       addr,
       existing_paddr,
       len,
-      indirect_key,
-      std::move(existing_pin));
+      indirect_key);
   }
 
 private:
@@ -117,11 +108,10 @@ private:
     laddr_t addr,
     paddr_t existing_paddr,
     extent_len_t len,
-    laddr_t indirect_key,
-    LBAMappingRef &&existing_pin)
+    laddr_t indirect_key)
     : type(type_t::EXISTING), addr(addr), len(len),
       indirect_key(indirect_key), to_write(std::nullopt),
-      existing_paddr(existing_paddr), existing_pin(std::move(existing_pin)) {}
+      existing_paddr(existing_paddr) {}
 };
 using extent_to_write_list_t = std::list<extent_to_write_t>;
 
@@ -277,7 +267,7 @@ ObjectDataHandler::write_ret do_insertions(
 	       ctx.t, region.addr, region.len, *region.existing_paddr);
 	return ctx.tm.map_existing_extent<ObjectDataBlock>(
 	  ctx.t, region.addr, *region.existing_paddr,
-	  region.len, {region.indirect_key, std::move(region.existing_pin)}
+	  region.len, region.indirect_key
 	).handle_error_interruptible(
 	  TransactionManager::alloc_extent_iertr::pass_further{},
 	  Device::read_ertr::assert_all{"ignore read error"}
@@ -627,8 +617,7 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
 	  overwrite_plan.pin_begin,
 	  overwrite_plan.left_paddr,
 	  extent_len,
-	  overwrite_plan.left_indirect_key,
-	  std::move(p.first)));
+	  overwrite_plan.left_indirect_key));
       auto prepend_len = overwrite_plan.get_left_alignment_size();
       if (prepend_len == 0) {
 	return get_iertr::make_ready_future<operate_ret_bare>(
@@ -733,8 +722,7 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
 	  overwrite_plan.right_indirect_key != L_ADDR_NULL
 	    ? overwrite_plan.right_indirect_key
 	      + overwrite_plan.right_indirect_len - extent_len
-	    : L_ADDR_NULL,
-	  std::move(p.second)));
+	    : L_ADDR_NULL));
       auto append_len = overwrite_plan.get_right_alignment_size();
       if (append_len == 0) {
 	return get_iertr::make_ready_future<operate_ret_bare>(
