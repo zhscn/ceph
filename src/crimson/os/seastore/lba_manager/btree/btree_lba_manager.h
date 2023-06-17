@@ -115,6 +115,7 @@ protected:
   }
 private:
   void turn_indirect() {
+    assert(value.is_paddr());
     intermediate_key = key;
     indirect = true;
   }
@@ -224,6 +225,7 @@ public:
   split_mapping_ret split_mapping(
     Transaction &t,
     laddr_t laddr,
+    paddr_t paddr,
     extent_len_t left_len,
     extent_len_t right_len,
     LogicalCachedExtent *lnextent,

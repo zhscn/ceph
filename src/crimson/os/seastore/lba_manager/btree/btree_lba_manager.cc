@@ -587,6 +587,7 @@ BtreeLBAManager::split_mapping_ret
 BtreeLBAManager::split_mapping(
   Transaction &t,
   laddr_t laddr,
+  paddr_t paddr,
   extent_len_t left_len,
   extent_len_t right_len,
   LogicalCachedExtent *lnextent,
@@ -599,25 +600,30 @@ BtreeLBAManager::split_mapping(
   return _update_mapping(
     t,
     laddr,
-    [left_len, right_len](const lba_map_val_t &in) {
+    [left_len, right_len, &t](const lba_map_val_t &in) {
       lba_map_val_t ret = in;
       ceph_assert(left_len + right_len == in.len);
+      LOG_PREFIX(BtreeLBAManager::split_mapping);
+      TRACET("left val: {}, indirect: {}", t, ret, ret.pladdr.is_laddr());
       ret.len = left_len;
-      ceph_assert(ret.pladdr.is_paddr());
       return ret;
     },
     lnextent
-  ).si_then([&t, laddr, left_len, right_len, this, rnextent](auto v) {
+  ).si_then([&t, laddr, left_len, right_len, this, rnextent, paddr](auto v) {
     ceph_assert(v.index() == 1);
-    auto left_val = std::get<1>(v)->get_map_val();
-    auto paddr = std::get<1>(v)->get_val();
+    auto &mapping = std::get<1>(v);
+    auto left_val = mapping->get_map_val();
+    auto pladdr = mapping->get_raw_val();
+    LOG_PREFIX(BtreeLBAManager::split_mapping);
+    TRACET("allocating for pladdr {}, indirect: {}",
+      t, pladdr, std::get<1>(v)->is_indirect());
 
     return _alloc_extent(
       t,
       laddr + left_len,
       right_len,
-      paddr + left_len,
-      P_ADDR_NULL,
+      pladdr + left_len,
+      (pladdr.is_paddr() ? P_ADDR_NULL : paddr),
       left_val.refcount,
       rnextent
     ).si_then([v=std::move(v)](auto ret) mutable {

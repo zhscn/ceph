@@ -282,6 +282,7 @@ ObjectDataHandler::write_ret do_insertions(
 	  return ObjectDataHandler::write_iertr::now();
 	});
       } else {
+	ceph_abort();
 	ceph_assert(region.is_existing());
 	DEBUGT("map existing extent: laddr {} len {} {}",
 	       ctx.t, region.addr, region.len, *region.existing_paddr);
@@ -313,12 +314,25 @@ ObjectDataHandler::write_ret do_insertions(
     });
 }
 
+enum class drop_part_t : uint8_t {
+  NONE,
+  LEFT,
+  RIGHT
+};
+
+struct split_info_t {
+  paddr_t paddr;
+  extent_len_t left, right;
+  drop_part_t to_drop = drop_part_t::NONE;
+  bool mapping_only = false;
+};
+
 ObjectDataHandler::write_ret do_split(
   context_t ctx,
-  std::map<laddr_t, std::vector<
-    std::pair<extent_len_t, extent_len_t>>> &to_split)
+  std::map<laddr_t, std::list<split_info_t>> &to_split,
+  lba_pin_list_t &pins)
 {
-  return trans_intr::do_for_each(to_split, [ctx](auto &split_op)
+  return trans_intr::do_for_each(to_split, [ctx, &pins](auto &split_op)
                                  -> ObjectDataHandler::write_iertr::future<> {
     auto laddr = split_op.first;
     auto &lens = split_op.second;
@@ -327,34 +341,64 @@ ObjectDataHandler::write_ret do_split(
       return ctx.tm.split_extent<ObjectDataBlock>(
         ctx.t,
         laddr,
-        lens.front().first,
-        lens.front().second
-      ).si_then([&lens](std::pair<LBAMappingRef, LBAMappingRef> p) {
-        assert(p.first->get_length() == lens.front().first);
-        assert(p.second->get_length() == lens.front().second);
+	lens.front().paddr,
+        lens.front().left,
+        lens.front().right,
+	lens.front().mapping_only
+      ).si_then([laddr, &lens, &pins](auto p) {
+        assert(p.first->get_length() == lens.front().left);
+        assert(p.second->get_length() == lens.front().right);
+	switch (lens.front().to_drop) {
+	case drop_part_t::LEFT:
+	  assert(laddr == pins.back()->get_key());
+	  pins.pop_back();
+	  pins.emplace_back(std::move(p.first));
+	  break;
+	case drop_part_t::RIGHT:
+	  assert(laddr == pins.front()->get_key());
+	  pins.pop_front();
+	  pins.emplace_front(std::move(p.second));
+	  break;
+	case drop_part_t::NONE:
+	  break;
+	default:
+	  ceph_abort();
+	}
       });
     } else if (lens.size() == 2) {
-      assert(lens.front().first + lens.front().second ==
-             lens.back().first + lens.back().second);
-      assert(lens.front().first < lens.back().first);
+      assert(lens.front().left + lens.front().right ==
+             lens.back().left + lens.back().right);
+      assert(lens.front().left < lens.back().left);
+      assert(pins.size() == 1);
+      assert(laddr == pins.front()->get_key()
+	|| laddr == pins.front()->get_intermediate_key());
       return ctx.tm.split_extent<ObjectDataBlock>(
         ctx.t,
         laddr,
-        lens.front().first,
-        lens.front().second
-      ).si_then([ctx, &lens](auto p) {
-        auto left_len = lens.back().first;
-        auto right_len = lens.back().second;
-        left_len -= lens.front().first;
+	lens.front().paddr,
+        lens.front().left,
+        lens.front().right,
+	lens.front().mapping_only
+      ).si_then([ctx, &lens, &pins](auto p) {
+        auto left_len = lens.back().left;
+        auto right_len = lens.back().right;
+        left_len -= lens.front().left;
         assert(left_len + right_len == p.second->get_length());
         return ctx.tm.split_extent<ObjectDataBlock>(
           ctx.t,
           p.second->get_key(),
+	  p.second->get_val(),
           left_len,
-          right_len
-        ).si_then([left_len, right_len](auto p) {
+          right_len,
+	  lens.back().mapping_only
+        ).si_then([left_len, right_len, &lens, &pins](auto p) {
           assert(p.first->get_length() == left_len);
           assert(p.second->get_length() == right_len);
+	  if (lens.back().to_drop != drop_part_t::NONE) {
+	    ceph_assert(lens.back().to_drop == drop_part_t::LEFT);
+	    pins.pop_front();
+	    pins.emplace_front(std::move(p.first));
+	  }
         });
       });
     } else {
@@ -1042,7 +1086,7 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
     assert(bl->length() == len);
   }
   overwrite_plan_t overwrite_plan(offset, len, _pins, ctx.tm.get_block_size());
-  using split_points = std::vector<std::pair<extent_len_t, extent_len_t>>;
+  using split_points = std::list<split_info_t>;
   return seastar::do_with(
     std::move(_pins),
     extent_to_write_list_t(),
@@ -1066,23 +1110,36 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
                &to_write, &split_ops, &pins](auto p) mutable {
       if (auto &left_extent = p.op; left_extent) {
         ceph_assert(left_extent->addr == overwrite_plan.pin_begin);
-        append_extent_to_write(to_write, std::move(*left_extent));
+	if (left_extent->is_existing()) {
+	  ceph_assert(left_extent->addr == pins.front()->get_key());
+	  LOG_PREFIX(ObjectDataHandler::overwrite);
+	  TRACET("splitting left extent {}", ctx.t, *pins.front());
+	  split_ops[left_extent->addr].emplace_back(
+	    pins.front()->get_val(),
+	    left_extent->len,
+	    pins.front()->get_length() - left_extent->len,
+	    drop_part_t::RIGHT,
+	    pins.front()->is_indirect());
+	} else {
+	  append_extent_to_write(to_write, std::move(*left_extent));
+	}
       }
       if (auto &headptr = p.bp; headptr) {
         assert(headptr->length() > 0);
       }
       if (auto &split_op = p.split_op; split_op) {
         assert(split_op->is_split());
-        if (!split_ops.contains(split_op->addr)) {
-          split_ops[split_op->addr] = {};
-        }
-        split_ops[split_op->addr].emplace_back(split_op->len, split_op->right_len);
+        split_ops[split_op->addr].emplace_back(
+	  pins.front()->get_val(),
+	  split_op->len,
+	  split_op->right_len,
+	  drop_part_t::NONE);
       }
       return operate_right(
         ctx,
         pins.back(),
         overwrite_plan
-      ).si_then([ctx, len, offset,
+      ).si_then([ctx, len, offset, &pins,
                  pin_begin=overwrite_plan.pin_begin,
                  pin_end=overwrite_plan.pin_end,
                  bl=std::move(bl), left_p=std::move(p),
@@ -1116,18 +1173,30 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
         }
         if (auto &right_extent = p.op; right_extent) {
           ceph_assert(right_extent->get_end_addr() == pin_end);
-          append_extent_to_write(to_write, std::move(*right_extent));
+	  if (right_extent->is_existing()) {
+	    assert(pins.back()->get_length() > right_extent->len);
+	    LOG_PREFIX(ObjectDataHandler::overwrite);
+	    TRACET("splitting right extent {}", ctx.t, *pins.back());
+	    split_ops[pins.back()->get_key()].emplace_back(
+	      pins.back()->get_val(),
+	      pins.back()->get_length() - right_extent->len,
+	      right_extent->len,
+	      drop_part_t::LEFT,
+	      pins.back()->is_indirect());
+	  } else {
+	    append_extent_to_write(to_write, std::move(*right_extent));
+	  }
         }
         if (auto &split_op = p.split_op; split_op) {
           assert(split_op->is_split());
-          if (!split_ops.contains(split_op->addr)) {
-            split_ops[split_op->addr] = {};
-          }
-          split_ops[split_op->addr].emplace_back(split_op->len, split_op->right_len);
+          split_ops[split_op->addr].emplace_back(
+	    pins.back()->get_val(),
+	    split_op->len,
+	    split_op->right_len,
+	    drop_part_t::NONE);
         }
         assert(to_write.size());
-        assert(pin_begin == to_write.front().addr);
-        return do_split(ctx, split_ops);
+        return do_split(ctx, split_ops, pins);
       }).si_then([ctx, &pins] {
         return do_removals(ctx, pins);
       }).si_then([ctx, &to_write] {
