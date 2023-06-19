@@ -37,6 +37,7 @@ struct extent_to_write_t {
     DATA,
     ZERO,
     EXISTING,
+    SPLIT,
   };
 
   type_t type;
@@ -47,6 +48,7 @@ struct extent_to_write_t {
   std::optional<bufferlist> to_write;
   /// non-nullopt if and only if type == EXISTING
   std::optional<paddr_t> existing_paddr;
+  extent_len_t right_len;
 
   extent_to_write_t(const extent_to_write_t &other) {
     type = other.type;
@@ -68,6 +70,10 @@ struct extent_to_write_t {
 
   bool is_existing() const {
     return type == type_t::EXISTING;
+  }
+
+  bool is_split() const {
+    return type == type_t::SPLIT;
   }
 
   laddr_t get_end_addr() const {
@@ -96,6 +102,17 @@ struct extent_to_write_t {
       indirect_key);
   }
 
+  static extent_to_write_t create_split(
+      laddr_t addr,
+      extent_len_t left_len,
+      extent_len_t right_len) {
+    return extent_to_write_t(
+      addr,
+      left_len,
+      right_len);
+  }
+
+
 private:
   extent_to_write_t(laddr_t addr, bufferlist to_write)
     : type(type_t::DATA), addr(addr), len(to_write.length()),
@@ -103,6 +120,9 @@ private:
 
   extent_to_write_t(laddr_t addr, extent_len_t len)
     : type(type_t::ZERO), addr(addr), len(len) {}
+
+  extent_to_write_t(laddr_t addr, extent_len_t left_len, extent_len_t right_len)
+    : type(type_t::SPLIT), addr(addr), len(left_len), right_len(right_len) {}
 
   extent_to_write_t(
     laddr_t addr,
@@ -293,6 +313,57 @@ ObjectDataHandler::write_ret do_insertions(
     });
 }
 
+ObjectDataHandler::write_ret do_split(
+  context_t ctx,
+  std::map<laddr_t, std::vector<
+    std::pair<extent_len_t, extent_len_t>>> &to_split)
+{
+  return trans_intr::do_for_each(to_split, [ctx](auto &split_op)
+                                 -> ObjectDataHandler::write_iertr::future<> {
+    auto laddr = split_op.first;
+    auto &lens = split_op.second;
+    assert(lens.size() > 0 && lens.size() <= 2);
+    if (lens.size() == 1) {
+      return ctx.tm.split_extent<ObjectDataBlock>(
+        ctx.t,
+        laddr,
+        lens.front().first,
+        lens.front().second
+      ).si_then([&lens](std::pair<LBAMappingRef, LBAMappingRef> p) {
+        assert(p.first->get_length() == lens.front().first);
+        assert(p.second->get_length() == lens.front().second);
+      });
+    } else if (lens.size() == 2) {
+      assert(lens.front().first + lens.front().second ==
+             lens.back().first + lens.back().second);
+      assert(lens.front().first < lens.back().first);
+      return ctx.tm.split_extent<ObjectDataBlock>(
+        ctx.t,
+        laddr,
+        lens.front().first,
+        lens.front().second
+      ).si_then([ctx, &lens](auto p) {
+        auto left_len = lens.back().first;
+        auto right_len = lens.back().second;
+        left_len -= lens.front().first;
+        assert(left_len + right_len == p.second->get_length());
+        return ctx.tm.split_extent<ObjectDataBlock>(
+          ctx.t,
+          p.second->get_key(),
+          left_len,
+          right_len
+        ).si_then([left_len, right_len](auto p) {
+          assert(p.first->get_length() == left_len);
+          assert(p.second->get_length() == right_len);
+        });
+      });
+    } else {
+      ceph_abort();
+      return ObjectDataHandler::write_iertr::now();
+    }
+  });
+}
+
 enum class overwrite_operation_t {
   UNKNOWN,
   OVERWRITE_ZERO,           // fill unaligned data with zero
@@ -346,7 +417,6 @@ struct overwrite_plan_t {
   laddr_t aligned_data_end;
   laddr_t left_indirect_key = L_ADDR_NULL;
   laddr_t right_indirect_key = L_ADDR_NULL;
-  laddr_t right_indirect_len = 0;
 
   // operations
   overwrite_operation_t left_operation;
@@ -373,6 +443,7 @@ public:
   }
 
   extent_len_t get_right_extent_size() const {
+    assert(pin_end >= aligned_data_end);
     return pin_end - aligned_data_end;
   }
 
@@ -402,7 +473,6 @@ public:
 	       << ", aligned_data_end=" << overwrite_plan.aligned_data_end
 	       << ", left_indirect_key=" << overwrite_plan.left_indirect_key
 	       << ", right_indirect_key=" << overwrite_plan.right_indirect_key
-	       << ", right_indirect_len=" << overwrite_plan.right_indirect_len
 	       << ", left_operation=" << overwrite_plan.left_operation
 	       << ", right_operation=" << overwrite_plan.right_operation
 	       << ", block_size=" << overwrite_plan.block_size
@@ -429,10 +499,6 @@ public:
 	pins.back()->is_indirect()
 	  ? pins.back()->get_intermediate_key()
 	  : L_ADDR_NULL),
-      right_indirect_len(
-	pins.back()->is_indirect()
-	  ? pins.back()->get_length()
-	  : 0),
       left_operation(overwrite_operation_t::UNKNOWN),
       right_operation(overwrite_operation_t::UNKNOWN),
       block_size(block_size) {
@@ -510,12 +576,6 @@ private:
         actual_write_size -= left_ext_size;
         left_ext_size = 0;
         left_operation = overwrite_operation_t::SPLIT_EXISTING;
-	if (right_indirect_key != L_ADDR_NULL
-	    && right_indirect_key == left_indirect_key) {
-	  // split an extent at both the left and the right side
-	  right_indirect_key += get_left_extent_size();
-	  right_indirect_len -= get_left_extent_size();
-	}
       } else { // left_ext_size < right_ext_size
         // split right
         assert(right_operation == overwrite_operation_t::UNKNOWN);
@@ -550,49 +610,50 @@ namespace crimson::os::seastore {
  *
  * Proceed overwrite_plan.left_operation.
  */
-using operate_ret_bare = std::pair<
-  std::optional<extent_to_write_t>,
-  std::optional<bufferptr>>;
-using operate_ret = get_iertr::future<operate_ret_bare>;
+struct operate_ret_bare_t {
+  std::optional<extent_to_write_t> op = std::nullopt;
+  std::optional<bufferptr> bp = std::nullopt;
+  std::optional<extent_to_write_t> split_op = std::nullopt;
+};
+using operate_ret = get_iertr::future<operate_ret_bare_t>;
 operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan_t &overwrite_plan)
 {
   if (overwrite_plan.get_left_size() == 0) {
-    return get_iertr::make_ready_future<operate_ret_bare>(
-      std::nullopt,
-      std::nullopt);
+    return get_iertr::make_ready_future<operate_ret_bare_t>();
   }
+
+  auto res = operate_ret_bare_t();
 
   if (overwrite_plan.left_operation == overwrite_operation_t::OVERWRITE_ZERO) {
     assert(pin->get_val().is_zero());
     auto zero_extent_len = overwrite_plan.get_left_extent_size();
     assert_aligned(zero_extent_len);
     auto zero_prepend_len = overwrite_plan.get_left_alignment_size();
-    return get_iertr::make_ready_future<operate_ret_bare>(
-      (zero_extent_len == 0
-       ? std::nullopt
-       : std::make_optional(extent_to_write_t::create_zero(
-           overwrite_plan.pin_begin, zero_extent_len))),
-      (zero_prepend_len == 0
-       ? std::nullopt
-       : std::make_optional(bufferptr(
-           ceph::buffer::create(zero_prepend_len, 0))))
-    );
+
+    if (zero_extent_len != 0) {
+      res.op.emplace(extent_to_write_t::create_zero(
+           overwrite_plan.pin_begin, zero_extent_len));
+    }
+
+    if (zero_prepend_len != 0) {
+      res.bp.emplace(bufferptr(
+          ceph::buffer::create(zero_prepend_len, 0)));
+    }
+
+    return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
   } else if (overwrite_plan.left_operation == overwrite_operation_t::MERGE_EXISTING) {
     auto prepend_len = overwrite_plan.get_left_size();
     if (prepend_len == 0) {
-      return get_iertr::make_ready_future<operate_ret_bare>(
-        std::nullopt,
-        std::nullopt);
+      return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
     } else {
       return ctx.tm.read_pin<ObjectDataBlock>(
 	ctx.t, pin->duplicate()
-      ).si_then([prepend_len](auto left_extent) {
-        return get_iertr::make_ready_future<operate_ret_bare>(
-          std::nullopt,
-          std::make_optional(bufferptr(
-            left_extent->get_bptr(),
+      ).si_then([prepend_len, res=std::move(res)](auto left_extent) mutable {
+	res.bp.emplace(bufferptr(
+	    left_extent->get_bptr(),
             0,
-            prepend_len)));
+            prepend_len));
+        return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
       });
     }
   } else {
@@ -600,52 +661,38 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
 
     auto extent_len = overwrite_plan.get_left_extent_size();
     assert(extent_len && extent_len < pin->get_length());
-    auto fut = TransactionManager::split_extent_iertr::make_ready_future<
-      std::pair<LBAMappingRef, LBAMappingRef>>();
+
     if (overwrite_plan.left_indirect_key != L_ADDR_NULL) {
-      fut = ctx.tm.split_extent<ObjectDataBlock>(
-	ctx.t,
-	overwrite_plan.left_indirect_key,
-	extent_len,
-	pin->get_length() - extent_len);
+      res.split_op.emplace(extent_to_write_t::create_split(
+        overwrite_plan.left_indirect_key,
+        extent_len,
+        pin->get_length() - extent_len));
     }
 
-    return fut.si_then([overwrite_plan=std::move(overwrite_plan),
-			extent_len, ctx, pin=pin->duplicate()](auto p) mutable {
-      std::optional<extent_to_write_t> left_to_write_extent =
-	std::make_optional(extent_to_write_t::create_existing(
-	  overwrite_plan.pin_begin,
-	  overwrite_plan.left_paddr,
-	  extent_len,
-	  overwrite_plan.left_indirect_key));
-      auto prepend_len = overwrite_plan.get_left_alignment_size();
-      if (prepend_len == 0) {
-	return get_iertr::make_ready_future<operate_ret_bare>(
-	  left_to_write_extent,
-	  std::nullopt);
-      } else {
-	auto read_pin = std::move(pin);
-	auto prepend_offset = extent_len;
-	if (p.second) {
-	  auto pin = p.second->duplicate();
-	  read_pin.swap(pin);
-	  prepend_offset = 0;
-	}
-	return ctx.tm.read_pin<ObjectDataBlock>(ctx.t, std::move(read_pin)
-	).si_then([prepend_offset, prepend_len,
-		   left_to_write_extent=std::move(left_to_write_extent)]
-		  (auto left_extent) mutable {
-	  return get_iertr::make_ready_future<operate_ret_bare>(
-	    left_to_write_extent,
-	    std::make_optional(bufferptr(
-	      left_extent->get_bptr(),
-	      prepend_offset,
-	      prepend_len)));
-	});
-      }
-    });
+    res.op.emplace(extent_to_write_t::create_existing(
+          overwrite_plan.pin_begin,
+          overwrite_plan.left_paddr,
+          extent_len,
+          overwrite_plan.left_indirect_key));
+
+    auto prepend_len = overwrite_plan.get_left_alignment_size();
+    if (prepend_len == 0) {
+      return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
+    } else {
+      auto prepend_offset = extent_len;
+      return ctx.tm.read_pin<ObjectDataBlock>(ctx.t, pin->duplicate()
+      ).si_then([prepend_offset, prepend_len, res=std::move(res)]
+                (auto left_extent) mutable {
+        res.bp.emplace(bufferptr(
+          left_extent->get_bptr(),
+          prepend_offset,
+          prepend_len));
+        return get_iertr::make_ready_future<
+          operate_ret_bare_t>(std::move(res));
+      });
+    }
   }
-};
+}
 
 /**
  * operate_right
@@ -654,10 +701,10 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
  */
 operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_plan_t &overwrite_plan)
 {
+  auto res = operate_ret_bare_t();
+
   if (overwrite_plan.get_right_size() == 0) {
-    return get_iertr::make_ready_future<operate_ret_bare>(
-      std::nullopt,
-      std::nullopt);
+    return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
   }
 
   auto right_pin_begin = pin->get_key();
@@ -667,33 +714,32 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
     auto zero_suffix_len = overwrite_plan.get_right_alignment_size();
     auto zero_extent_len = overwrite_plan.get_right_extent_size();
     assert_aligned(zero_extent_len);
-    return get_iertr::make_ready_future<operate_ret_bare>(
-      (zero_extent_len == 0
-       ? std::nullopt
-       : std::make_optional(extent_to_write_t::create_zero(
-           overwrite_plan.aligned_data_end, zero_extent_len))),
-      (zero_suffix_len == 0
-       ? std::nullopt
-       : std::make_optional(bufferptr(
-           ceph::buffer::create(zero_suffix_len, 0))))
-    );
+
+    if (zero_extent_len != 0) {
+      res.op.emplace(extent_to_write_t::create_zero(
+          overwrite_plan.aligned_data_end, zero_extent_len));
+    }
+
+    if (zero_suffix_len != 0) {
+      res.bp.emplace(bufferptr(
+          ceph::buffer::create(zero_suffix_len, 0)));
+    }
+
+    return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
   } else if (overwrite_plan.right_operation == overwrite_operation_t::MERGE_EXISTING) {
     auto append_len = overwrite_plan.get_right_size();
     if (append_len == 0) {
-      return get_iertr::make_ready_future<operate_ret_bare>(
-        std::nullopt,
-        std::nullopt);
+      return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
     } else {
       auto append_offset = overwrite_plan.data_end - right_pin_begin;
       return ctx.tm.read_pin<ObjectDataBlock>(
 	ctx.t, pin->duplicate()
-      ).si_then([append_offset, append_len](auto right_extent) {
-        return get_iertr::make_ready_future<operate_ret_bare>(
-          std::nullopt,
-          std::make_optional(bufferptr(
+      ).si_then([append_offset, append_len, res=std::move(res)](auto right_extent) mutable {
+	res.bp.emplace(bufferptr(
             right_extent->get_bptr(),
             append_offset,
-            append_len)));
+            append_len));
+        return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
       });
     }
   } else {
@@ -701,56 +747,44 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
 
     auto extent_len = overwrite_plan.get_right_extent_size();
     assert(extent_len);
-    auto fut = TransactionManager::split_extent_iertr::make_ready_future<
-      std::pair<LBAMappingRef, LBAMappingRef>>();
+
     if (overwrite_plan.right_indirect_key != L_ADDR_NULL) {
-      fut = ctx.tm.split_extent<ObjectDataBlock>(
-	ctx.t,
-	overwrite_plan.right_indirect_key,
-	overwrite_plan.right_indirect_len - extent_len,
-	extent_len);
+      res.split_op.emplace(extent_to_write_t::create_split(
+        overwrite_plan.right_indirect_key,
+        overwrite_plan.aligned_data_end - right_pin_begin,
+        extent_len));
     }
 
-    return fut.si_then([overwrite_plan=std::move(overwrite_plan),
-			extent_len, pin=pin->duplicate(),
-			right_pin_begin, ctx](auto p) mutable {
-      std::optional<extent_to_write_t> right_to_write_extent =
-	std::make_optional(extent_to_write_t::create_existing(
-	  overwrite_plan.aligned_data_end,
-	  overwrite_plan.right_paddr.add_offset(overwrite_plan.aligned_data_end - right_pin_begin),
-	  extent_len,
-	  overwrite_plan.right_indirect_key != L_ADDR_NULL
-	    ? overwrite_plan.right_indirect_key
-	      + overwrite_plan.right_indirect_len - extent_len
-	    : L_ADDR_NULL));
-      auto append_len = overwrite_plan.get_right_alignment_size();
-      if (append_len == 0) {
-	return get_iertr::make_ready_future<operate_ret_bare>(
-	  right_to_write_extent,
-	  std::nullopt);
-      } else {
-	auto read_pin = std::move(pin);
-	auto append_offset = overwrite_plan.data_end - right_pin_begin;
-	if (p.first) {
-	  auto pin = p.first->duplicate();
-	  read_pin.swap(pin);
-	  append_offset = overwrite_plan.data_end - overwrite_plan.aligned_data_begin;
-	}
-	return ctx.tm.read_pin<ObjectDataBlock>(ctx.t, std::move(read_pin)
-	).si_then([append_offset, append_len,
-		   right_to_write_extent=std::move(right_to_write_extent)]
-		  (auto right_extent) mutable {
-	  return get_iertr::make_ready_future<operate_ret_bare>(
-	    right_to_write_extent,
-	    std::make_optional(bufferptr(
-	      right_extent->get_bptr(),
-	      append_offset,
-	      append_len)));
-	});
-      }
-    });
+    auto right_indirect_key = L_ADDR_NULL;
+    if (overwrite_plan.right_indirect_key != L_ADDR_NULL) {
+      right_indirect_key = overwrite_plan.right_indirect_key
+        + overwrite_plan.aligned_data_end - right_pin_begin;
+    }
+    res.op.emplace(extent_to_write_t::create_existing(
+          overwrite_plan.aligned_data_end,
+          overwrite_plan.right_paddr.add_offset(
+            overwrite_plan.aligned_data_end - right_pin_begin),
+          extent_len,
+          right_indirect_key));
+
+    auto append_len = overwrite_plan.get_right_alignment_size();
+    if (append_len == 0) {
+      return get_iertr::make_ready_future<operate_ret_bare_t>(std::move(res));
+    } else {
+      auto append_offset = overwrite_plan.data_end - right_pin_begin;
+      return ctx.tm.read_pin<ObjectDataBlock>(ctx.t, pin->duplicate()
+      ).si_then([append_offset, append_len,res=std::move(res)]
+                (auto right_extent) mutable {
+        res.bp.emplace(bufferptr(
+          right_extent->get_bptr(),
+          append_offset,
+          append_len));
+        return get_iertr::make_ready_future<
+          operate_ret_bare_t>(std::move(res));
+      });
+    }
   }
-};
+}
 
 template <typename F>
 auto with_object_data(
@@ -1008,11 +1042,13 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
     assert(bl->length() == len);
   }
   overwrite_plan_t overwrite_plan(offset, len, _pins, ctx.tm.get_block_size());
+  using split_points = std::vector<std::pair<extent_len_t, extent_len_t>>;
   return seastar::do_with(
     std::move(_pins),
     extent_to_write_list_t(),
+    std::map<laddr_t, split_points>(),
     [ctx, len, offset, overwrite_plan, bl=std::move(bl)]
-    (auto &pins, auto &to_write) mutable
+    (auto &pins, auto &to_write, auto &split_ops) mutable
   {
     LOG_PREFIX(ObjectDataHandler::overwrite);
     DEBUGT("overwrite: {}~{}",
@@ -1027,14 +1063,20 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
       pins.front(),
       overwrite_plan
     ).si_then([ctx, len, offset, overwrite_plan, bl=std::move(bl),
-               &to_write, &pins](auto p) mutable {
-      auto &[left_extent, headptr] = p;
-      if (left_extent) {
+               &to_write, &split_ops, &pins](auto p) mutable {
+      if (auto &left_extent = p.op; left_extent) {
         ceph_assert(left_extent->addr == overwrite_plan.pin_begin);
         append_extent_to_write(to_write, std::move(*left_extent));
       }
-      if (headptr) {
+      if (auto &headptr = p.bp; headptr) {
         assert(headptr->length() > 0);
+      }
+      if (auto &split_op = p.split_op; split_op) {
+        assert(split_op->is_split());
+        if (!split_ops.contains(split_op->addr)) {
+          split_ops[split_op->addr] = {};
+        }
+        split_ops[split_op->addr].emplace_back(split_op->len, split_op->right_len);
       }
       return operate_right(
         ctx,
@@ -1043,22 +1085,22 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
       ).si_then([ctx, len, offset,
                  pin_begin=overwrite_plan.pin_begin,
                  pin_end=overwrite_plan.pin_end,
-                 bl=std::move(bl), headptr=std::move(headptr),
-                 &to_write, &pins](auto p) mutable {
-        auto &[right_extent, tailptr] = p;
+                 bl=std::move(bl), left_p=std::move(p),
+                 &to_write, &split_ops](auto p) mutable {
         if (bl.has_value()) {
           auto write_offset = offset;
           bufferlist write_bl;
-          if (headptr) {
+          if (auto &headptr = left_p.bp; headptr) {
             write_bl.append(*headptr);
             write_offset -= headptr->length();
             assert_aligned(write_offset);
           }
           write_bl.claim_append(*bl);
-          if (tailptr) {
+          if (auto tailptr = p.bp; tailptr) {
             write_bl.append(*tailptr);
             assert_aligned(write_bl.length());
           }
+          assert_aligned(write_bl.length());
           splice_extent_to_write(
             to_write,
             get_to_writes(write_offset, write_bl));
@@ -1069,17 +1111,24 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
               ctx.tm.get_block_size(),
               offset,
               len,
-              std::move(headptr),
-              std::move(tailptr)));
+              std::move(left_p.bp),
+              std::move(p.bp)));
         }
-        if (right_extent) {
+        if (auto &right_extent = p.op; right_extent) {
           ceph_assert(right_extent->get_end_addr() == pin_end);
           append_extent_to_write(to_write, std::move(*right_extent));
         }
+        if (auto &split_op = p.split_op; split_op) {
+          assert(split_op->is_split());
+          if (!split_ops.contains(split_op->addr)) {
+            split_ops[split_op->addr] = {};
+          }
+          split_ops[split_op->addr].emplace_back(split_op->len, split_op->right_len);
+        }
         assert(to_write.size());
         assert(pin_begin == to_write.front().addr);
-        assert(pin_end == to_write.back().get_end_addr());
-
+        return do_split(ctx, split_ops);
+      }).si_then([ctx, &pins] {
         return do_removals(ctx, pins);
       }).si_then([ctx, &to_write] {
         return do_insertions(ctx, to_write);

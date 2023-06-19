@@ -178,7 +178,13 @@ public:
   {
     auto v = pin->get_logical_extent(t);
     if (v.has_child()) {
-      return v.get_child_fut().then([](auto extent) {
+      return v.get_child_fut().then([pin=std::move(pin)](auto extent) {
+	auto lextent = extent->template cast<LogicalCachedExtent>();
+	auto pin_laddr = pin->get_key();
+	if (pin->is_indirect()) {
+	  pin_laddr = pin->get_intermediate_key();
+	}
+	assert(lextent->get_laddr() == pin_laddr);
 	return extent->template cast<T>();
       });
     } else {
