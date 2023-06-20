@@ -1707,34 +1707,31 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone_extents(
 	  pins,
 	  [&last_pos, &object_data, ctx, data_base](auto &pin) {
 	  auto offset = pin->get_key() - data_base;
-	  auto fut = TransactionManager::reserve_extent_iertr
+	  ceph_assert(offset == last_pos);
+	  auto fut = TransactionManager::alloc_extent_iertr
 	    ::make_ready_future<LBAMappingRef>();
-	  if (offset != last_pos) {
-	    ceph_assert(last_pos < offset);
-	    fut = ctx.tm.reserve_region(
+	  auto addr = object_data.get_reserved_data_base() + offset;
+	  if (pin->get_val().is_zero()) {
+	    fut = ctx.tm.reserve_region(ctx.t, addr, pin->get_length());
+	  } else {
+	    fut = ctx.tm.clone_extent(
 	      ctx.t,
-	      object_data.get_reserved_data_base() + last_pos,
-	      offset - last_pos);
-	  }
-	  return fut.si_then(
-	    [&pin, ctx, &object_data,
-	    &last_pos, offset](auto) {
-	    return ctx.tm.clone_extent(
-	      ctx.t,
-	      object_data.get_reserved_data_base() + offset,
+	      addr,
 	      pin->is_indirect()
 		? pin->get_intermediate_key()
 		: pin->get_key(),
 	      pin->get_length(),
-	      pin->get_val()
-	    ).si_then([&last_pos, &pin, offset](auto) {
-	      last_pos = offset + pin->get_length();
-	      return seastar::now();
-	    }).handle_error_interruptible(
-	      crimson::ct_error::input_output_error::pass_further(),
-	      crimson::ct_error::assert_all("not possible")
-	    );
-	  });
+	      pin->get_val());
+	  }
+	  return fut.si_then(
+	    [&pin, ctx, &object_data,
+	    &last_pos, offset](auto) {
+	    last_pos = offset + pin->get_length();
+	    return seastar::now();
+	  }).handle_error_interruptible(
+	    crimson::ct_error::input_output_error::pass_further(),
+	    crimson::ct_error::assert_all("not possible")
+	  );
 	}).si_then([&last_pos, &object_data, ctx] {
 	  if (last_pos != object_data.get_reserved_data_len()) {
 	    return ctx.tm.reserve_region(
