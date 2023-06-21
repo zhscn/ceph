@@ -236,6 +236,7 @@ public:
     LBAMappingRef left;
     LBAMappingRef right;
     std::optional<laddr_t> shadow = std::nullopt;
+    std::optional<paddr_t> shadow_paddr = std::nullopt;
   };
   /**
    * split_mapping

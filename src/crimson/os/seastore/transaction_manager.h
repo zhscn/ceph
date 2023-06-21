@@ -398,7 +398,7 @@ public:
     extent_len_t right_len,
     bool mapping_only = false) {
     return _split_extent<T>(t, laddr, paddr, left_len, right_len, mapping_only
-    ).si_then([this, left_len, right_len, paddr, mapping_only, &t](auto result) {
+    ).si_then([this, left_len, right_len, mapping_only, &t](auto result) {
       auto fut = split_extent_iertr::make_ready_future<
 	LBAManager::split_mapping_result_t>();
       if (result.shadow) {
@@ -406,7 +406,7 @@ public:
 	fut = this->_split_extent<T>(
 	  t,
 	  *result.shadow,
-	  paddr,
+	  P_ADDR_NULL,
 	  left_len,
 	  right_len,
 	  mapping_only);
@@ -806,6 +806,9 @@ private:
       SUBDEBUGT(seastore_tm,
 		" new extent, lext: {}, rext{}",
 		t, *lext, *rext);
+      if (is_shadow_laddr(laddr)) {
+	assert(epm->is_cold_device(paddr.get_device_id()));
+      }
       return lba_manager->split_mapping(
 	t, laddr, paddr, left_len, right_len, lext.get(), rext.get()
       ).si_then([this, &t, left_len, right_len](auto p) {

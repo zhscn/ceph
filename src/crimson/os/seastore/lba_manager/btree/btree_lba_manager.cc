@@ -841,24 +841,43 @@ BtreeLBAManager::split_mapping(
     TRACET("allocating for pladdr {}, indirect: {}",
       t, pladdr, std::get<1>(v)->is_indirect());
 
-    return _alloc_extent(
-      t,
-      laddr + left_len,
-      right_len,
-      pladdr + left_len,
-      (pladdr.is_paddr() ? P_ADDR_NULL : paddr),
-      left_val.refcount,
-      rnextent
-    ).si_then([has_shadow=result.has_shadow_entry, laddr,
-	      v=std::move(v)](auto ret) mutable {
-      return split_mapping_result_t{
-	LBAMappingRef(std::get<1>(v).release()),
-	std::move(ret),
-	has_shadow
-	  ? (std::make_optional<laddr_t>(
-	      map_shadow_laddr(laddr, shadow_mapping_t::COLD_MIRROR)))
-	  : std::nullopt};
-    });
+    if (is_shadow_laddr(laddr)) {
+      assert(!result.has_shadow_entry);
+      assert(paddr == P_ADDR_NULL);
+      assert(pladdr.is_paddr());
+      return alloc_shadow_extent(
+        t,
+        laddr + left_len,
+        right_len,
+        (pladdr + left_len).get_paddr(),
+        rnextent
+      ).si_then([v=std::move(v)](auto ret) mutable {
+        return split_mapping_result_t {
+          LBAMappingRef(std::move(std::get<1>(v))),
+          std::move(ret),
+          std::nullopt
+        };
+      });
+    } else {
+      return _alloc_extent(
+        t,
+        laddr + left_len,
+        right_len,
+        pladdr + left_len,
+        (pladdr.is_paddr() ? P_ADDR_NULL : paddr),
+        left_val.refcount,
+        rnextent
+      ).si_then([has_shadow=result.has_shadow_entry, laddr,
+	        v=std::move(v)](auto ret) mutable {
+        return split_mapping_result_t{
+	  LBAMappingRef(std::get<1>(v).release()),
+	  std::move(ret),
+	  has_shadow
+	    ? (std::make_optional<laddr_t>(
+	        map_shadow_laddr(laddr, shadow_mapping_t::COLD_MIRROR)))
+	    : std::nullopt};
+      });
+    }
   },
   update_mapping_iertr::pass_further{},
   /* ENOENT in particular should be impossible */
