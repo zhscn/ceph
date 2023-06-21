@@ -56,8 +56,7 @@ struct extent_to_write_t {
     DATA,
     ZERO,
     EXISTING,
-    SPLIT,
-    SHADOW_EXISTING
+    SPLIT
   };
 
   type_t type;
@@ -89,11 +88,7 @@ struct extent_to_write_t {
   }
 
   bool is_existing() const {
-    return type == type_t::EXISTING || type == type_t::SHADOW_EXISTING;
-  }
-
-  bool is_shadow_exsiting() const {
-    return type == type_t::SHADOW_EXISTING;
+    return type == type_t::EXISTING;
   }
 
   bool is_split() const {
@@ -136,17 +131,6 @@ struct extent_to_write_t {
       right_len);
   }
 
-  static extent_to_write_t create_shadow_existing(
-      laddr_t addr, paddr_t existing_paddr, extent_len_t len) {
-    auto res = extent_to_write_t(
-      addr,
-      existing_paddr,
-      len,
-      L_ADDR_NULL);
-    res.type = type_t::SHADOW_EXISTING;
-    return res;
-  }
-
 private:
   extent_to_write_t(laddr_t addr, bufferlist to_write)
     : type(type_t::DATA), addr(addr), len(to_write.length()),
@@ -180,9 +164,7 @@ void append_extent_to_write(
   extent_to_write_list_t &to_write, extent_to_write_t &&to_append)
 {
   assert(to_write.empty() ||
-         to_write.back().get_end_addr() == to_append.addr ||
-	 to_append.is_shadow_exsiting() ||
-	 to_write.back().is_shadow_exsiting());
+         to_write.back().get_end_addr() == to_append.addr);
   if (to_write.empty() ||
       to_write.back().is_data() ||
       to_append.is_data() ||
@@ -244,14 +226,13 @@ ObjectDataHandler::write_ret do_removals(
       DEBUGT("decreasing ref: {}",
 	     ctx.t,
 	     pin->get_key());
-      if (pin->is_shadow_mapping()) {
-	return ObjectDataHandler::write_iertr::now();
-      }
+      assert(!pin->is_shadow_mapping());
       return ctx.tm.dec_ref(
 	ctx.t,
 	pin->get_key()
       ).si_then([ctx, &next_laddr, &last_laddr](auto result) {
-	if (ctx.data_onodes && !ctx.data_onodes->empty()) {
+	assert(ctx.data_onodes);
+	if (!ctx.data_onodes->empty()) {
           auto &onode_map = *ctx.data_onodes;
 	  auto &removed_intermediate_mappings =
 	    result.removed_intermediate_mappings;
@@ -340,8 +321,7 @@ ObjectDataHandler::write_ret do_insertions(
 	       ctx.t, region.addr, region.len, *region.existing_paddr);
 	return ctx.tm.map_existing_extent<ObjectDataBlock>(
 	  ctx.t, region.addr, *region.existing_paddr,
-	  region.len, region.indirect_key,
-	  region.is_shadow_exsiting()
+	  region.len, region.indirect_key, false
 	).handle_error_interruptible(
 	  TransactionManager::alloc_extent_iertr::pass_further{},
 	  Device::read_ertr::assert_all{"ignore read error"}
@@ -351,13 +331,12 @@ ObjectDataHandler::write_ret do_insertions(
 	    return ObjectDataHandler::write_iertr::now();
 	  }
           auto &onode_info = ctx.t.get_non_volatile_cache();
-          assert(onode_info.size() == 1);
           ObjectDataBlockRef obj = extent->template cast<ObjectDataBlock>();
-          obj->set_logical_cache_info(
-            onode_info.begin()->first,
-            onode_info.begin()->second.first);
+	  auto onode_length = onode_info.begin()->second.first;
+	  auto p = find_onode(onode_info, onode_length,
+			      obj->get_laddr(), obj->get_length());
+          obj->set_logical_cache_info(p->first, onode_length);
           if (extent->get_laddr() != region.addr
-              && !region.is_shadow_exsiting()
 	      && extent->get_laddr() != region.indirect_key) {
 	    ERRORT(
 	      "inconsistent laddr: extent: {} region {}/{}",
@@ -391,7 +370,23 @@ ObjectDataHandler::write_ret do_split(
   std::map<laddr_t, std::list<split_info_t>> &to_split,
   lba_pin_list_t &pins)
 {
-  return trans_intr::do_for_each(to_split, [ctx, &pins](auto &split_op)
+  auto func = [ctx](TransactionManager::split_extent_result_t &res) {
+    auto &onode_info = ctx.t.get_non_volatile_cache();
+    assert((bool)(res.right_extent) == (bool)(res.left_extent));
+    if (res.left_extent) {
+      auto obj = res.left_extent->template cast<ObjectDataBlock>();
+      auto onode_length = onode_info.begin()->second.first;
+      auto p = find_onode(onode_info, onode_length,
+                          obj->get_laddr(), obj->get_length());
+      obj->set_logical_cache_info(p->first, onode_length);
+
+      obj = res.right_extent->template cast<ObjectDataBlock>();
+      p = find_onode(onode_info, onode_length,
+                    obj->get_laddr(), obj->get_length());
+      obj->set_logical_cache_info(p->first, onode_length);
+    }
+  };
+  return trans_intr::do_for_each(to_split, [ctx, &pins, func](auto &split_op)
                                  -> ObjectDataHandler::write_iertr::future<> {
     auto laddr = split_op.first;
     auto &lens = split_op.second;
@@ -404,25 +399,26 @@ ObjectDataHandler::write_ret do_split(
         lens.front().left,
         lens.front().right,
 	lens.front().mapping_only
-      ).si_then([laddr, &lens, &pins](auto p) {
-        assert(p.first->get_length() == lens.front().left);
-        assert(p.second->get_length() == lens.front().right);
+      ).si_then([laddr, &lens, &pins, func](auto p) {
+        assert(p.left->get_length() == lens.front().left);
+        assert(p.right->get_length() == lens.front().right);
 	switch (lens.front().to_drop) {
 	case drop_part_t::LEFT:
 	  assert(laddr == pins.back()->get_key());
 	  pins.pop_back();
-	  pins.emplace_back(std::move(p.first));
+	  pins.emplace_back(std::move(p.left));
 	  break;
 	case drop_part_t::RIGHT:
 	  assert(laddr == pins.front()->get_key());
 	  pins.pop_front();
-	  pins.emplace_front(std::move(p.second));
+	  pins.emplace_front(std::move(p.right));
 	  break;
 	case drop_part_t::NONE:
 	  break;
 	default:
 	  ceph_abort();
 	}
+        func(p);
       });
     } else if (lens.size() == 2) {
       assert(lens.front().left + lens.front().right ==
@@ -438,25 +434,27 @@ ObjectDataHandler::write_ret do_split(
         lens.front().left,
         lens.front().right,
 	lens.front().mapping_only
-      ).si_then([ctx, &lens, &pins](auto p) {
+      ).si_then([ctx, &lens, &pins, func](auto p) {
+        func(p);
         auto left_len = lens.back().left;
         auto right_len = lens.back().right;
         left_len -= lens.front().left;
-        assert(left_len + right_len == p.second->get_length());
+        assert(left_len + right_len == p.right->get_length());
         return ctx.tm.split_extent<ObjectDataBlock>(
           ctx.t,
-          p.second->get_key(),
-	  p.second->get_val(),
+          p.right->get_key(),
+	  p.right->get_val(),
           left_len,
           right_len,
 	  lens.back().mapping_only
-        ).si_then([left_len, right_len, &lens, &pins](auto p) {
-          assert(p.first->get_length() == left_len);
-          assert(p.second->get_length() == right_len);
+        ).si_then([left_len, right_len, &lens, &pins, func](auto p) {
+          func(p);
+          assert(p.left->get_length() == left_len);
+          assert(p.right->get_length() == right_len);
 	  if (lens.back().to_drop != drop_part_t::NONE) {
 	    ceph_assert(lens.back().to_drop == drop_part_t::LEFT);
 	    pins.pop_front();
-	    pins.emplace_front(std::move(p.first));
+	    pins.emplace_front(std::move(p.left));
 	  }
         });
       });
@@ -514,8 +512,6 @@ struct overwrite_plan_t {
   laddr_t pin_end;
   paddr_t left_paddr;
   paddr_t right_paddr;
-  paddr_t shadow_left_paddr;
-  paddr_t shadow_right_paddr;
   laddr_t data_begin;
   laddr_t data_end;
   laddr_t aligned_data_begin;
@@ -592,8 +588,6 @@ public:
       pin_end(L_ADDR_NULL),
       left_paddr(pins.front()->get_val()),
       right_paddr(P_ADDR_NULL),
-      shadow_left_paddr(P_ADDR_NULL),
-      shadow_right_paddr(P_ADDR_NULL),
       data_begin(offset),
       data_end(offset + len),
       aligned_data_begin(p2align((uint64_t)data_begin, (uint64_t)block_size)),
@@ -609,18 +603,9 @@ public:
       left_operation(overwrite_operation_t::UNKNOWN),
       right_operation(overwrite_operation_t::UNKNOWN),
       block_size(block_size) {
-    auto b = pins.begin();
-    b++;
-    if (b != pins.end() && (*b)->is_shadow_mapping()) {
-      shadow_left_paddr = (*b)->get_val();
-    }
     auto e = pins.rbegin();
     assert(e != pins.rend());
-    if ((*e)->is_shadow_mapping()) {
-      shadow_right_paddr = (*e)->get_val();
-      e++;
-      assert(e != pins.rend());
-    }
+    assert(!pins.back()->is_shadow_mapping());
     pin_end = (*e)->get_key() + (*e)->get_length();
     right_paddr = (*e)->get_val();
 
@@ -736,7 +721,6 @@ struct operate_ret_bare_t {
   std::optional<extent_to_write_t> op = std::nullopt;
   std::optional<bufferptr> bp = std::nullopt;
   std::optional<extent_to_write_t> split_op = std::nullopt;
-  std::optional<extent_to_write_t> shadow_op = std::nullopt;
 };
 using operate_ret = get_iertr::future<operate_ret_bare_t>;
 operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan_t &overwrite_plan)
@@ -786,25 +770,19 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
     assert(extent_len && extent_len < pin->get_length());
 
     if (overwrite_plan.left_indirect_key != L_ADDR_NULL) {
+      assert(!is_shadow_laddr(overwrite_plan.left_indirect_key));
       res.split_op.emplace(extent_to_write_t::create_split(
         overwrite_plan.left_indirect_key,
         extent_len,
         pin->get_length() - extent_len));
     }
 
+    assert(!is_shadow_laddr(overwrite_plan.pin_begin));
     res.op.emplace(extent_to_write_t::create_existing(
           overwrite_plan.pin_begin,
           overwrite_plan.left_paddr,
           extent_len,
           overwrite_plan.left_indirect_key));
-
-    if (overwrite_plan.shadow_left_paddr != P_ADDR_NULL) {
-      assert(overwrite_plan.shadow_left_paddr.is_absolute());
-      res.shadow_op.emplace(extent_to_write_t::create_shadow_existing(
-	  overwrite_plan.pin_begin,
-          overwrite_plan.shadow_left_paddr,
-          extent_len));
-    }
 
     auto prepend_len = overwrite_plan.get_left_alignment_size();
     if (prepend_len == 0) {
@@ -880,6 +858,7 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
     assert(extent_len);
 
     if (overwrite_plan.right_indirect_key != L_ADDR_NULL) {
+      assert(!is_shadow_laddr(overwrite_plan.right_indirect_key));
       res.split_op.emplace(extent_to_write_t::create_split(
         overwrite_plan.right_indirect_key,
         overwrite_plan.aligned_data_end - right_pin_begin,
@@ -891,20 +870,13 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
       right_indirect_key = overwrite_plan.right_indirect_key
         + overwrite_plan.aligned_data_end - right_pin_begin;
     }
+    assert(!is_shadow_laddr(overwrite_plan.aligned_data_end));
     res.op.emplace(extent_to_write_t::create_existing(
           overwrite_plan.aligned_data_end,
           overwrite_plan.right_paddr.add_offset(
             overwrite_plan.aligned_data_end - right_pin_begin),
           extent_len,
           right_indirect_key));
-    if (overwrite_plan.shadow_right_paddr != P_ADDR_NULL) {
-      assert(overwrite_plan.shadow_right_paddr.is_absolute());
-      res.shadow_op.emplace(extent_to_write_t::create_shadow_existing(
-	  overwrite_plan.aligned_data_end,
-          overwrite_plan.shadow_right_paddr.add_offset(
-	    overwrite_plan.aligned_data_end - right_pin_begin),
-          extent_len));
-    }
 
     auto append_len = overwrite_plan.get_right_alignment_size();
     if (append_len == 0) {
@@ -965,7 +937,8 @@ auto with_objects_data(
 	  ctx.d_onode->get_mutable_layout(
 	    ctx.t).object_data.update(d_object_data);
 	}
-	if (ctx.data_onodes && ctx.data_onodes->size() == 1) {
+	assert(ctx.data_onodes);
+	if (ctx.data_onodes->size() == 1) {
 	  assert(data_obj_data);
           auto &data_onode = ctx.data_onodes->begin()->second;
 	  data_onode->get_mutable_layout(ctx.t
@@ -1239,21 +1212,10 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
 	  drop_part_t::NONE);
       }
 
-      if (auto &shadow_left_extent = p.shadow_op; shadow_left_extent) {
-        ceph_assert(shadow_left_extent->existing_paddr &&
-		    *shadow_left_extent->existing_paddr ==
-		    overwrite_plan.shadow_left_paddr);
-        append_extent_to_write(to_write, std::move(*shadow_left_extent));
-      }
-      auto iter = pins.rbegin();
-      if (auto &pin = *iter;
-	  pin->is_shadow_mapping()) {
-	iter++;
-	ceph_assert(iter != pins.rend());
-      }
+      assert(!pins.back()->is_shadow_mapping());
       return operate_right(
         ctx,
-        *iter,
+        pins.back(),
         overwrite_plan
       ).si_then([ctx, len, offset, &pins,
                  pin_end=overwrite_plan.pin_end,
@@ -1303,9 +1265,6 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
 	    append_extent_to_write(to_write, std::move(*right_extent));
 	  }
         }
-	if (auto shadow_right_extent = p.shadow_op; shadow_right_extent) {
-	  append_extent_to_write(to_write, std::move(*shadow_right_extent));
-	}
         if (auto &split_op = p.split_op; split_op) {
           assert(split_op->is_split());
           split_ops[split_op->addr].emplace_back(
@@ -1385,6 +1344,15 @@ ObjectDataHandler::write_ret ObjectDataHandler::write(
           object_data.get_reserved_data_base(),
 	  object_data.get_reserved_data_len(),
 	  extent_types_t::OBJECT_DATA_BLOCK);
+	assert(ctx.data_onodes);
+	if (!ctx.data_onodes->empty()) {
+	  for (auto &p : *ctx.data_onodes) {
+	    ctx.t.update_non_volatile_cache(
+	      p.first,
+	      object_data.get_reserved_data_len(),
+	      extent_types_t::OBJECT_DATA_BLOCK);
+	  }
+	}
 	auto logical_offset = object_data.get_reserved_data_base() + offset;
 	return ctx.tm.get_pins(
 	  ctx.t,
@@ -1405,6 +1373,7 @@ auto update_cache(const ObjectDataHandler::context_t &ctx, const lba_pin_list_t 
   if (!ctx.tm.support_non_volatile_cache()) {
     return res;
   }
+  assert(!pin_list.front()->is_shadow_mapping());
 
   struct onode_info_t {
     extent_len_t onode_length;
@@ -1413,7 +1382,8 @@ auto update_cache(const ObjectDataHandler::context_t &ctx, const lba_pin_list_t 
 
   std::map<laddr_t, onode_info_t> onode_map;
   extent_len_t onode_length;
-  if (ctx.data_onodes) {
+  assert(ctx.data_onodes);
+  if (!ctx.data_onodes->empty()) {
     for (auto &p : *ctx.data_onodes) {
       const auto &onode_data = p.second->get_layout().object_data.get();
       auto onode_base = onode_data.get_reserved_data_base();
@@ -1431,9 +1401,7 @@ auto update_cache(const ObjectDataHandler::context_t &ctx, const lba_pin_list_t 
   }
 
   for (auto &pin : pin_list) {
-    if (pin->is_shadow_mapping()) {
-      break;
-    }
+    assert(!pin->is_shadow_mapping());
     auto laddr = pin->get_key();
     if (pin->is_indirect()) {
       laddr = pin->get_intermediate_key();
@@ -1503,6 +1471,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 	    ceph_assert(_pins.size() >= 1);
 	    ceph_assert((*_pins.begin())->get_key() <= loffset);
 	    auto pin_map = update_cache(ctx, _pins);
+            assert(!pin_map.empty());
 	    return seastar::do_with(
 	      std::move(_pins),
 	      loffset,
@@ -1512,9 +1481,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		  pins,
 		  [ctx, loffset, len, &current, &pin_map, &ret](auto &pin)
 		  -> read_iertr::future<> {
-		    if (pin->is_shadow_mapping()) {
-		      return seastar::now();
-		    }
+                    assert(!pin->is_shadow_mapping());
 		    ceph_assert(current <= (loffset + len));
 		    ceph_assert(
 		      (loffset + len) > pin->get_key());
@@ -1549,11 +1516,10 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 			    ? (key + extent->get_length()) >= end
 			    : (extent->get_laddr() + extent->get_length()) >= end);
 			ceph_assert(end > current);
-                        if (!pin_map.empty()) {
-                          auto lextent = extent->template cast<ObjectDataBlock>();
-                          auto p = pin_map[lextent->get_paddr()];
-                          lextent->set_logical_cache_info(p.first, p.second);
-                        }
+                        auto lextent = extent->template cast<ObjectDataBlock>();
+                        assert(pin_map.contains(lextent->get_paddr()));
+                        auto p = pin_map[lextent->get_paddr()];
+                        lextent->set_logical_cache_info(p.first, p.second);
 			ret.append(
 			  bufferptr(
 			    extent->get_bptr(),
@@ -1774,7 +1740,8 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
       auto base = object_data.get_reserved_data_base();
       auto len = object_data.get_reserved_data_len();
       assert(len != 0);
-      if (ctx.data_onodes) {
+      assert(ctx.data_onodes);
+      if (!ctx.data_onodes->empty()) {
 	assert(!data_obj_data);
 	data_obj_data.emplace(object_data_t(base, len, 0));
       }
@@ -1799,7 +1766,7 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
 	return ctx.tm.get_pins(ctx.t, base, len
 	).si_then([ctx, &object_data, &d_object_data,
 		   &data_obj_data, base, this](auto pins) mutable {
-	  if (ctx.data_onodes) {
+	  if (!ctx.data_onodes->empty()) {
 	    assert(data_obj_data);
 	    for (LBAMappingRef &pin : pins) {
 	      auto paddr = pin->get_val();

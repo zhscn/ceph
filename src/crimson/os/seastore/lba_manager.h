@@ -46,7 +46,13 @@ public:
   using get_mappings_ret = get_mappings_iertr::future<lba_pin_list_t>;
   virtual get_mappings_ret get_mappings(
     Transaction &t,
-    laddr_t offset, extent_len_t length) = 0;
+    laddr_t offset,
+    extent_len_t length) = 0;
+
+  virtual get_mappings_ret get_mappings_with_shadow(
+    Transaction &t,
+    laddr_t offset,
+    extent_len_t length) = 0;
 
   /**
    * Fetches mappings for a list of laddr_t in range [offset, offset + len)
@@ -236,7 +242,6 @@ public:
     LBAMappingRef left;
     LBAMappingRef right;
     std::optional<laddr_t> shadow = std::nullopt;
-    std::optional<paddr_t> shadow_paddr = std::nullopt;
   };
   /**
    * split_mapping

@@ -310,10 +310,12 @@ FLTreeOnodeManager::scan_onodes_ret FLTreeOnodeManager::scan_onodes(
           }
         }).si_then([this, &cursors, &func] {
           return trans_intr::parallel_for_each(cursors, [this, &func](auto &cursor) {
-            return func(FLTreeOnode(
-              default_data_reservation,
-              default_metadata_range,
-              cursor.value()));
+            return func(
+              cursor.get_ghobj(),
+              FLTreeOnode(
+                default_data_reservation,
+                default_metadata_range,
+                cursor.value()));
           });
         }).si_then([&cursor] {
           if (cursor.is_end()) {

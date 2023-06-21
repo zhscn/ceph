@@ -386,9 +386,17 @@ public:
     }
   }
 
+  struct split_extent_result_t {
+    LBAMappingRef left;
+    LBAMappingRef right;
+    std::optional<laddr_t> shadow = std::nullopt;
+    LogicalCachedExtentRef left_extent;
+    LogicalCachedExtentRef right_extent;
+  };
+
   using split_extent_iertr = alloc_extent_iertr;
   using split_extent_ret = split_extent_iertr::future<
-    std::pair<LBAMappingRef, LBAMappingRef>>;
+    split_extent_result_t>;
   template<typename T>
   split_extent_ret split_extent(
     Transaction &t,
@@ -399,8 +407,7 @@ public:
     bool mapping_only = false) {
     return _split_extent<T>(t, laddr, paddr, left_len, right_len, mapping_only
     ).si_then([this, left_len, right_len, mapping_only, &t](auto result) {
-      auto fut = split_extent_iertr::make_ready_future<
-	LBAManager::split_mapping_result_t>();
+      auto fut = split_extent_iertr::make_ready_future<split_extent_result_t>();
       if (result.shadow) {
 	// make clang happy
 	fut = this->_split_extent<T>(
@@ -412,7 +419,7 @@ public:
 	  mapping_only);
       }
       return fut.si_then([result=std::move(result)](auto) mutable {
-	return std::make_pair(std::move(result.left), std::move(result.right));
+	return std::move(result);
       });
     });
   }
@@ -769,7 +776,7 @@ private:
     std::optional<journal_seq_t> seq_to_trim = std::nullopt);
 
   template<typename T>
-  split_extent_iertr::future<LBAManager::split_mapping_result_t>
+  split_extent_iertr::future<split_extent_result_t>
   _split_extent(
     Transaction &t,
     laddr_t laddr,
@@ -779,7 +786,15 @@ private:
     bool mapping_only = false) {
     if (mapping_only) {
       return lba_manager->split_mapping(
-	t, laddr, paddr, left_len, right_len, nullptr, nullptr);
+	t, laddr, paddr, left_len, right_len, nullptr, nullptr
+      ).si_then([](auto result) {
+        return split_extent_result_t{
+          std::move(result.left),
+          std::move(result.right),
+          result.shadow,
+          nullptr,
+          nullptr};
+      });
     } else {
       LOG_PREFIX(TransactionManager::split_extent);
       auto lbp = ceph::bufferptr(buffer::create_page_aligned(left_len));
@@ -806,9 +821,7 @@ private:
       SUBDEBUGT(seastore_tm,
 		" new extent, lext: {}, rext{}",
 		t, *lext, *rext);
-      if (is_shadow_laddr(laddr)) {
-	assert(epm->is_cold_device(paddr.get_device_id()));
-      }
+
       return lba_manager->split_mapping(
 	t, laddr, paddr, left_len, right_len, lext.get(), rext.get()
       ).si_then([this, &t, left_len, right_len](auto p) {
@@ -854,8 +867,13 @@ private:
 	      )
 	    );
 	  });
-	}).si_then([p=std::move(p)]() mutable {
-	  return std::move(p);
+	}).si_then([p=std::move(p), lext, rext]() mutable {
+          return split_extent_result_t{
+            std::move(p.left),
+            std::move(p.right),
+            p.shadow,
+            lext,
+            rext};
 	});
       });
     }

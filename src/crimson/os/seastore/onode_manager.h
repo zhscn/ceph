@@ -91,7 +91,7 @@ public:
 
   using scan_onodes_iertr = base_iertr;
   using scan_onodes_ret = scan_onodes_iertr::future<>;
-  using scan_onodes_func_t = std::function<scan_onodes_ret (Onode&&)>;
+  using scan_onodes_func_t = std::function<scan_onodes_ret (ghobject_t, Onode&&)>;
   virtual scan_onodes_ret scan_onodes(
     Transaction &trans,
     scan_onodes_func_t &&func) = 0;

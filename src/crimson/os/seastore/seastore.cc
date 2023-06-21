@@ -297,14 +297,16 @@ seastar::future<> SeaStore::Shard::mount_managers()
         [this](auto &t) {
         return onode_manager->scan_onodes(
           t,
-	  [this, &t](auto &&onode)
+	  [this, &t](ghobject_t obj, auto &&onode)
           -> TransactionManager::maybe_load_onode_ret {
           auto object_data = onode.get_layout().object_data.get();
+	  // TODO skip snap onode
 	  if (object_data.is_null()) {
 	    return seastar::now();
 	  }
 	  LOG_PREFIX(SeaStore::mount);
-	  TRACET("found object_data: {}", t, object_data.get_reserved_data_base());
+	  TRACET("found object_data: {} {}",
+		 t, object_data.get_reserved_data_base(), obj);
 	  return transaction_manager->maybe_load_onode(
             t,
 	    object_data.get_reserved_data_base(),
@@ -1405,6 +1407,7 @@ SeaStore::Shard::_do_transaction_step(
 	 op->op == Transaction::OP_TRUNCATE ||
 	 op->op == Transaction::OP_ZERO) &&
 	data_onodes[op->oid].empty()) {
+      TRACET("start get_history", *ctx.transaction);
       return onode_manager->get_history(
         *ctx.transaction,
 	i.get_oid(op->oid)
@@ -1579,7 +1582,8 @@ SeaStore::Shard::_remove(
   std::map<laddr_t, OnodeRef> &data_onodes)
 {
   LOG_PREFIX(SeaStore::_remove);
-  DEBUGT("onode={}", *ctx.transaction, *onode);
+  DEBUGT("onode={} data_onodes size={}",
+	 *ctx.transaction, *onode, data_onodes.size());
   auto fut = BtreeOMapManager::omap_clear_iertr::now();
   auto omap_root = onode->get_layout().omap_root.get(
     onode->get_metadata_hint(device->get_block_size()));
@@ -1647,7 +1651,8 @@ SeaStore::Shard::_write(
   uint32_t fadvise_flags)
 {
   LOG_PREFIX(SeaStore::_write);
-  DEBUGT("onode={} {}~{}", *ctx.transaction, *onode, offset, len);
+  DEBUGT("onode={} {}~{} data_onodes size={}",
+	 *ctx.transaction, *onode, offset, len, data_onodes.size());
   {
     auto &object_size = onode->get_mutable_layout(*ctx.transaction).size;
     object_size = std::max<uint64_t>(
@@ -1657,12 +1662,14 @@ SeaStore::Shard::_write(
   return seastar::do_with(
     std::move(_bl),
     ObjectDataHandler(max_object_size),
-    [=, this, &ctx, &onode](auto &bl, auto &objhandler) {
+    [=, this, &ctx, &onode, &data_onodes](auto &bl, auto &objhandler) {
       return objhandler.write(
         ObjectDataHandler::context_t{
           *transaction_manager,
           *ctx.transaction,
           *onode,
+	  nullptr,
+	  &data_onodes
         },
         offset,
         bl);
@@ -1712,7 +1719,8 @@ SeaStore::Shard::_zero(
   extent_len_t len)
 {
   LOG_PREFIX(SeaStore::_zero);
-  DEBUGT("onode={} {}~{}", *ctx.transaction, *onode, offset, len);
+  DEBUGT("onode={} {}~{} data_onodes size={}",
+	 *ctx.transaction, *onode, offset, len, data_onodes.size());
   if (offset + len >= max_object_size) {
     return crimson::ct_error::input_output_error::make();
   }
@@ -1720,12 +1728,14 @@ SeaStore::Shard::_zero(
   object_size = std::max<uint64_t>(offset + len, object_size);
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
-    [=, this, &ctx, &onode](auto &objhandler) {
+    [=, this, &ctx, &onode, &data_onodes](auto &objhandler) {
       return objhandler.zero(
         ObjectDataHandler::context_t{
           *transaction_manager,
           *ctx.transaction,
           *onode,
+	  nullptr,
+	  &data_onodes
         },
         offset,
         len);
@@ -1928,16 +1938,19 @@ SeaStore::Shard::_truncate(
   uint64_t size)
 {
   LOG_PREFIX(SeaStore::_truncate);
-  DEBUGT("onode={} size={}", *ctx.transaction, *onode, size);
+  DEBUGT("onode={} size={} data_onodes size={}",
+	 *ctx.transaction, *onode, size, data_onodes.size());
   onode->get_mutable_layout(*ctx.transaction).size = size;
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
-    [=, this, &ctx, &onode](auto &objhandler) {
+    [=, this, &ctx, &onode, &data_onodes](auto &objhandler) {
     return objhandler.truncate(
       ObjectDataHandler::context_t{
         *transaction_manager,
         *ctx.transaction,
-        *onode
+        *onode,
+	nullptr,
+	&data_onodes
       },
       size);
   });

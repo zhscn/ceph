@@ -260,6 +260,7 @@ private:
     laddr_t laddr,
     extent_len_t length,
     extent_types_t type) {
+    assert(length == 16777216);
     auto b = laddr_bucket_ref_t(new laddr_bucket_t(laddr, length, type));
     intrusive_ptr_add_ref(b.get());
     auto p = buckets_set.insert(*b);

@@ -164,7 +164,9 @@ BtreeLBAManager::get_mappings(
 	    TRACET("{}~{} got {}, {}, repeat ...",
 		   c.trans, offset, length, pos.get_key(), pos.get_val());
 	    ceph_assert(pos.get_val_end() > offset);
-	    pin_list.push_back(pos.get_pin(c));
+            if (!is_shadow_laddr(pos.get_key())) {
+              pin_list.push_back(pos.get_pin(c));
+            }
 	    return LBABtree::iterate_repeat_ret_inner(
 	      interruptible::ready_future_marker{},
 	      seastar::stop_iteration::no);
@@ -175,6 +177,43 @@ BtreeLBAManager::get_mappings(
 	    });
 	  });
 	});
+    });
+}
+
+BtreeLBAManager::get_mappings_ret
+BtreeLBAManager::get_mappings_with_shadow(
+  Transaction &t,
+  laddr_t offset, extent_len_t length)
+{
+  LOG_PREFIX(BtreeLBAManager::get_mappings);
+  TRACET("{}~{}", t, offset, length);
+  auto c = get_context(t);
+  return with_btree_state<LBABtree, lba_pin_list_t>(
+    cache,
+    c,
+    [c, offset, length, FNAME](auto &btree, auto &ret) {
+      return LBABtree::iterate_repeat(
+	c,
+        btree.upper_bound_right(c, offset),
+        [&ret, offset, length, c, FNAME](auto &pos) {
+          if (pos.is_end() || pos.get_key() >= (offset + length)) {
+            TRACET("{}~{} done with {} results",
+                   c.trans, offset, length, ret.size());
+            return LBABtree::iterate_repeat_ret_inner(
+	      interruptible::ready_future_marker{},
+              seastar::stop_iteration::yes);
+          }
+          TRACET("{}~{} got {}, {}, repeat ...",
+                 c.trans, offset, length, pos.get_key(), pos.get_val());
+          ceph_assert(pos.get_val_end() > offset);
+          auto pin = pos.get_pin(c);
+          if (!pin->is_indirect()) {
+            ret.push_back(std::move(pin));
+          }
+          return LBABtree::iterate_repeat_ret_inner(
+	    interruptible::ready_future_marker{},
+            seastar::stop_iteration::no);
+        });
     });
 }
 
@@ -847,7 +886,7 @@ BtreeLBAManager::split_mapping(
       assert(pladdr.is_paddr());
       return alloc_shadow_extent(
         t,
-        laddr + left_len,
+        reset_shadow_mapping(laddr + left_len),
         right_len,
         (pladdr + left_len).get_paddr(),
         rnextent

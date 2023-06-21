@@ -174,6 +174,10 @@ public:
     Transaction &t,
     laddr_t offset, extent_len_t length) final;
 
+  get_mappings_ret get_mappings_with_shadow(
+    Transaction &t,
+    laddr_t offset, extent_len_t length) final;
+
   get_mappings_ret get_mappings(
     Transaction &t,
     laddr_list_t &&list) final;
