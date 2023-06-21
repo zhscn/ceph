@@ -298,6 +298,48 @@ public:
       });
     }
 
+    template <typename Ret, typename F>
+    auto repeat_with_onodes(
+      CollectionRef ch,
+      const ghobject_t &oid,
+      Transaction::src_t src,
+      const char* tname,
+      op_type_t op_type,
+      F &&f) const {
+      auto begin_time = std::chrono::steady_clock::now();
+      return seastar::do_with(
+        oid, Ret{}, std::forward<F>(f),
+        [this, src, op_type, begin_time, tname
+        ](auto &oid, auto &ret, auto &f)
+      {
+        return repeat_eagain([&, this, src, tname] {
+          return transaction_manager->with_transaction_intr(
+            src,
+            tname,
+            [&, this](auto& t)
+          {
+            return onode_manager->get_onode(t, oid
+            ).si_then([&](auto onode) {
+	      return onode_manager->get_history(t, oid
+	      ).si_then([&, onode=std::move(onode)](OnodeManager::onode_history_t hist) mutable {
+		assert(onode->get_layout().object_data.get().get_reserved_data_base() ==
+		       hist.onode->get_layout().object_data.get().get_reserved_data_base());
+		return seastar::do_with(std::move(hist), [&](auto& onode_hist) {
+		  return f(t, onode_hist);
+		});
+	      });
+            }).si_then([&ret](auto _ret) {
+              ret = _ret;
+            });
+          });
+        }).safe_then([&ret, op_type, begin_time, this] {
+          const_cast<Shard*>(this)->add_latency_sample(op_type,
+                     std::chrono::steady_clock::now() - begin_time);
+          return seastar::make_ready_future<Ret>(ret);
+        });
+      });
+    }
+
     using _fiemap_ret = ObjectDataHandler::fiemap_ret;
     _fiemap_ret _fiemap(
       Transaction &t,
@@ -339,27 +381,32 @@ public:
       CollectionRef &col,
       std::vector<OnodeRef> &onodes,
       std::vector<OnodeRef> &d_onodes,
+      std::vector<std::map<laddr_t, OnodeRef>> &data_onodes,
       ceph::os::Transaction::iterator &i);
 
     tm_ret _remove(
       internal_context_t &ctx,
-      OnodeRef &onode);
+      OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes);
     tm_ret _touch(
       internal_context_t &ctx,
       OnodeRef &onode);
     tm_ret _write(
       internal_context_t &ctx,
       OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes,
       uint64_t offset, size_t len,
       ceph::bufferlist &&bl,
       uint32_t fadvise_flags);
     tm_ret _clone(
       internal_context_t &ctx,
       OnodeRef &onode,
-      OnodeRef &d_onode);
+      OnodeRef &d_onode,
+      std::map<laddr_t, OnodeRef> &data_onodes);
     tm_ret _zero(
       internal_context_t &ctx,
       OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes,
       objaddr_t offset, extent_len_t len);
     tm_ret _omap_set_values(
       internal_context_t &ctx,
@@ -383,7 +430,9 @@ public:
       std::string last);
     tm_ret _truncate(
       internal_context_t &ctx,
-      OnodeRef &onode, uint64_t size);
+      OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes,
+      uint64_t size);
     tm_ret _setattrs(
       internal_context_t &ctx,
       OnodeRef &onode,

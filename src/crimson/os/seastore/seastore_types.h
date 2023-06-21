@@ -1441,14 +1441,17 @@ std::ostream &operator<<(std::ostream &out, const journal_tail_delta_t &delta);
 class object_data_t {
   laddr_t reserved_data_base = L_ADDR_NULL;
   extent_len_t reserved_data_len = 0;
+  int64_t extents_count = -1;
 
   bool dirty = false;
 public:
   object_data_t(
     laddr_t reserved_data_base,
-    extent_len_t reserved_data_len)
+    extent_len_t reserved_data_len,
+    int64_t extents_count)
     : reserved_data_base(reserved_data_base),
-      reserved_data_len(reserved_data_len) {}
+      reserved_data_len(reserved_data_len),
+      extents_count(extents_count) {}
 
   laddr_t get_reserved_data_base() const {
     return reserved_data_base;
@@ -1456,6 +1459,10 @@ public:
 
   extent_len_t get_reserved_data_len() const {
     return reserved_data_len;
+  }
+
+  int64_t get_extents_count() const {
+    return extents_count;
   }
 
   bool is_null() const {
@@ -1480,6 +1487,16 @@ public:
     reserved_data_len = len;
   }
 
+  void set_extents_count(int64_t ec) {
+    dirty = true;
+    extents_count = ec;
+  }
+
+  void inc_extents_count(int64_t diff) {
+    dirty = true;
+    extents_count += diff;
+  }
+
   void clear() {
     dirty = true;
     reserved_data_base = L_ADDR_NULL;
@@ -1490,16 +1507,19 @@ public:
 struct __attribute__((packed)) object_data_le_t {
   laddr_le_t reserved_data_base = laddr_le_t(L_ADDR_NULL);
   extent_len_le_t reserved_data_len = init_extent_len_le(0);
+  ceph_les64 extents_count = ceph_les64(-1);
 
   void update(const object_data_t &nroot) {
     reserved_data_base = nroot.get_reserved_data_base();
     reserved_data_len = init_extent_len_le(nroot.get_reserved_data_len());
+    extents_count = ceph_les64(nroot.get_extents_count());
   }
 
   object_data_t get() const {
     return object_data_t(
       reserved_data_base,
-      reserved_data_len);
+      reserved_data_len,
+      extents_count);
   }
 };
 

@@ -22,6 +22,25 @@ namespace crimson::os::seastore {
 using context_t = ObjectDataHandler::context_t;
 using get_iertr = ObjectDataHandler::write_iertr;
 
+template<typename T>
+auto find_onode(
+  T &data_onodes, extent_len_t onode_length,
+  laddr_t laddr, extent_len_t length) {
+  assert(!data_onodes.empty());
+  auto p = data_onodes.lower_bound(laddr);
+  if (p != data_onodes.begin() &&
+      (p == data_onodes.end() || p->first > laddr)) {
+    --p;
+    if (p->first + onode_length <= laddr) {
+      ++p;
+    }
+  }
+  assert(p != data_onodes.end());
+  assert(p->first <= laddr &&
+         p->first + onode_length >= laddr + length);
+  return p;
+}
+
 /**
  * extent_to_write_t
  *
@@ -231,16 +250,29 @@ ObjectDataHandler::write_ret do_removals(
       return ctx.tm.dec_ref(
 	ctx.t,
 	pin->get_key()
-      ).si_then(
-	[&next_laddr, &last_laddr](auto result){
-	  last_laddr = next_laddr;
-	  next_laddr += result.length;
-	},
-	ObjectDataHandler::write_iertr::pass_further{},
-	crimson::ct_error::assert_all{
-	  "object_data_handler::do_removals invalid error"
+      ).si_then([ctx, &next_laddr, &last_laddr](auto result) {
+	if (ctx.data_onodes && !ctx.data_onodes->empty()) {
+          auto &onode_map = *ctx.data_onodes;
+	  auto &removed_intermediate_mappings =
+	    result.removed_intermediate_mappings;
+          auto onode_length = onode_map.begin()->second->
+            get_layout().object_data.get().get_reserved_data_len();
+	  for (auto &m : removed_intermediate_mappings) {
+	    auto p = find_onode(onode_map, onode_length, m.key, m.len);
+	    auto onode = p->second;
+            auto &mlayout = onode->get_mutable_layout(ctx.t);
+            auto object_data = mlayout.object_data.get();
+	    object_data.inc_extents_count(-1);
+            mlayout.object_data.update(object_data);
+	  }
 	}
-      );
+	last_laddr = next_laddr;
+	next_laddr += result.length;
+      },
+      ObjectDataHandler::write_iertr::pass_further{},
+      crimson::ct_error::assert_all{
+	"object_data_handler::do_removals invalid error"
+      });
     });
   });
 }
@@ -921,16 +953,23 @@ auto with_objects_data(
   return seastar::do_with(
     ctx.onode.get_layout().object_data.get(),
     ctx.d_onode->get_layout().object_data.get(),
+    std::optional<object_data_t>(std::nullopt),
     std::forward<F>(f),
-    [ctx](auto &object_data, auto &d_object_data, auto &f) {
-      return std::invoke(f, object_data, d_object_data
-      ).si_then([ctx, &object_data, &d_object_data] {
+    [ctx](auto &object_data, auto &d_object_data, auto &data_obj_data, auto &f) {
+      return std::invoke(f, object_data, d_object_data, data_obj_data
+      ).si_then([ctx, &object_data, &d_object_data, &data_obj_data] {
 	if (object_data.must_update()) {
 	  ctx.onode.get_mutable_layout(ctx.t).object_data.update(object_data);
 	}
 	if (d_object_data.must_update()) {
 	  ctx.d_onode->get_mutable_layout(
 	    ctx.t).object_data.update(d_object_data);
+	}
+	if (ctx.data_onodes && ctx.data_onodes->size() == 1) {
+	  assert(data_obj_data);
+          auto &data_onode = ctx.data_onodes->begin()->second;
+	  data_onode->get_mutable_layout(ctx.t
+	  ).object_data.update(*data_obj_data);
 	}
 	return seastar::now();
       });
@@ -1217,7 +1256,6 @@ ObjectDataHandler::write_ret ObjectDataHandler::overwrite(
         *iter,
         overwrite_plan
       ).si_then([ctx, len, offset, &pins,
-                 pin_begin=overwrite_plan.pin_begin,
                  pin_end=overwrite_plan.pin_end,
                  bl=std::move(bl), left_p=std::move(p),
                  &to_write, &split_ops](auto p) mutable {
@@ -1362,6 +1400,77 @@ ObjectDataHandler::write_ret ObjectDataHandler::write(
     });
 }
 
+auto update_cache(const ObjectDataHandler::context_t &ctx, const lba_pin_list_t &pin_list) {
+  std::map<paddr_t, std::pair<laddr_t, extent_len_t>> res;
+  if (!ctx.tm.support_non_volatile_cache()) {
+    return res;
+  }
+
+  struct onode_info_t {
+    extent_len_t onode_length;
+    std::map<laddr_t, paddr_t> pin_map;
+  };
+
+  std::map<laddr_t, onode_info_t> onode_map;
+  extent_len_t onode_length;
+  if (ctx.data_onodes) {
+    for (auto &p : *ctx.data_onodes) {
+      const auto &onode_data = p.second->get_layout().object_data.get();
+      auto onode_base = onode_data.get_reserved_data_base();
+      assert(onode_base == p.first);
+      onode_length = onode_data.get_reserved_data_len();
+      onode_map[p.first] = onode_info_t{onode_length, {}};
+    }
+  }
+
+  {
+    const auto &onode_data = ctx.onode.get_layout().object_data.get();
+    auto onode_base = onode_data.get_reserved_data_base();
+    onode_length = onode_data.get_reserved_data_len();
+    onode_map[onode_base] = onode_info_t{onode_length, {}};
+  }
+
+  for (auto &pin : pin_list) {
+    if (pin->is_shadow_mapping()) {
+      break;
+    }
+    auto laddr = pin->get_key();
+    if (pin->is_indirect()) {
+      laddr = pin->get_intermediate_key();
+    }
+    auto p = find_onode(onode_map, onode_length, laddr, pin->get_length());
+    auto &onode_info = p->second;
+    onode_info.pin_map[laddr] = pin->get_val();
+  }
+
+  for (auto &p : onode_map) {
+    auto onode_base = p.first;
+    auto &onode_info = p.second;
+    if (onode_info.pin_map.empty()) {
+      continue;
+    }
+    for (auto &p : onode_info.pin_map) {
+      res[p.second] = std::make_pair(onode_base, onode_info.onode_length);
+    }
+    if (!ctx.tm.update_non_volatile_cache_if_cached(
+           onode_base,
+	   onode_info.onode_length,
+	   extent_types_t::OBJECT_DATA_BLOCK)) {
+      for (auto &q : onode_info.pin_map) {
+	if (ctx.tm.maybe_update_non_volatile_cache(
+	        onode_base,
+		q.second,
+		onode_info.onode_length,
+		extent_types_t::OBJECT_DATA_BLOCK)) {
+	  break;
+	}
+      }
+    }
+  }
+
+  return res;
+}
+
 ObjectDataHandler::read_ret ObjectDataHandler::read(
   context_t ctx,
   objaddr_t obj_offset,
@@ -1384,35 +1493,24 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 	  ceph_assert((obj_offset + len) <= object_data.get_reserved_data_len());
 	  ceph_assert(len > 0);
 	  auto onode_base = object_data.get_reserved_data_base();
-	  auto onode_length = object_data.get_reserved_data_len();
 	  laddr_t loffset = onode_base + obj_offset;
 	  return ctx.tm.get_pins(
 	    ctx.t,
 	    loffset,
 	    len
-	  ).si_then([ctx, loffset, len, onode_base,
-		     onode_length, &ret](auto _pins) {
+	  ).si_then([ctx, loffset, len, &ret](auto _pins) {
 	    // offset~len falls within reserved region and len > 0
 	    ceph_assert(_pins.size() >= 1);
 	    ceph_assert((*_pins.begin())->get_key() <= loffset);
-	    if (bool cached = ctx.tm.update_non_volatile_cache_if_cached(
-	          onode_base, onode_length, extent_types_t::OBJECT_DATA_BLOCK);
-		!cached) {
-	      for (auto &p : _pins) {
-		if (ctx.tm.maybe_update_non_volatile_cache(
-	              onode_base, p->get_val(), onode_length,
-		      extent_types_t::OBJECT_DATA_BLOCK)) {
-		  break;
-		}
-	      }
-	    }
+	    auto pin_map = update_cache(ctx, _pins);
 	    return seastar::do_with(
 	      std::move(_pins),
 	      loffset,
-	      [ctx, loffset, len, onode_base, onode_length, &ret](auto &pins, auto &current) {
+	      std::move(pin_map),
+	      [ctx, loffset, len, &ret](auto &pins, auto &current, auto &pin_map) {
 		return trans_intr::do_for_each(
 		  pins,
-		  [ctx, loffset, len, onode_base, onode_length, &current, &ret](auto &pin)
+		  [ctx, loffset, len, &current, &pin_map, &ret](auto &pin)
 		  -> read_iertr::future<> {
 		    if (pin->is_shadow_mapping()) {
 		      return seastar::now();
@@ -1445,15 +1543,17 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		      return ctx.tm.read_pin<ObjectDataBlock>(
 			ctx.t,
 			std::move(pin)
-		      ).si_then([&ret, &current, onode_base, onode_length,
-				end, key, is_indirect](auto extent) {
+		      ).si_then([&ret, &current, &pin_map, end, key, is_indirect](auto extent) {
 			ceph_assert(
 			  is_indirect
 			    ? (key + extent->get_length()) >= end
 			    : (extent->get_laddr() + extent->get_length()) >= end);
 			ceph_assert(end > current);
-			auto lextent = extent->template cast<ObjectDataBlock>();
-			lextent->set_logical_cache_info(onode_base, onode_length);
+                        if (!pin_map.empty()) {
+                          auto lextent = extent->template cast<ObjectDataBlock>();
+                          auto p = pin_map[lextent->get_paddr()];
+                          lextent->set_logical_cache_info(p.first, p.second);
+                        }
 			ret.append(
 			  bufferptr(
 			    extent->get_bptr(),
@@ -1661,15 +1761,23 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
   // 	   length.
   return with_objects_data(
     ctx,
-    [ctx, this](auto &object_data, auto &d_object_data) {
+    [ctx, this](auto &object_data, auto &d_object_data,
+		std::optional<object_data_t> &data_obj_data) {
     ceph_assert(d_object_data.is_null());
+    assert(object_data.get_reserved_data_len() != 0);
     return prepare_data_reservation(
       ctx,
       d_object_data,
       object_data.get_reserved_data_len()
-    ).si_then([&object_data, &d_object_data, ctx, this] {
+    ).si_then([&object_data, &d_object_data,
+	       &data_obj_data, ctx, this]() mutable {
       auto base = object_data.get_reserved_data_base();
       auto len = object_data.get_reserved_data_len();
+      assert(len != 0);
+      if (ctx.data_onodes) {
+	assert(!data_obj_data);
+	data_obj_data.emplace(object_data_t(base, len, 0));
+      }
       object_data.clear();
       LOG_PREFIX(ObjectDataHandler::clone);
       DEBUGT("cloned obj reserve_data_base: {}, len {}",
@@ -1680,24 +1788,36 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
 	ctx,
 	object_data,
 	d_object_data.get_reserved_data_len()
-      ).si_then([&d_object_data, ctx, &object_data, base, len, this] {
+      ).si_then([&d_object_data, ctx, &object_data,
+		 &data_obj_data, base, len, this]() mutable {
+        assert(len != 0);
 	LOG_PREFIX("ObjectDataHandler::clone");
 	DEBUGT("head obj reserve_data_base: {}, len {}",
 	  ctx.t,
 	  object_data.get_reserved_data_base(),
 	  object_data.get_reserved_data_len());
 	return ctx.tm.get_pins(ctx.t, base, len
-	).si_then([ctx, &object_data, &d_object_data, base, this](auto pins) {
+	).si_then([ctx, &object_data, &d_object_data,
+		   &data_obj_data, base, this](auto pins) mutable {
+	  if (ctx.data_onodes) {
+	    assert(data_obj_data);
+	    for (LBAMappingRef &pin : pins) {
+	      auto paddr = pin->get_val();
+	      if (!pin->is_indirect() && !paddr.is_zero()) {
+		data_obj_data->inc_extents_count(1);
+	      }
+	    }
+	  }
 	  return seastar::do_with(
 	    std::move(pins),
 	    [ctx, &object_data, &d_object_data, base, this](auto &pins) {
-	    return clone_extents(ctx, object_data, pins, base
-	    ).si_then([ctx, &d_object_data, base, &pins, this] {
-	      return clone_extents(ctx, d_object_data, pins, base);
-	    }).si_then([&pins, ctx] {
-	      return do_removals(ctx, pins);
-	    });
-	  });
+              return clone_extents(ctx, object_data, pins, base
+	      ).si_then([ctx, &d_object_data, base, &pins, this] {
+	        return clone_extents(ctx, d_object_data, pins, base);
+	      }).si_then([&pins, ctx] {
+	        return do_removals(ctx, pins);
+	      });
+            });
 	});
       });
     });
