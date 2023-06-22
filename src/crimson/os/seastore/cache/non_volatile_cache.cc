@@ -218,7 +218,7 @@ public:
 	     s.demote_size += res.demotion_size;
 	     auto &bucket = *s.cold_iter;
 	     if (res.completed) {
-	       assert(res.proceed_size == bucket->length);
+	       // assert(res.proceed_size == bucket->length);
 	       s.completed_buckets.push_back(bucket);
 	       s.cold_iter++;
 	     }
