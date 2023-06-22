@@ -759,7 +759,10 @@ TransactionManager::get_extents_if_live(
   extent_len_t len)
 {
   LOG_PREFIX(TransactionManager::get_extent_if_live);
-  auto new_laddr = reset_shadow_mapping(laddr);
+  auto new_laddr = laddr;
+  if (is_logical_type(type)) {
+    new_laddr = reset_shadow_mapping(laddr);
+  }
   TRACET("{} {}(new_laddr={})~{} {}", t, type, laddr, new_laddr, len, paddr);
   laddr = new_laddr;
 
