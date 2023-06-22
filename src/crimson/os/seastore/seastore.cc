@@ -1402,11 +1402,10 @@ SeaStore::Shard::_do_transaction_step(
       return OnodeManager::get_or_create_onode_iertr::now();
     }
   }).si_then([&, FNAME, op, this]() {
-    if ((op->op == Transaction::OP_WRITE ||
-	 op->op == Transaction::OP_REMOVE ||
-	 op->op == Transaction::OP_TRUNCATE ||
-	 op->op == Transaction::OP_ZERO) &&
-	data_onodes[op->oid].empty()) {
+    if (op->op == Transaction::OP_WRITE ||
+	op->op == Transaction::OP_REMOVE ||
+	op->op == Transaction::OP_TRUNCATE ||
+	op->op == Transaction::OP_ZERO) {
       TRACET("start get_history", *ctx.transaction);
       return onode_manager->get_history(
         *ctx.transaction,
@@ -1414,7 +1413,7 @@ SeaStore::Shard::_do_transaction_step(
       ).si_then([&, FNAME, op](auto hist) mutable {
 	TRACET("get_history returns {} data onodes",
 	       *ctx.transaction, hist.data_onodes.size());
-	data_onodes[op->oid] = std::move(hist.data_onodes);
+	data_onodes[op->oid].merge(hist.data_onodes);
       });
     } else {
       return OnodeManager::get_onode_iertr::now();

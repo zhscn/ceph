@@ -284,7 +284,8 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
       }
       return fut.si_then([&result, this, &t] {
         auto fut = Cache::retire_extent_iertr::now();
-	if (result.shadow_addr != P_ADDR_NULL) {
+	if (result.refcount == 0 &&
+	    result.shadow_addr != P_ADDR_NULL) {
 	  fut = cache->retire_extent_addr(
             t, result.shadow_addr, result.length);
 	}
