@@ -755,7 +755,19 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
     } else {
       return ctx.tm.read_pin<ObjectDataBlock>(
 	ctx.t, pin->duplicate()
-      ).si_then([prepend_len, res=std::move(res)](auto left_extent) mutable {
+      ).si_then([ctx, prepend_len, res=std::move(res)](auto left_extent) mutable {
+	const auto &obj = ctx.onode.get_layout().object_data.get();
+	auto onode_base = obj.get_reserved_data_base();
+	auto onode_length = obj.get_reserved_data_len();
+	if (left_extent->get_laddr() >= onode_length &&
+	    left_extent->get_laddr() + left_extent->get_length() <=
+	    onode_base + onode_length) {
+	  left_extent->set_logical_cache_info(onode_base, onode_length);
+	} else {
+	  assert(!ctx.data_onodes->empty());
+	  auto p = find_onode(*ctx.data_onodes, onode_length, left_extent->get_laddr(), left_extent->get_length());
+	  left_extent->set_logical_cache_info(p->first, onode_length);
+	}
 	res.bp.emplace(bufferptr(
 	    left_extent->get_bptr(),
             0,
@@ -843,7 +855,19 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
       auto append_offset = overwrite_plan.data_end - right_pin_begin;
       return ctx.tm.read_pin<ObjectDataBlock>(
 	ctx.t, pin->duplicate()
-      ).si_then([append_offset, append_len, res=std::move(res)](auto right_extent) mutable {
+      ).si_then([ctx, append_offset, append_len, res=std::move(res)](auto right_extent) mutable {
+	const auto &obj = ctx.onode.get_layout().object_data.get();
+	auto onode_base = obj.get_reserved_data_base();
+	auto onode_length = obj.get_reserved_data_len();
+	if (right_extent->get_laddr() >= onode_length &&
+	    right_extent->get_laddr() + right_extent->get_length() <=
+	    onode_base + onode_length) {
+	  right_extent->set_logical_cache_info(onode_base, onode_length);
+	} else {
+	  assert(!ctx.data_onodes->empty());
+	  auto p = find_onode(*ctx.data_onodes, onode_length, right_extent->get_laddr(), right_extent->get_length());
+	  right_extent->set_logical_cache_info(p->first, onode_length);
+	}
 	res.bp.emplace(bufferptr(
             right_extent->get_bptr(),
             append_offset,
