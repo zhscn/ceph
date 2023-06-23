@@ -1362,7 +1362,13 @@ SeaStore::Shard::_do_transaction_step(
       d_onodes[op->oid] = get_onode;
     }
     if (op->op == Transaction::OP_CLONE && !d_onodes[op->dest_oid]) {
-      assert(data_onodes[op->dest_oid].empty());
+#ifndef NDEBUG
+      auto &src_oid = i.get_oid(op->oid);
+      auto &dst_oid = i.get_oid(op->dest_oid);
+      if (src_oid > dst_oid) {
+        assert(data_onodes[op->dest_oid].empty());
+      }
+#endif
       //TODO: use when_all_succeed after making onode tree
       //      support parallel extents loading
       return onode_manager->get_or_create_onode(
@@ -1426,9 +1432,10 @@ SeaStore::Shard::_do_transaction_step(
       {
 	TRACET("removing {}", *ctx.transaction, i.get_oid(op->oid));
 	return _remove(ctx, onodes[op->oid], data_onodes[op->oid]
-	).si_then([&onodes, &d_onodes, op] {
+	).si_then([&onodes, &d_onodes, &data_onodes, op] {
 	  onodes[op->oid].reset();
 	  d_onodes[op->oid].reset();
+          data_onodes[op->oid].clear();
 	});
       }
       case Transaction::OP_CREATE:
