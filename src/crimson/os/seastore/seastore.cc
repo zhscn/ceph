@@ -1623,10 +1623,10 @@ SeaStore::Shard::_remove(
     auto laddr = onode_data.get_reserved_data_base();
     auto len = onode_data.get_reserved_data_len();
     return onode_manager->erase_onode(*ctx.transaction, onode
-    ).si_then([this, laddr, len] {
+    ).si_then([&ctx, laddr, len] {
       if (laddr != L_ADDR_NULL) {
-	transaction_manager->remove_non_volatile_cache(
-          laddr, len, extent_types_t::OBJECT_DATA_BLOCK);
+	ctx.transaction->update_non_volatile_cache(
+	  laddr, len, extent_types_t::OBJECT_DATA_BLOCK, true);
       }
     });
   }).handle_error_interruptible(

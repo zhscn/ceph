@@ -413,8 +413,12 @@ TransactionManager::do_submit_transaction(
           start_seq);
 
       if (nv_cache) {
-	for (auto &[laddr, pair] : tref.get_non_volatile_cache()) {
-	  nv_cache->move_to_top_if_not_cached(laddr, pair.first, pair.second);
+	for (auto &[laddr, op] : tref.get_non_volatile_cache()) {
+	  if (op.remove) {
+	    nv_cache->remove(laddr, op.length, op.type);
+	  } else {
+	    nv_cache->move_to_top_if_not_cached(laddr, op.length, op.type);
+	  }
 	}
       }
 

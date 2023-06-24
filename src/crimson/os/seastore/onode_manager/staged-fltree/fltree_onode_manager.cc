@@ -205,11 +205,17 @@ FLTreeOnodeManager::write_dirty_ret FLTreeOnodeManager::write_dirty(
       switch (flonode.status) {
       case FLTreeOnode::status_t::MUTATED: {
         flonode.populate_recorder(trans);
-        auto &extents_count = flonode.get_layout().object_data.extents_count;
-        if (extents_count == 0) {
+        const auto &obj_data = flonode.get_layout().object_data.get();
+        if (obj_data.get_extents_count() == 0) {
+          trans.update_non_volatile_cache(
+            obj_data.get_reserved_data_base(),
+            obj_data.get_reserved_data_len(),
+            extent_types_t::OBJECT_DATA_BLOCK,
+            true);
           return tree.erase(trans, flonode);
         } else {
-          assert(extents_count == -1 || extents_count > 0);
+          assert(obj_data.get_extents_count() == -1 ||
+                 obj_data.get_extents_count() > 0);
           return eagain_iertr::make_ready_future<>();
         }
       }

@@ -490,14 +490,21 @@ public:
   void update_non_volatile_cache(
     laddr_t laddr,
     extent_len_t length,
-    extent_types_t type) {
+    extent_types_t type,
+    bool remove = false) {
     assert(laddr != L_ADDR_NULL);
     if (!non_volatile_cache.contains(laddr)) {
-      non_volatile_cache[laddr] = std::make_pair(length, type);
+      non_volatile_cache[laddr] = cache_op_t{length, type, remove};
     }
   }
 
-  auto& get_non_volatile_cache() {
+  struct cache_op_t {
+    extent_len_t length;
+    extent_types_t type;
+    bool remove;
+  };
+  using cache_ops_t = std::map<laddr_t, cache_op_t>;
+  cache_ops_t& get_non_volatile_cache() {
     return non_volatile_cache;
   }
 
@@ -569,7 +576,7 @@ private:
    */
   pextent_set_t retired_set;
 
-  std::map<laddr_t, std::pair<extent_len_t, extent_types_t>> non_volatile_cache;
+  cache_ops_t non_volatile_cache;
 
   /// stats to collect when commit or invalidate
   tree_stats_t onode_tree_stats;

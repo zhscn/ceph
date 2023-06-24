@@ -332,7 +332,7 @@ ObjectDataHandler::write_ret do_insertions(
 	  }
           auto &onode_info = ctx.t.get_non_volatile_cache();
           ObjectDataBlockRef obj = extent->template cast<ObjectDataBlock>();
-	  auto onode_length = onode_info.begin()->second.first;
+	  auto onode_length = onode_info.begin()->second.length;
 	  auto p = find_onode(onode_info, onode_length,
 			      obj->get_laddr(), obj->get_length());
           obj->set_logical_cache_info(p->first, onode_length);
@@ -375,7 +375,7 @@ ObjectDataHandler::write_ret do_split(
     assert((bool)(res.right_extent) == (bool)(res.left_extent));
     if (res.left_extent) {
       auto obj = res.left_extent->template cast<ObjectDataBlock>();
-      auto onode_length = onode_info.begin()->second.first;
+      auto onode_length = onode_info.begin()->second.length;
       auto p = find_onode(onode_info, onode_length,
                           obj->get_laddr(), obj->get_length());
       obj->set_logical_cache_info(p->first, onode_length);
@@ -391,6 +391,24 @@ ObjectDataHandler::write_ret do_split(
     auto laddr = split_op.first;
     auto &lens = split_op.second;
     assert(lens.size() > 0 && lens.size() <= 2);
+
+    assert(ctx.data_onodes);
+    auto object_data = ctx.onode.get_layout().object_data.get();
+    auto head_base = object_data.get_reserved_data_base();
+    auto onode_length = object_data.get_reserved_data_len();
+    if ((laddr < head_base ||
+	 laddr >= head_base + onode_length) &&
+        !ctx.data_onodes->empty()) {
+      auto &onode_map = *ctx.data_onodes;
+      auto p = find_onode(onode_map, onode_length, laddr,
+			  lens.front().left + lens.front().right);
+      auto onode = p->second;
+      auto &mlayout = onode->get_mutable_layout(ctx.t);
+      auto object_data = mlayout.object_data.get();
+      object_data.inc_extents_count(lens.size());
+      mlayout.object_data.update(object_data);
+    }
+
     if (lens.size() == 1) {
       return ctx.tm.split_extent<ObjectDataBlock>(
         ctx.t,
