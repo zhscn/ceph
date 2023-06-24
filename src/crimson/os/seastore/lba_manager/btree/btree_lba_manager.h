@@ -261,6 +261,11 @@ public:
     LogicalCachedExtent *lnextent,
     LogicalCachedExtent *rnextent) final;
 
+  remove_region_ret remove_region(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t length) final;
+
   get_physical_extent_if_live_ret get_physical_extent_if_live(
     Transaction &t,
     extent_types_t type,

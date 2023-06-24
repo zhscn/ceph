@@ -1277,6 +1277,17 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
 		}
 		return onode_manager->write_dirty(*ctx.transaction, onodes);
 	      });
+	    }).si_then([this, &ctx] {
+	      return trans_intr::do_for_each(
+	        ctx.transaction->get_non_volatile_cache(),
+		[this, &ctx](auto &p) {
+		  if (p.second.remove) {
+		    return transaction_manager->remove_region(
+		      *ctx.transaction, p.first, p.second.length);
+		  } else {
+		    return TransactionManager::remove_region_iertr::make_ready_future();
+		  }
+	      });
 	    });
         }).si_then([this, &ctx] {
           return transaction_manager->submit_transaction(*ctx.transaction);
