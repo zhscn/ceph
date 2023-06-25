@@ -806,6 +806,9 @@ TransactionManager::get_extents_if_live(
           {
 	    ceph_assert(!pin->is_indirect());
             auto pin_paddr = pin->get_val();
+            if (pin_paddr.is_zero()) {
+              return seastar::now();
+            }
             auto &pin_seg_paddr = pin_paddr.as_seg_paddr();
             auto pin_paddr_seg_id = pin_seg_paddr.get_segment_id();
             auto pin_len = pin->get_length();

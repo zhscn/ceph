@@ -1060,22 +1060,16 @@ BtreeLBAManager::_decref_intermediate(
 	    val);
 
 	  auto after_decref = [val, &iter, &scanned, len, c, k=iter.get_key()]
-			      (auto it, bool step_forward) {
+			      (auto it) {
 	    if (!is_shadow_laddr(k)) {
 	      scanned += val.len;
 	    }
 	    ceph_assert(scanned <= len);
 	    ceph_assert(!it.is_end());
-	    if (step_forward) {
-	      return it.next(c).si_then([&iter](auto it) {
-		iter = std::move(it);
-		return seastar::stop_iteration::no;
-	      });
-	    } else {
-	      iter = std::move(it);
-	      return base_iertr::make_ready_future<
-		seastar::stop_iteration>(seastar::stop_iteration::no);
-	    }
+            return it.next(c).si_then([&iter](auto it) {
+              iter = std::move(it);
+              return seastar::stop_iteration::no;
+            });
 	  };
 	  if (!val.refcount) {
 	    if (is_shadow_laddr(iter.get_key())) {
@@ -1090,14 +1084,20 @@ BtreeLBAManager::_decref_intermediate(
 		val.len,
 		P_ADDR_NULL);
 	    }
+            auto key = iter.get_key();
 	    return btree.remove(c, iter
-	    ).si_then([f=std::move(after_decref)](auto it) {
-	      return f(std::move(it), false);
+	    ).si_then([f=std::move(after_decref), val, key](auto it) mutable {
+              val.refcount = 1;
+              val.pladdr = P_ADDR_ZERO;
+              return btree.insert(c, it, key, val, nullptr
+              ).si_then([f=std::move(f)](auto it) {
+                return f(std::move(it));
+              });
 	    });
 	  } else {
 	    return btree.update(c, iter, val, nullptr
 	    ).si_then([f=std::move(after_decref)](auto it) {
-	      return f(std::move(it), true);
+	      return f(std::move(it));
 	    });
 	  }
 	}).si_then([&removed] {
