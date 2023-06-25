@@ -1724,8 +1724,7 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone_extents(
 	      pin->get_val());
 	  }
 	  return fut.si_then(
-	    [&pin, ctx, &object_data,
-	    &last_pos, offset](auto) {
+	    [&pin, &last_pos, offset](auto) {
 	    last_pos = offset + pin->get_length();
 	    return seastar::now();
 	  }).handle_error_interruptible(
