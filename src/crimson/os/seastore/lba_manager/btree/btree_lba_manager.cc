@@ -1037,9 +1037,19 @@ BtreeLBAManager::_decref_intermediate(
 	[&btree, addr, len, c](auto &iter, auto &scanned, auto &removed) {
 	return trans_intr::repeat([&iter, &btree, &scanned,
 				  addr, len, c, &removed] {
-	  ceph_assert(!iter.is_end() &&
-		      (iter.get_key() == addr + scanned ||
-		       is_shadow_laddr(iter.get_key())));
+	  if (iter.is_end() ||
+	      (scanned == len && !is_shadow_laddr(iter.get_key()))) {
+	    return base_iertr::make_ready_future<
+	      seastar::stop_iteration>(
+		seastar::stop_iteration::yes);
+	  }
+          ceph_assert(!iter.is_end());
+          if (is_shadow_laddr(iter.get_key())) {
+            auto laddr = addr + scanned - iter.get_val().len;
+            ceph_assert(iter.get_key() == map_shadow_laddr(laddr, shadow_mapping_t::COLD_MIRROR));
+          } else {
+            ceph_assert(iter.get_key() == addr + scanned);
+          }
 	  auto val = iter.get_val();
 	  ceph_assert(val.refcount >= 1);
 	  val.refcount -= 1;
@@ -1054,23 +1064,17 @@ BtreeLBAManager::_decref_intermediate(
 	    if (!is_shadow_laddr(k)) {
 	      scanned += val.len;
 	    }
-	    if (scanned == len) {
-	      return base_iertr::make_ready_future<
-		seastar::stop_iteration>(
-		  seastar::stop_iteration::yes);
-	    } else {
-	      ceph_assert(scanned < len);
-	      ceph_assert(!it.is_end());
-	      if (step_forward) {
-		return it.next(c).si_then([&iter](auto it) {
-		  iter = std::move(it);
-		  return seastar::stop_iteration::no;
-		});
-	      } else {
+	    ceph_assert(scanned <= len);
+	    ceph_assert(!it.is_end());
+	    if (step_forward) {
+	      return it.next(c).si_then([&iter](auto it) {
 		iter = std::move(it);
-		return base_iertr::make_ready_future<
-		  seastar::stop_iteration>(seastar::stop_iteration::no);
-	      }
+		return seastar::stop_iteration::no;
+	      });
+	    } else {
+	      iter = std::move(it);
+	      return base_iertr::make_ready_future<
+		seastar::stop_iteration>(seastar::stop_iteration::no);
 	    }
 	  };
 	  if (!val.refcount) {
