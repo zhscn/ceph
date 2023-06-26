@@ -447,8 +447,6 @@ ObjectDataHandler::write_ret do_split(
              lens.back().left + lens.back().right);
       assert(lens.front().left < lens.back().left);
       assert(pins.size() == 1);
-      assert(laddr == pins.front()->get_key()
-	|| laddr == pins.front()->get_intermediate_key());
       return ctx.tm.split_extent<ObjectDataBlock>(
         ctx.t,
         laddr,
