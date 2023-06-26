@@ -185,7 +185,7 @@ BtreeLBAManager::get_mappings_with_shadow(
   Transaction &t,
   laddr_t offset, extent_len_t length)
 {
-  LOG_PREFIX(BtreeLBAManager::get_mappings);
+  LOG_PREFIX(BtreeLBAManager::get_mappings_with_shadow);
   TRACET("{}~{}", t, offset, length);
   auto c = get_context(t);
   return with_btree_state<LBABtree, lba_pin_list_t>(

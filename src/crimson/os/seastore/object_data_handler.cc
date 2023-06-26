@@ -1779,6 +1779,7 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
       object_data.get_reserved_data_len()
     ).si_then([&object_data, &d_object_data,
 	       &data_obj_data, ctx, this]() mutable {
+      LOG_PREFIX(ObjectDataHandler::clone);
       auto base = object_data.get_reserved_data_base();
       auto len = object_data.get_reserved_data_len();
       assert(len != 0);
@@ -1787,8 +1788,11 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
 	assert(!data_obj_data);
 	data_obj_data.emplace(object_data_t(base, len, 0));
       }
+      DEBUGT("data obj reserve_data_base: {}, len {}",
+	     ctx.t,
+	     object_data.get_reserved_data_base(),
+	     object_data.get_reserved_data_len());
       object_data.clear();
-      LOG_PREFIX(ObjectDataHandler::clone);
       DEBUGT("cloned obj reserve_data_base: {}, len {}",
 	ctx.t,
 	d_object_data.get_reserved_data_base(),

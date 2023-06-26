@@ -1443,10 +1443,10 @@ SeaStore::Shard::_do_transaction_step(
       {
 	TRACET("removing {}", *ctx.transaction, i.get_oid(op->oid));
 	return _remove(ctx, onodes[op->oid], data_onodes[op->oid]
-	).si_then([&onodes, &d_onodes, &data_onodes, op] {
+	).si_then([&onodes, &d_onodes, op] {
 	  onodes[op->oid].reset();
 	  d_onodes[op->oid].reset();
-          data_onodes[op->oid].clear();
+          // data_onodes[op->oid].clear();
 	});
       }
       case Transaction::OP_CREATE:
