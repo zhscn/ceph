@@ -959,7 +959,7 @@ BtreeLBAManager::remove_region(
   extent_len_t length)
 {
   LOG_PREFIX(BtreeLBAManager::remove_region);
-  DEBUGT("{}, laddr={}, length={}", t, laddr, length);
+  DEBUGT("laddr={}, length={}", t, laddr, length);
   auto c = get_context(t);
   return with_btree<LBABtree>(
     cache,
@@ -976,7 +976,7 @@ BtreeLBAManager::remove_region(
             }
             assert(iter.get_val().pladdr.is_paddr());
             assert(iter.get_val().pladdr.get_paddr() == P_ADDR_ZERO);
-            TRACET("{}~{} got {}~{} {}",
+            TRACET("{}~{} got {}~{} {}~{}",
                    c.trans, laddr, length, iter.get_key(), iter.get_val(),
                    iter.get_val().pladdr, iter.get_val().len);
             return btree.remove(c, iter
@@ -1086,12 +1086,15 @@ BtreeLBAManager::_decref_intermediate(
 	    }
             auto key = iter.get_key();
 	    return btree.remove(c, iter
-	    ).si_then([f=std::move(after_decref), val, key](auto it) mutable {
+	    ).si_then([f=std::move(after_decref), val, key,
+                       c, &btree](auto it) mutable {
               val.refcount = 1;
               val.pladdr = P_ADDR_ZERO;
               return btree.insert(c, it, key, val, nullptr
               ).si_then([f=std::move(f)](auto it) {
-                return f(std::move(it));
+                auto &[iterator, inserted] = it;
+                assert(inserted);
+                return f(std::move(iterator));
               });
 	    });
 	  } else {

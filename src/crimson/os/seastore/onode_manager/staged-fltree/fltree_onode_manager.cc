@@ -206,6 +206,10 @@ FLTreeOnodeManager::write_dirty_ret FLTreeOnodeManager::write_dirty(
       case FLTreeOnode::status_t::MUTATED: {
         flonode.populate_recorder(trans);
         const auto &obj_data = flonode.get_layout().object_data.get();
+        LOG_PREFIX(FLTreeOnodeManager::write_dirty);
+        DEBUGT("onode_base={}, extents_count={}",
+               trans, obj_data.get_reserved_data_base(),
+               obj_data.get_extents_count());
         if (obj_data.get_extents_count() == 0) {
           trans.update_non_volatile_cache(
             obj_data.get_reserved_data_base(),

@@ -1490,11 +1490,13 @@ public:
   void set_extents_count(int64_t ec) {
     dirty = true;
     extents_count = ec;
+    assert(extents_count == -1 || extents_count >= 0);
   }
 
   void inc_extents_count(int64_t diff) {
     dirty = true;
     extents_count += diff;
+    assert(extents_count == -1 || extents_count >= 0);
   }
 
   void clear() {

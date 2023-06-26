@@ -243,6 +243,10 @@ ObjectDataHandler::write_ret do_removals(
 	    auto onode = p->second;
             auto &mlayout = onode->get_mutable_layout(ctx.t);
             auto object_data = mlayout.object_data.get();
+	    LOG_PREFIX(ObjectDataHandler::do_removals);
+	    DEBUGT("update object data onode_base={} extents_count={}",
+		   ctx.t, object_data.get_reserved_data_base(),
+		   object_data.get_extents_count());
 	    object_data.inc_extents_count(-1);
             mlayout.object_data.update(object_data);
 	  }
