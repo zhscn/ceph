@@ -1830,45 +1830,22 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
 	      }).si_then([&pins, ctx] {
 	        return do_removals(ctx, pins);
 	      }).si_then([&pins, ctx] {
-		struct zero_entry_t {
-		  laddr_t laddr;
-		  extent_len_t length;
-		};
-		std::vector<zero_entry_t> es;
-		zero_entry_t last_entry{L_ADDR_NULL, 0};
-		for (LBAMappingRef &pin : pins) {
+		return trans_intr::do_for_each(pins, [ctx](LBAMappingRef &pin) {
 		  assert(!pin->is_shadow_mapping());
-		  if (!pin->is_indirect() &&
-		      !pin->get_val().is_zero()) {
-		    if (last_entry.laddr != L_ADDR_NULL) {
-		      assert(last_entry.length != 0);
-		      es.push_back(last_entry);
-		      last_entry = zero_entry_t{L_ADDR_NULL, 0};
-		    }
-		  } else {
-		    if (last_entry.laddr == L_ADDR_NULL) {
-		      assert(last_entry.length == 0);
-		      last_entry.laddr = pin->get_key();
-		      last_entry.length = pin->get_length();
-		    } else {
-		      assert(last_entry.length != 0);
-		      assert(pin->is_indirect() || pin->get_val().is_zero());
-		      last_entry.length += pin->get_length();
-		    }
-		  }
-		}
-		return seastar::do_with(std::move(es), [ctx](auto &es) {
-		  return trans_intr::do_for_each(es, [ctx](auto &e) {
+		  if (pin->is_indirect() || pin->get_val() == P_ADDR_ZERO) {
+		    // FIXME: merge continuous mappings
 		    return ctx.tm.reserve_region(
 		      ctx.t,
-		      e.laddr,
-		      e.length
-		    ).si_then([&e](auto npin) {
-		      assert(e.laddr == npin->get_key());
+		      pin->get_key(),
+		      pin->get_length()
+		    ).si_then([&pin](auto npin) {
+		      assert(pin->get_key() == npin->get_key());
 		      assert(npin->get_val() == P_ADDR_ZERO);
-		      assert(npin->get_length() == e.length);
+		      assert(npin->get_length() == pin->get_length());
 		    });
-		  });
+		  } else {
+		    return clone_iertr::make_ready_future();
+		  }
 		});
 	      });
             });
