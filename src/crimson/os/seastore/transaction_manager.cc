@@ -708,6 +708,8 @@ TransactionManager::demote_region(
 	       paddr_t paddr,
 	       extent_len_t length)
     -> base_iertr::future<LogicalCachedExtent*> {
+      assert(!paddr.is_zero());
+      assert(paddr.is_absolute());
       assert(epm->is_cold_device(paddr.get_device_id()));
       if (!extent) {
 	return cache->retire_extent_addr(t, paddr, length
