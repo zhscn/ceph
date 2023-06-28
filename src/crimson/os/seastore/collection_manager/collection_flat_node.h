@@ -163,6 +163,7 @@ struct CollectionNode
   }
 
   void apply_delta(const ceph::bufferlist &bl) final {
+    read_to_local();
     assert(bl.length());
     delta_buffer_t buffer;
     auto bptr = bl.begin();
