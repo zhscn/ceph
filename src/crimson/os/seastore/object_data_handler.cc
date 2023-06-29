@@ -1515,7 +1515,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 	    ceph_assert(_pins.size() >= 1);
 	    ceph_assert((*_pins.begin())->get_key() <= loffset);
 	    auto pin_map = update_cache(ctx, _pins);
-            assert(!pin_map.empty());
+            assert(!pin_map.empty() || !ctx.tm.support_non_volatile_cache());
 	    return seastar::do_with(
 	      std::move(_pins),
 	      loffset,
@@ -1560,10 +1560,12 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 			    ? (key + extent->get_length()) >= end
 			    : (extent->get_laddr() + extent->get_length()) >= end);
 			ceph_assert(end > current);
-                        auto lextent = extent->template cast<ObjectDataBlock>();
-                        assert(pin_map.contains(lextent->get_paddr()));
-                        auto p = pin_map[lextent->get_paddr()];
-                        lextent->set_logical_cache_info(p.first, p.second);
+			if (ctx.tm.support_non_volatile_cache()) {
+			  auto lextent = extent->template cast<ObjectDataBlock>();
+			  assert(pin_map.contains(lextent->get_paddr()));
+			  auto p = pin_map[lextent->get_paddr()];
+			  lextent->set_logical_cache_info(p.first, p.second);
+			}
 			ret.append(
 			  bufferptr(
 			    extent->get_bptr(),
