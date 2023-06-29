@@ -48,8 +48,8 @@ void set_cache_state(CachedExtent &extent, lru_extent_cache_state_t state) {
  */
 class LRUMemoryCache : public MemoryCache {
   ExtentPlacementManager &epm;
-  ExtentCallbackInterface *ecb;
-  BackgroundListener *listener;
+  ExtentCallbackInterface *ecb = nullptr;
+  BackgroundListener *listener = nullptr;
 
   // max size (bytes)
   const size_t capacity = 0;
@@ -76,8 +76,7 @@ class LRUMemoryCache : public MemoryCache {
       assert(lru.size() > 0);
       remove_impl(lru.front(), /*need_to_promote=*/ true);
     }
-    if (should_promote()) {
-      ceph_assert(listener);
+    if (should_promote() && listener) {
       listener->maybe_wake_promote();
     }
   }
