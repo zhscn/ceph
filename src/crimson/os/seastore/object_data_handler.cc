@@ -1554,7 +1554,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		      return ctx.tm.read_pin<ObjectDataBlock>(
 			ctx.t,
 			std::move(pin)
-		      ).si_then([&ret, &current, &pin_map, end, key, is_indirect](auto extent) {
+		      ).si_then([&ret, &current, &pin_map, ctx, end, key, is_indirect](auto extent) {
 			ceph_assert(
 			  is_indirect
 			    ? (key + extent->get_length()) >= end
