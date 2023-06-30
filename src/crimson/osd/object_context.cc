@@ -46,7 +46,8 @@ void ObjectContextRegistry::handle_conf_change(
 
 std::optional<hobject_t> resolve_oid(
   const SnapSet &ss,
-  const hobject_t &oid)
+  const hobject_t &oid,
+  bool check_clone_snaps)
 {
   logger().debug("{} oid.snap={},head snapset.seq={}",
                  __func__, oid.snap, ss.seq);
@@ -63,22 +64,24 @@ std::optional<hobject_t> resolve_oid(
       // Doesn't exist, > last clone, < ss.seq
       return std::nullopt;
     }
-    auto citer = ss.clone_snaps.find(*clone);
-    // TODO: how do we want to handle this kind of logic error?
-    ceph_assert(citer != ss.clone_snaps.end());
+    if (check_clone_snaps) {
+      auto citer = ss.clone_snaps.find(*clone);
+      // TODO: how do we want to handle this kind of logic error?
+      ceph_assert(citer != ss.clone_snaps.end());
 
-    if (std::find(
-      citer->second.begin(),
-      citer->second.end(),
-      oid.snap) == citer->second.end()) {
-       logger().debug("{} {} does not contain {} -- DNE",
-                      __func__, ss.clone_snaps, oid.snap);
-       return std::nullopt;
-    } else {
-      auto soid = oid;
-      soid.snap = *clone;
-      return std::optional<hobject_t>(soid);
+      if (std::find(
+	citer->second.begin(),
+	citer->second.end(),
+	oid.snap) == citer->second.end()) {
+	 logger().debug("{} {} does not contain {} -- DNE",
+			__func__, ss.clone_snaps, oid.snap);
+	 return std::nullopt;
+      }
     }
+
+    auto soid = oid;
+    soid.snap = *clone;
+    return std::optional<hobject_t>(soid);
   }
 }
 

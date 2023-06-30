@@ -271,6 +271,7 @@ public:
 };
 
 std::optional<hobject_t> resolve_oid(const SnapSet &ss,
-                                     const hobject_t &oid);
+                                     const hobject_t &oid,
+				     bool check_clone_snaps);
 
 } // namespace crimson::osd

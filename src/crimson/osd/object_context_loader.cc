@@ -60,7 +60,7 @@ using crimson::common::local_conf;
                                            with_obc_func_t&& func)
   {
     LOG_PREFIX(ObjectContextLoader::with_clone_obc_only);
-    auto coid = resolve_oid(head->get_head_ss(), oid);
+    auto coid = resolve_oid(head->get_head_ss(), oid, true);
     if (!coid) {
       ERRORDPP("clone {} not found", dpp, oid);
       return load_obc_iertr::future<>{
@@ -84,13 +84,14 @@ using crimson::common::local_conf;
   ObjectContextLoader::load_obc_iertr::future<>
   ObjectContextLoader::with_head_and_clone_obc(
     hobject_t oid,
+    bool check_clone_snaps,
     with_both_obc_func_t&& func)
   {
     LOG_PREFIX(ObjectContextLoader::with_head_and_clone_obc);
     assert(!oid.is_head());
     return with_obc<RWState::RWREAD>(
       oid.get_head(),
-      [FNAME, oid, func=std::move(func), this](auto head) mutable
+      [FNAME, oid, func=std::move(func), this, check_clone_snaps](auto head) mutable
       -> load_obc_iertr::future<> {
       if (!head->obs.exists) {
         ERRORDPP("head doesn't exist for object {}", dpp, head->obs.oi.soid);
@@ -98,7 +99,7 @@ using crimson::common::local_conf;
           crimson::ct_error::enoent::make()
         };
       }
-      auto coid = resolve_oid(head->get_head_ss(), oid);
+      auto coid = resolve_oid(head->get_head_ss(), oid, check_clone_snaps);
       if (!coid) {
         ERRORDPP("clone {} not found", dpp, oid);
         return load_obc_iertr::future<>{
@@ -229,5 +230,6 @@ using crimson::common::local_conf;
   template ObjectContextLoader::load_obc_iertr::future<>
   ObjectContextLoader::with_head_and_clone_obc<RWState::RWWRITE>(
     hobject_t,
+    bool,
     with_both_obc_func_t&&);
 }

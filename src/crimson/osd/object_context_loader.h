@@ -55,6 +55,7 @@ public:
   template<RWState::State State>
   load_obc_iertr::future<> with_head_and_clone_obc(
     hobject_t oid,
+    bool check_clone_snaps,
     with_both_obc_func_t&& func);
 
   load_obc_iertr::future<> reload_obc(ObjectContext& obc) const;

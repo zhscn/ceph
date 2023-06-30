@@ -501,7 +501,7 @@ SnapTrimObjSubEvent::with_pg(
     // end of commonality
     // with_head_and_clone_obc lock both clone's and head's obcs
     return pg->obc_loader.with_head_and_clone_obc<RWState::RWWRITE>(
-      coid,
+      coid, false,
       [this](auto head_obc, auto clone_obc) {
       logger().debug("{}: got clone_obc={}", *this, clone_obc->get_oid());
       return enter_stage<interruptor>(
