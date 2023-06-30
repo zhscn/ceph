@@ -495,11 +495,13 @@ seastar::future<Ref<PG>> ShardServices::make_pg(
   ).then([pgid, create_map, this](auto &&ret) {
     auto [pool, name, ec_profile] = std::move(std::get<0>(ret).get0());
     auto coll = std::move(std::get<1>(ret).get0());
+    auto &osd_meta = osd_singleton_state.local().get_meta_coll();
     return seastar::make_ready_future<Ref<PG>>(
       new PG{
 	pgid,
 	pg_shard_t{local_state.whoami, pgid.shard},
 	std::move(coll),
+	osd_meta.collection(),
 	std::move(pool),
 	std::move(name),
 	create_map,

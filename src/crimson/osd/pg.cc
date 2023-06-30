@@ -42,6 +42,7 @@
 #include "crimson/osd/pg_recovery.h"
 #include "crimson/osd/replicated_recovery_backend.h"
 #include "crimson/osd/watch.h"
+#include "crimson/osd/osd.h"
 
 using std::ostream;
 using std::set;
@@ -99,6 +100,7 @@ PG::PG(
   spg_t pgid,
   pg_shard_t pg_shard,
   crimson::os::CollectionRef coll_ref,
+  crimson::os::CollectionRef meta_coll,
   pg_pool_t&& pool,
   std::string&& name,
   cached_map_t osdmap,
@@ -144,8 +146,8 @@ PG::PG(
       *this},
     osdriver(
       &shard_services.get_store(),
-      coll_ref,
-      pgid.make_pgmeta_oid()),
+      meta_coll,
+      OSD::make_snapmapper_oid()),
     snap_mapper(
       this->shard_services.get_cct(),
       &osdriver,

@@ -94,6 +94,7 @@ public:
   PG(spg_t pgid,
      pg_shard_t pg_shard,
      crimson::os::CollectionRef coll_ref,
+     crimson::os::CollectionRef meta_coll,
      pg_pool_t&& pool,
      std::string&& name,
      cached_map_t osdmap,

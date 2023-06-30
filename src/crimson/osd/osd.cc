@@ -184,6 +184,16 @@ seastar::future<OSDMeta> OSD::open_or_create_meta_coll(FuturizedStore &store)
   });
 }
 
+seastar::future<> OSD::make_snapmapper_obj(
+  FuturizedStore &store,
+  Ref<crimson::os::FuturizedCollection> meta_coll)
+{
+  assert(meta_coll);
+  ceph::os::Transaction t;
+  t.touch(coll_t::meta(), make_snapmapper_oid());
+  return store.get_sharded_store().do_transaction(meta_coll, std::move(t));
+}
+
 seastar::future<> OSD::mkfs(
   FuturizedStore &store,
   unsigned whoami,
@@ -209,14 +219,18 @@ seastar::future<> OSD::mkfs(
       }));
   }).then([&store] {
     return open_or_create_meta_coll(store);
-  }).then([&store, whoami, cluster_fsid](auto meta_coll) {
+  }).then([&store, whoami, cluster_fsid](auto meta) {
     OSDSuperblock superblock;
     superblock.cluster_fsid = cluster_fsid;
     superblock.osd_fsid = store.get_fsid();
     superblock.whoami = whoami;
     superblock.compat_features = get_osd_initial_compat_set();
+    auto meta_coll = meta.collection();
     return _write_superblock(
-      store, std::move(meta_coll), std::move(superblock));
+      store, std::move(meta), std::move(superblock)
+    ).then([meta_coll, &store] {
+      return make_snapmapper_obj(store, meta_coll);
+    });
   }).then([&store, cluster_fsid] {
     return store.write_meta("ceph_fsid", cluster_fsid.to_string());
   }).then([&store] {

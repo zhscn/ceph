@@ -204,6 +204,12 @@ public:
   ~OSD() final;
 
   seastar::future<> open_meta_coll();
+  static ghobject_t make_snapmapper_oid() {
+    return ghobject_t(hobject_t(
+      sobject_t(
+       object_t("snapmapper"),
+       0)));
+  }
   static seastar::future<OSDMeta> open_or_create_meta_coll(
     crimson::os::FuturizedStore &store
   );
@@ -213,6 +219,9 @@ public:
     uuid_d osd_uuid,
     uuid_d cluster_fsid,
     std::string osdspec_affinity);
+  static seastar::future<> make_snapmapper_obj(
+    crimson::os::FuturizedStore &store,
+    Ref<crimson::os::FuturizedCollection> meta_coll);
 
   seastar::future<> start();
   seastar::future<> stop();
