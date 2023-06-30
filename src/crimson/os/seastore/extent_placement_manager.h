@@ -572,9 +572,11 @@ private:
     }
 
     bool is_cold_device(device_id_t id) const {
+      if (!has_cold_tier()) {
+        return false;
+      }
       assert(cleaners_by_device_id[id]);
-      return has_cold_tier() &&
-        cleaners_by_device_id[id] != main_cleaner.get();
+      return cleaners_by_device_id[id] != main_cleaner.get();
     }
 
     void set_extent_callback(ExtentCallbackInterface *cb) {
