@@ -617,6 +617,12 @@ private:
   OSDriver osdriver;
   SnapMapper snap_mapper;
 
+  ghobject_t make_snapmapper_oid() {
+    return ghobject_t(hobject_t(
+      sobject_t(
+       object_t("snapmapper"),
+       0)));
+  }
 public:
   // PeeringListener
   void publish_stats_to_osd() final;

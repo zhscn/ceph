@@ -145,7 +145,7 @@ PG::PG(
     osdriver(
       &shard_services.get_store(),
       coll_ref,
-      pgid.make_pgmeta_oid()),
+      make_snapmapper_oid()),
     snap_mapper(
       this->shard_services.get_cct(),
       &osdriver,
@@ -610,6 +610,8 @@ void PG::init(
   peering_state.init(
     role, newup, new_up_primary, newacting,
     new_acting_primary, history, pi, t);
+  assert(coll_ref);
+  t.touch(coll_ref->get_cid(), make_snapmapper_oid());
 }
 
 seastar::future<> PG::read_state(crimson::os::FuturizedStore::Shard* store)
