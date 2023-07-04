@@ -1629,17 +1629,19 @@ SeaStore::Shard::_remove(
 	    &data_onodes
 	  });
     });
-  }).si_then([this, &ctx, onode]() mutable {
+  }).si_then([FNAME, this, &ctx, onode]() mutable {
     auto onode_data = onode->get_layout().object_data.get();
     auto laddr = onode_data.get_reserved_data_base();
     auto len = onode_data.get_reserved_data_len();
-    return onode_manager->erase_onode(*ctx.transaction, onode
-    ).si_then([&ctx, laddr, len] {
-      if (laddr != L_ADDR_NULL) {
-	ctx.transaction->update_non_volatile_cache(
-	  laddr, len, extent_types_t::OBJECT_DATA_BLOCK, true);
-      }
-    });
+    DEBUGT("try to remove LBC bucket: laddr: {}, length: {}",
+	   *ctx.transaction, laddr, len);
+    if (laddr != L_ADDR_NULL) {
+      DEBUGT("plan to remove LBC bucket: laddr: {}, length: {}",
+	     *ctx.transaction, laddr, len);
+      ctx.transaction->update_non_volatile_cache(
+	laddr, len, extent_types_t::OBJECT_DATA_BLOCK, true);
+    }
+    return onode_manager->erase_onode(*ctx.transaction, onode);
   }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
     crimson::ct_error::assert_all(

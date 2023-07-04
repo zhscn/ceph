@@ -495,6 +495,11 @@ public:
     assert(laddr != L_ADDR_NULL);
     if (!non_volatile_cache.contains(laddr)) {
       non_volatile_cache[laddr] = cache_op_t{length, type, remove};
+    } else {
+      auto &op = non_volatile_cache[laddr];
+      assert(op.length == length);
+      assert(op.type == type);
+      op.remove = remove;
     }
   }
 

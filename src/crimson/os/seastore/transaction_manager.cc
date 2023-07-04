@@ -415,8 +415,12 @@ TransactionManager::do_submit_transaction(
       if (nv_cache) {
 	for (auto &[laddr, op] : tref.get_non_volatile_cache()) {
 	  if (op.remove) {
+	    SUBTRACET(seastore_t, "remove LBC: laddr: {}, length: {}",
+		      tref, laddr, op.length);
 	    nv_cache->remove(laddr, op.length, op.type);
 	  } else {
+	    SUBTRACET(seastore_t, "move_to_top LBC: laddr: {}, length: {}",
+		      tref, laddr, op.length);
 	    nv_cache->move_to_top_if_not_cached(laddr, op.length, op.type);
 	  }
 	}

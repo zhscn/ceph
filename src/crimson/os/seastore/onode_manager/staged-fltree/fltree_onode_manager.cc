@@ -211,6 +211,9 @@ FLTreeOnodeManager::write_dirty_ret FLTreeOnodeManager::write_dirty(
                trans, obj_data.get_reserved_data_base(),
                obj_data.get_extents_count());
         if (obj_data.get_extents_count() == 0) {
+          DEBUGT("plan to remove onode_base={}, extents_count={}",
+                 trans, obj_data.get_reserved_data_base(),
+                 obj_data.get_extents_count());
           trans.update_non_volatile_cache(
             obj_data.get_reserved_data_base(),
             obj_data.get_reserved_data_len(),
