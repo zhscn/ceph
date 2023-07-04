@@ -92,9 +92,9 @@ std::ostream& operator<<(std::ostream& out, segment_seq_printer_t seq)
 std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr)
 {
   if (pladdr.is_laddr()) {
-    return out << pladdr.get_laddr();
+    return out << "pladdr(" << pladdr.get_laddr() << ")";
   } else {
-    return out << pladdr.get_paddr();
+    return out << "pladdr(" << pladdr.get_paddr() << ")";
   }
 }
 
