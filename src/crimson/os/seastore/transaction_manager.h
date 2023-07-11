@@ -253,7 +253,8 @@ public:
   /// Remove refcount for offset
   ref_ret dec_ref(
     Transaction &t,
-    laddr_t offset);
+    laddr_t offset,
+    bool cascade_remove = true);
 
   /// remove refcount for list of offset
   using refs_ret = ref_iertr::future<std::vector<unsigned>>;
@@ -386,7 +387,7 @@ public:
         [this, &t, original_laddr, original_paddr,
 	original_len, intermediate_base, intermediate_key]
         (auto &ret, auto &count, auto &original_bptr, auto &remaps) {
-        return dec_ref(t, original_laddr
+        return dec_ref(t, original_laddr, false
         ).si_then([this, &t, &original_bptr, &ret, &count,
 		   &remaps, intermediate_base, intermediate_key,
                    original_laddr, original_paddr, original_len](auto) {
