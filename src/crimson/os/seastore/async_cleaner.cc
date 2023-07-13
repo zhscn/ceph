@@ -1097,11 +1097,65 @@ SegmentCleaner::do_reclaim_space(
             backref_entries.emplace(cached_backref);
           }
         }
+	backref_entry_query_set_t merged_backref_entries;
+	{
+	  auto merged_length = 0;
+	  auto original_length = 0;
+	  auto merged_entry = backref_entry_t(
+	    P_ADDR_NULL,
+	    L_ADDR_NULL,
+	    0,
+	    extent_types_t::NONE,
+	    JOURNAL_SEQ_NULL);
+
+	  for (auto &entry : backref_entries) {
+	    original_length += entry.len;
+	    DEBUGT("process: {} {} {}", t, entry.paddr, entry.len, entry.laddr);
+
+	    if (merged_entry.paddr == P_ADDR_NULL) {
+	      merged_entry = entry;
+	      continue;
+	    }
+
+	    auto merged_offset = merged_entry.paddr.as_seg_paddr().get_segment_off();
+	    auto entry_offset = entry.paddr.as_seg_paddr().get_segment_off();
+	    if (merged_entry.laddr == L_ADDR_NULL ||
+		entry.laddr == L_ADDR_NULL) {
+	      ceph_assert(merged_entry.paddr != P_ADDR_NULL);
+	      ceph_assert(merged_entry.len != 0);
+	      ceph_assert(merged_entry.type != extent_types_t::NONE);
+	      merged_length += merged_entry.len;
+	      DEBUGT("merged: {} {} {}", t, merged_entry.paddr, merged_entry.len, merged_entry.laddr);
+	      merged_backref_entries.insert(merged_entry);
+	      merged_entry = entry;
+	    } else if (merged_entry.type == entry.type &&
+		       merged_entry.laddr + merged_entry.len == entry.laddr &&
+		       merged_offset + merged_entry.len == entry_offset) {
+	      merged_entry.len += entry.len;
+	    } else {
+	      ceph_assert(merged_entry.paddr != P_ADDR_NULL);
+	      ceph_assert(merged_entry.len != 0);
+	      ceph_assert(merged_entry.type != extent_types_t::NONE);
+	      merged_length += merged_entry.len;
+	      DEBUGT("merged: {} {} {}", t, merged_entry.paddr, merged_entry.len, merged_entry.laddr);
+	      merged_backref_entries.insert(merged_entry);
+	      merged_entry = entry;
+	    }
+	  }
+	  if (merged_entry.paddr != P_ADDR_NULL) {
+	    ceph_assert(merged_entry.len != 0);
+	    ceph_assert(merged_entry.type != extent_types_t::NONE);
+	    merged_length += merged_entry.len;
+	    DEBUGT("merged: {} {} {}", t, merged_entry.paddr, merged_entry.len, merged_entry.laddr);
+	    merged_backref_entries.insert(merged_entry);
+	  }
+	  ceph_assert(merged_length == original_length);
+	}
         // retrieve live extents
         DEBUGT("start, backref_entries={}, backref_extents={}",
                t, backref_entries.size(), extents.size());
 	return seastar::do_with(
-	  std::move(backref_entries),
+	  std::move(merged_backref_entries),
 	  [this, &extents, &t](auto &backref_entries) {
 	  return trans_intr::parallel_for_each(
 	    backref_entries,
