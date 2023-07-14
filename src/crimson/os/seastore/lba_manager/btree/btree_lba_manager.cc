@@ -803,6 +803,81 @@ BtreeLBAManager::update_mapping(
   );
 }
 
+BtreeLBAManager::update_mappings_ret BtreeLBAManager::update_mappings(
+    Transaction &t,
+    const merged_mappings_t &merged_mappings)
+{
+  LOG_PREFIX(BtreeLBAManager::update_mappings);
+  DEBUGT("merge {}~{} with {} extents",
+	 t,
+	 merged_mappings.laddr,
+	 merged_mappings.length,
+	 merged_mappings.mappings.size());
+  auto c = get_context(t);
+  return with_btree<LBABtree>(
+    cache,
+    c,
+    [c, &merged_mappings](LBABtree &btree) {
+      return btree.lower_bound(
+        c,
+	merged_mappings.laddr
+      ).si_then([c, &merged_mappings, &btree](LBABtree::iterator iter) mutable {
+	ceph_assert(iter.get_key() == merged_mappings.laddr);
+	return seastar::do_with(
+	  iter,
+	  merged_mappings.mappings.begin(),
+	  [c, &merged_mappings, &btree](auto &lba_iter, auto &mapping_iter) {
+	    return trans_intr::repeat([c, &merged_mappings, &lba_iter, &mapping_iter, &btree] {
+	      LOG_PREFIX(BtreeLBAManager::update_mappings);
+	      if (lba_iter.is_end()) {
+		ceph_assert(mapping_iter == merged_mappings.mappings.end());
+		return update_mapping_iertr::make_ready_future<
+		  seastar::stop_iteration>(seastar::stop_iteration::yes);
+	      } else if (mapping_iter == merged_mappings.mappings.end()) {
+		return update_mapping_iertr::make_ready_future<
+		  seastar::stop_iteration>(seastar::stop_iteration::yes);
+	      }
+	      if (reset_shadow_mapping(lba_iter.get_key()) !=
+		  reset_shadow_mapping(mapping_iter->laddr)) {
+		ERRORT("{} {}", c.trans, lba_iter.get_key(), mapping_iter->laddr);
+		ceph_abort();
+	      }
+
+	      auto val = lba_iter.get_val();
+	      DEBUGT("visit lba {}~{} with mapping {}~{}",
+		     c.trans, lba_iter.get_key(), val.len,
+		     mapping_iter->laddr, mapping_iter->length);
+	      if (lba_iter.get_key() != mapping_iter->laddr) {
+		return lba_iter.next(c).si_then([&lba_iter](auto iter) {
+		  lba_iter = iter;
+		  return update_mapping_iertr::make_ready_future<
+		    seastar::stop_iteration>(seastar::stop_iteration::no);
+		});
+	      }
+
+	      ceph_assert(val.paddr == mapping_iter->prior_paddr);
+	      ceph_assert(val.len == mapping_iter->length);
+	      val.paddr = mapping_iter->new_paddr;
+	      return btree.update(
+	        c,
+		lba_iter,
+		val,
+		nullptr
+	      ).si_then([c, &lba_iter, &mapping_iter](auto iter) {
+		return iter.next(c).si_then([&lba_iter, &mapping_iter](auto iter) {
+		  ceph_assert(!iter.is_end());
+		  lba_iter = iter;
+		  mapping_iter++;
+		  return update_mapping_iertr::make_ready_future<
+		    seastar::stop_iteration>(seastar::stop_iteration::no);
+		});
+	      });
+	    });
+	  });
+      });
+    });
+}
+
 BtreeLBAManager::get_physical_extent_if_live_ret
 BtreeLBAManager::get_physical_extent_if_live(
   Transaction &t,
