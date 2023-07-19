@@ -45,7 +45,8 @@ protected:
 
 using BackrefBtree = FixedKVBtree<
   paddr_t, backref_map_val_t, BackrefInternalNode,
-  BackrefLeafNode, BtreeBackrefMapping, BACKREF_BLOCK_SIZE, false>;
+  BackrefLeafNode, BtreeBackrefMapping, BACKREF_BLOCK_SIZE,
+  false, P_ADDR_ALIGNMENT>;
 
 class BtreeBackrefManager : public BackrefManager {
 public:
