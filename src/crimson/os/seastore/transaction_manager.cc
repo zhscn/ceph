@@ -391,6 +391,16 @@ TransactionManager::do_submit_transaction(
           submit_result.record_block_base,
           start_seq);
 
+      if (nv_cache) {
+	for (auto &info : tref.get_onode_info()) {
+	  if (info.op == Transaction::onode_op_t::PROMOTE) {
+	    nv_cache->move_to_top_if_not_cached(info.laddr, info.length, info.type);
+	  } else if (info.op == Transaction::onode_op_t::REMOVE) {
+	    nv_cache->remove(info.laddr, info.length, info.type);
+	  }
+	}
+      }
+
       std::vector<CachedExtentRef> lba_to_clear;
       std::vector<CachedExtentRef> backref_to_clear;
       lba_to_clear.reserve(tref.get_retired_set().size());
@@ -582,7 +592,7 @@ TransactionManager::promote_extent(
   t.get_rewrite_version_stats().increment(extent->get_version());
   cache->retire_extent(t, extent);
 
-  auto lextent = extent->cast<LogicalCachedExtent>();
+  auto lextent = extent->cast<ObjectDataBlock>();
   auto cold_ext = cache->alloc_remapped_extent_by_type(
     t,
     extent->get_type(),
@@ -592,6 +602,14 @@ TransactionManager::promote_extent(
     lextent->get_laddr(),
     extent->get_bptr())->cast<LogicalCachedExtent>();
   cold_ext->set_modify_time(extent->get_modify_time());
+
+  assert(lextent->onode_info);
+
+  t.update_onode_info(
+    lextent->onode_info->onode_base,
+    lextent->onode_info->onode_length,
+    lextent->get_type(),
+    Transaction::onode_op_t::PROMOTE);
 
   return lba_manager->alloc_shadow_extent(
     t,
@@ -779,6 +797,17 @@ TransactionManager::get_extents_if_live(
       });
     }
   });
+}
+
+void TransactionManager::set_cache_info(
+  Transaction &t, CachedExtentRef extent, laddr_t laddr) {
+  if (extent->get_type() == extent_types_t::OBJECT_DATA_BLOCK) {
+    auto &i = t.get_cur_onode_info();
+    auto o = extent->cast<ObjectDataBlock>();
+    ceph_assert(i.laddr <= laddr &&
+		i.laddr + i.length >= reset_shadow_mapping(laddr) + o->get_length());
+    o->set_logical_cache_info(i.laddr, i.length);
+  }
 }
 
 TransactionManager::~TransactionManager() {}
