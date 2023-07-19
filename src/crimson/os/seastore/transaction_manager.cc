@@ -222,8 +222,15 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
            t, result.refcount, *ref);
     if (result.refcount == 0) {
       cache->retire_extent(t, ref);
+      if (result.shadow_addr != P_ADDR_NULL) {
+	return cache->retire_extent_addr(
+          t, result.shadow_addr, result.length
+        ).si_then([result] {
+          return ref_iertr::make_ready_future<unsigned>(result.refcount);
+        });
+     }
     }
-    return result.refcount;
+    return ref_iertr::make_ready_future<unsigned>(result.refcount);
   });
 }
 
@@ -243,7 +250,15 @@ TransactionManager::ref_ret TransactionManager::dec_ref(
       if (result.addr.is_paddr() &&
           !result.addr.get_paddr().is_zero()) {
         fut = cache->retire_extent_addr(
-          t, result.addr.get_paddr(), result.length);
+          t, result.addr.get_paddr(), result.length
+        ).si_then([this, result, &t] {
+          if (result.shadow_addr != P_ADDR_NULL) {
+            return cache->retire_extent_addr(
+              t, result.shadow_addr, result.length);
+          } else {
+            return Cache::retire_extent_iertr::now();
+          }
+        });
       } else if (result.removed_intermediate_mappings){
         auto &removed = *result.removed_intermediate_mappings;
         assert(!removed.first.is_zero());
@@ -644,7 +659,8 @@ TransactionManagerRef make_transaction_manager(
 {
   auto epm = std::make_unique<ExtentPlacementManager>();
   auto cache = std::make_unique<Cache>(*epm);
-  auto lba_manager = lba_manager::create_lba_manager(*cache);
+  auto lba_manager = lba_manager::create_lba_manager(
+    *cache, !secondary_devices.empty());
   auto sms = std::make_unique<SegmentManagerGroup>();
   auto rbs = std::make_unique<RBMDeviceGroup>();
   auto backref_manager = create_backref_manager(*cache);

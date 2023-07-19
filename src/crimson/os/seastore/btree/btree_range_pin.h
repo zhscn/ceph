@@ -199,6 +199,10 @@ public:
   }
 
   get_child_ret_t<LogicalCachedExtent> get_logical_extent(Transaction&) final;
+
+  bool is_shadow_mapping() const override {
+    return false;
+  }
 };
 
 }

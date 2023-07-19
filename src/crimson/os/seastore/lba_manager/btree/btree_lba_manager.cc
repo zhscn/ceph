@@ -21,6 +21,25 @@ SET_SUBSYS(seastore_lba);
 
 namespace crimson::os::seastore {
 
+enum class shadow_mapping_t : uint16_t {
+  COLD_MIRROR = 1,
+  INVALID = 2,
+  MAX = L_ADDR_ALIGNMENT - 1
+};
+
+shadow_mapping_t get_shadow_mapping(laddr_t laddr) {
+  assert(is_shadow_laddr(laddr));
+  auto diff = laddr - p2align(laddr, L_ADDR_ALIGNMENT);
+  assert(diff < static_cast<uint16_t>(shadow_mapping_t::INVALID));
+  return static_cast<shadow_mapping_t>(diff);
+}
+
+laddr_t map_shadow_laddr(laddr_t laddr, shadow_mapping_t mapping) {
+  assert(!is_shadow_laddr(laddr));
+  assert(mapping < shadow_mapping_t::INVALID);
+  return laddr + static_cast<uint16_t>(mapping);
+}
+
 template <typename T>
 Transaction::tree_stats_t& get_tree_stats(Transaction &t)
 {
@@ -144,7 +163,7 @@ BtreeLBAManager::get_mappings(
 	    }
 	    TRACET("{}~{} got {}, {}, repeat ...",
 		   c.trans, offset, length, pos.get_key(), pos.get_val());
-	    ceph_assert((pos.get_key() + pos.get_val().len) > offset);
+	    ceph_assert(pos.get_val_end() > offset);
 	    pin_list.push_back(pos.get_pin(c));
 	    return LBABtree::iterate_repeat_ret_inner(
 	      interruptible::ready_future_marker{},
@@ -332,6 +351,8 @@ BtreeLBAManager::alloc_extent(
     state_t(laddr_t hint) : last_end(hint) {}
   };
 
+  assert(!is_shadow_laddr(hint));
+  assert(!is_shadow_laddr(hint + len));
   LOG_PREFIX(BtreeLBAManager::alloc_extent);
   TRACET("{}~{}, hint={}", t, addr, len, hint);
   auto c = get_context(t);
@@ -369,7 +390,9 @@ BtreeLBAManager::alloc_extent(
 	      interruptible::ready_future_marker{},
 	      seastar::stop_iteration::yes);
 	  } else {
-	    state.last_end = pos.get_key() + pos.get_val().len;
+	    if (!is_shadow_laddr(pos.get_key())) {
+	      state.last_end = pos.get_key() + pos.get_val().len;
+	    }
 	    TRACET("{}~{}, hint={}, state: {}~{}, repeat ... -- {}",
                    t, addr, len, hint,
                    pos.get_key(), pos.get_val().len,
@@ -391,6 +414,7 @@ BtreeLBAManager::alloc_extent(
 	           c.trans, addr, len, hint, state.last_end);
 	    if (nextent) {
 	      ceph_assert(addr.is_paddr());
+	      assert(!is_shadow_laddr(iter.get_key()));
 	      nextent->set_laddr(iter.get_key());
 	    }
 	    ceph_assert(inserted);
@@ -408,6 +432,55 @@ BtreeLBAManager::alloc_extent(
       }
       return alloc_extent_iertr::make_ready_future<LBAMappingRef>(
 	std::move(ret_pin));
+    });
+}
+
+BtreeLBAManager::alloc_extent_ret
+BtreeLBAManager::alloc_shadow_extent(
+  Transaction &t,
+  laddr_t laddr,
+  extent_len_t len,
+  paddr_t paddr,
+  LogicalCachedExtent *nextent)
+{
+  assert(enable_shadow_entry);
+  assert(!is_shadow_laddr(laddr));
+  assert(!is_shadow_laddr(laddr + len));
+  auto c = get_context(t);
+  return with_btree_ret<LBABtree, LBAMappingRef>(
+    cache,
+    c,
+    [c, laddr, len, paddr, nextent](LBABtree &btree) {
+      return btree.lower_bound(c, laddr
+      ).si_then([c, laddr, len, paddr, nextent, &btree](auto iter) {
+        assert(!iter.is_end());
+	assert(iter.get_key() == laddr);
+        return iter.next(c
+        ).si_then([c, laddr, len, paddr, nextent, iter, &btree](auto niter) {
+	  LOG_PREFIX(BtreeLBAManager::alloc_shadow_extent);
+	  auto shadow_laddr = map_shadow_laddr(laddr, shadow_mapping_t::COLD_MIRROR);
+	  if (niter.get_key() == shadow_laddr) {
+	    ERRORT("shadow_laddr {} already exist", c.trans, shadow_laddr);
+	    ceph_abort();
+	  }
+          auto val = iter.get_val();
+	  assert(len == val.len);
+          val.pladdr = paddr;
+          return btree.insert(
+	    c,
+	    niter,
+	    shadow_laddr,
+	    val,
+	    nextent
+          ).si_then([c, nextent](auto iter) {
+	    assert(iter.second);
+	    if (nextent) {
+	      nextent->set_laddr(iter.first.get_key());
+	    }
+	    return iter.first.get_pin(c);
+          });
+        });
+      });
     });
 }
 
@@ -507,7 +580,7 @@ BtreeLBAManager::scan_mappings(
 	      interruptible::ready_future_marker{},
 	      seastar::stop_iteration::yes);
 	  }
-	  ceph_assert((pos.get_key() + pos.get_val().len) > begin);
+	  ceph_assert(pos.get_val_end() > begin);
 	  f(pos.get_key(), pos.get_val().pladdr.get_paddr(), pos.get_val().len);
 	  return LBABtree::iterate_repeat_ret_inner(
 	    interruptible::ready_future_marker{},
@@ -712,6 +785,8 @@ BtreeLBAManager::update_refcount(
       return ref_update_result_t{
 	result.refcount,
 	result.pladdr,
+	// TODO: handle shadow entry
+	P_ADDR_NULL,
 	result.len,
 	std::move(removed)
       };

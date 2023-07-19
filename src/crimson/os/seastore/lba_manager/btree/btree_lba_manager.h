@@ -59,7 +59,8 @@ public:
     CachedExtentRef parent,
     uint16_t pos,
     lba_map_val_t &val,
-    lba_node_meta_t meta)
+    lba_node_meta_t meta,
+    bool is_shadow)
     : BtreeNodeMapping(
 	c,
 	parent,
@@ -72,7 +73,8 @@ public:
       intermediate_key(indirect ? val.pladdr.get_laddr() : L_ADDR_NULL),
       intermediate_length(indirect ? val.len : 0),
       raw_val(val.pladdr),
-      map_val(val)
+      map_val(val),
+      is_shadow(is_shadow)
   {}
 
   lba_map_val_t get_map_val() const {
@@ -134,6 +136,10 @@ public:
     intermediate_base = base;
   }
 
+  bool is_shadow_mapping() const final {
+    return is_shadow;
+  }
+
 protected:
   std::unique_ptr<BtreeNodeMapping<laddr_t, paddr_t>> _duplicate(
     op_context_t<laddr_t> ctx) const final {
@@ -161,6 +167,7 @@ private:
   extent_len_t intermediate_length = 0;
   pladdr_t raw_val;
   lba_map_val_t map_val;
+  bool is_shadow = false;
 };
 
 using BtreeLBAMappingRef = std::unique_ptr<BtreeLBAMapping>;
@@ -189,8 +196,11 @@ using LBABtree = FixedKVBtree<
  */
 class BtreeLBAManager : public LBAManager {
 public:
-  BtreeLBAManager(Cache &cache)
-    : cache(cache)
+  BtreeLBAManager(
+    Cache &cache,
+    bool enable_shadow_entry)
+    : cache(cache),
+      enable_shadow_entry(enable_shadow_entry)
   {
     register_metrics();
   }
@@ -218,6 +228,13 @@ public:
     paddr_t actual_addr,
     laddr_t intermediate_base,
     LogicalCachedExtent*) final;
+
+  alloc_extent_ret alloc_shadow_extent(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t len,
+    paddr_t paddr,
+    LogicalCachedExtent *nextent) final;
 
   ref_ret decref_extent(
     Transaction &t,
@@ -280,6 +297,7 @@ public:
 private:
   Cache &cache;
 
+  bool enable_shadow_entry;
 
   struct {
     uint64_t num_alloc_extents = 0;
