@@ -1632,10 +1632,21 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
       d_object_data,
       object_data.get_reserved_data_len()
     ).si_then([&object_data, &d_object_data, ctx, this] {
+      LOG_PREFIX(ObjectDataHandler::clone);
       auto base = object_data.get_reserved_data_base();
       auto len = object_data.get_reserved_data_len();
+      DEBUGT("data obj reserve_data_base: {}, len {}", ctx.t, base, len);
+
+      assert(len != 0);
+      if (ctx.new_data_onode) {
+	auto &mlayout = ctx.new_data_onode->get_mutable_layout(ctx.t);
+	auto mobject_data = mlayout.object_data.get();
+	assert(mobject_data.is_null());
+	mobject_data.update_reserved(base, len);
+	mlayout.object_data.update(mobject_data);
+      }
+
       object_data.clear();
-      LOG_PREFIX(ObjectDataHandler::clone);
       DEBUGT("cloned obj reserve_data_base: {}, len {}",
 	ctx.t,
 	d_object_data.get_reserved_data_base(),

@@ -70,7 +70,9 @@ public:
     TransactionManager &tm;
     Transaction &t;
     Onode &onode;
-    Onode *d_onode; // The desination node in case of clone
+    Onode *d_onode = nullptr; // The desination node in case of clone
+    Onode *new_data_onode = nullptr;
+    std::map<laddr_t, OnodeRef> *data_onodes;
   };
 
   /// Writes bl to [offset, offset + bl.length())

@@ -339,6 +339,8 @@ public:
       CollectionRef &col,
       std::vector<OnodeRef> &onodes,
       std::vector<OnodeRef> &d_onodes,
+      OnodeRef &new_data_onode,
+      std::vector<std::map<laddr_t, OnodeRef>> &data_onodes,
       ceph::os::Transaction::iterator &i);
 
     tm_ret _remove(
@@ -356,7 +358,9 @@ public:
     tm_ret _clone(
       internal_context_t &ctx,
       OnodeRef &onode,
-      OnodeRef &d_onode);
+      OnodeRef &d_onode,
+      OnodeRef &new_data_onode,
+      std::map<laddr_t, OnodeRef> &data_onodes);
     tm_ret _zero(
       internal_context_t &ctx,
       OnodeRef &onode,

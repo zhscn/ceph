@@ -1244,14 +1244,19 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
         return seastar::do_with(
 	  std::vector<OnodeRef>(ctx.iter.objects.size()),
           std::vector<OnodeRef>(ctx.iter.objects.size()),
-          [this, &ctx](auto& onodes, auto& d_onodes) mutable {
+	  OnodeRef(),
+	  std::vector<std::map<laddr_t, OnodeRef>>(ctx.iter.objects.size()),
+          [this, &ctx](auto& onodes, auto& d_onodes,
+		      auto &new_data_onode, auto &data_onodes) mutable {
           return trans_intr::repeat(
-            [this, &ctx, &onodes, &d_onodes]() mutable
+            [this, &ctx, &onodes, &d_onodes,
+	    &new_data_onode, &data_onodes]() mutable
             -> tm_iertr::future<seastar::stop_iteration>
             {
               if (ctx.iter.have_op()) {
                 return _do_transaction_step(
-                  ctx, ctx.ch, onodes, d_onodes, ctx.iter
+                  ctx, ctx.ch, onodes, d_onodes,
+		  new_data_onode, data_onodes, ctx.iter
                 ).si_then([] {
                   return seastar::make_ready_future<seastar::stop_iteration>(
                     seastar::stop_iteration::no);
@@ -1262,6 +1267,16 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
               };
             }).si_then([this, &ctx, &d_onodes] {
               return onode_manager->write_dirty(*ctx.transaction, d_onodes);
+            }).si_then([this, &ctx, &data_onodes] {
+              return seastar::do_with(std::vector<OnodeRef>(),
+                                      [this, &ctx, &data_onodes](auto &onodes) {
+                for (auto &p : data_onodes) {
+                  for (auto &q : p) {
+                    onodes.emplace_back(q.second);
+                  }
+                }
+                return onode_manager->write_dirty(*ctx.transaction, onodes);
+              });
             });
         }).si_then([this, &ctx] {
           return transaction_manager->submit_transaction(*ctx.transaction);
@@ -1290,6 +1305,8 @@ SeaStore::Shard::_do_transaction_step(
   CollectionRef &col,
   std::vector<OnodeRef> &onodes,
   std::vector<OnodeRef> &d_onodes,
+  OnodeRef &new_data_onode,
+  std::vector<std::map<laddr_t, OnodeRef>> &data_onodes,
   ceph::os::Transaction::iterator &i)
 {
   auto op = i.decode_op();
@@ -1354,7 +1371,29 @@ SeaStore::Shard::_do_transaction_step(
 	assert(!d_onodes[op->dest_oid]);
 	d_o = dest_onode;
 	d_onodes[op->dest_oid] = dest_onode;
-	return seastar::now();
+	const auto &src_oid = i.get_oid(op->oid);
+	const auto &dst_oid = i.get_oid(op->dest_oid);
+	if (src_oid.hobj.is_head()) {
+	  // clone
+	  return seastar::do_with(
+	    src_oid,
+	    [&dst_oid, &src_oid, this, &data_onodes,
+	    op, &new_data_onode, &ctx](auto &data_oid) {
+	    data_oid.hobj.snap.val -= dst_oid.hobj.snap.val;
+            assert(data_oid > dst_oid && data_oid < src_oid);
+	    return onode_manager->get_or_create_onode(*ctx.transaction, data_oid
+	    ).si_then([&, op](auto data_onode) {
+	      new_data_onode = data_onode;
+	      data_onodes[op->oid] = {};
+	    });
+	  });
+	} else {
+	  //rollback
+	  assert(dst_oid.hobj.is_head());
+	  assert(src_oid.hobj.is_snap());
+          return OnodeManager::get_or_create_onode_iertr::now();
+	}
+	return OnodeManager::get_or_create_onode_iertr::now();
       });
     } else {
       return OnodeManager::get_or_create_onode_iertr::now();
@@ -1464,7 +1503,24 @@ SeaStore::Shard::_do_transaction_step(
 	  *ctx.transaction,
 	  i.get_oid(op->oid),
 	  i.get_oid(op->dest_oid));
-	return _clone(ctx, onodes[op->oid], d_onodes[op->dest_oid]);
+	return _clone(
+	  ctx,
+	  onodes[op->oid],
+	  d_onodes[op->dest_oid],
+	  new_data_onode,
+	  data_onodes[op->oid]
+	).si_then([&, op] {
+	  if (new_data_onode) {
+	    assert(data_onodes[op->oid].empty());
+	    auto &mlayout = new_data_onode->get_mutable_layout(
+	      *ctx.transaction);
+	    auto mobject_data = mlayout.object_data.get();
+	    data_onodes[op->oid].emplace(
+	      mobject_data.get_reserved_data_base(),
+	      new_data_onode);
+	    new_data_onode.reset();
+	  }
+	});
       }
       default:
         ERROR("bad op {}", static_cast<unsigned>(op->op));
@@ -1599,13 +1655,15 @@ SeaStore::Shard::tm_ret
 SeaStore::Shard::_clone(
   internal_context_t &ctx,
   OnodeRef &onode,
-  OnodeRef &d_onode)
+  OnodeRef &d_onode,
+  OnodeRef &new_data_onode,
+  std::map<laddr_t, OnodeRef> &data_onodes)
 {
   LOG_PREFIX(SeaStore::_clone);
   DEBUGT("onode={} d_onode={}", *ctx.transaction, *onode, *d_onode);
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
-    [this, &ctx, &onode, &d_onode](auto &objHandler) {
+    [&, this](auto &objHandler) {
     //TODO: currently, we only care about object data, leaving cloning
     //      of xattr/omap for future work
     auto &object_size = onode->get_layout().size;
@@ -1616,7 +1674,9 @@ SeaStore::Shard::_clone(
 	*transaction_manager,
 	*ctx.transaction,
 	*onode,
-	d_onode.get()});
+	d_onode.get(),
+	new_data_onode.get(),
+	&data_onodes});
   });
 }
 
