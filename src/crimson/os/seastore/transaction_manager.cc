@@ -259,7 +259,7 @@ TransactionManager::dec_ret TransactionManager::dec_ref(
           !result.addr.get_paddr().is_zero()) {
         fut = cache->retire_extent_addr(
           t, result.addr.get_paddr(), result.length
-        ).si_then([this, result, &t] {
+        ).si_then([this, result=std::move(result), &t] {
           if (result.shadow_addr != P_ADDR_NULL) {
             return cache->retire_extent_addr(
               t, result.shadow_addr, result.length);
@@ -269,9 +269,17 @@ TransactionManager::dec_ret TransactionManager::dec_ref(
         });
       } else if (result.removed_intermediate_mappings){
         auto &removed = *result.removed_intermediate_mappings;
-        assert(!removed.first.is_zero());
+        assert(!removed.paddr.is_zero());
         fut = cache->retire_extent_addr(
-          t, removed.first, removed.second);
+          t, removed.paddr, removed.len
+        ).si_then([this, removed=std::move(removed), &t] {
+          if (removed.shadow_addr != P_ADDR_NULL) {
+            return cache->retire_extent_addr(
+              t, removed.shadow_addr, removed.len);
+          } else {
+            return Cache::retire_extent_iertr::now();
+          }
+        });
       }
     }
 

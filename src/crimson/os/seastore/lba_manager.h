@@ -136,12 +136,19 @@ public:
     retire_promotion_func_t retire_func,
     update_nextent_func_t update_func) = 0;
 
+  struct intermediate_mappings_t{
+    laddr_t key = L_ADDR_NULL;
+    paddr_t paddr = P_ADDR_NULL;
+    extent_len_t len = 0;
+    paddr_t shadow_addr = P_ADDR_NULL;
+  };
+
   struct ref_update_result_t {
     unsigned refcount = 0;
     pladdr_t addr;
     paddr_t shadow_addr = P_ADDR_NULL;
     extent_len_t length = 0;
-    std::optional<std::pair<paddr_t, extent_len_t>> removed_intermediate_mappings;
+    std::optional<intermediate_mappings_t> removed_intermediate_mappings;
   };
   using ref_iertr = base_iertr::extend<
     crimson::ct_error::enoent>;

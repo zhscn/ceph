@@ -867,7 +867,8 @@ void BtreeLBAManager::register_metrics()
   );
 }
 
-BtreeLBAManager::ref_iertr::future<std::optional<std::pair<paddr_t, extent_len_t>>>
+BtreeLBAManager::ref_iertr::future<
+  std::optional<BtreeLBAManager::intermediate_mappings_t>>
 BtreeLBAManager::_decref_intermediate(
   Transaction &t,
   laddr_t addr,
@@ -881,38 +882,56 @@ BtreeLBAManager::_decref_intermediate(
     return btree.upper_bound_right(
       c, addr
     ).si_then([&btree, addr, len, c](auto iter) {
-      return seastar::do_with(
-	std::move(iter),
-	[&btree, addr, len, c](auto &iter) {
-	ceph_assert(!iter.is_end());
-	ceph_assert(iter.get_key() <= addr);
-	auto val = iter.get_val();
-	ceph_assert(iter.get_key() + val.len >= addr + len);
-	ceph_assert(val.pladdr.is_paddr());
-	ceph_assert(val.refcount >= 1);
-	val.refcount -= 1;
+      ceph_assert(!iter.is_end());
+      ceph_assert(iter.get_key() <= addr);
+      auto val = iter.get_val();
+      ceph_assert(iter.get_key() + val.len >= addr + len);
+      ceph_assert(val.pladdr.is_paddr());
+      ceph_assert(val.refcount >= 1);
+      val.refcount -= 1;
 
-	LOG_PREFIX(BtreeLBAManager::_decref_intermediate);
-	TRACET("decreased refcount of intermediate key {} -- {}",
-	  c.trans,
-	  iter.get_key(),
-	  val);
+      LOG_PREFIX(BtreeLBAManager::_decref_intermediate);
+      TRACET("decreased refcount of intermediate key {} -- {}",
+	c.trans,
+	iter.get_key(),
+	val);
 
-	if (!val.refcount) {
+      if (!val.refcount) {
+	return seastar::do_with(
+	  intermediate_mappings_t{},
+	  [&btree, c, iter=std::move(iter), val](auto &result) mutable {
+	  result.key = iter.get_key();
+	  result.paddr = val.pladdr.get_paddr();
+	  result.len = val.len;
 	  return btree.remove(c, iter
-	  ).si_then([val](auto) {
+	  ).si_then([&btree, c, &result](auto it) {
+	    if (is_shadow_laddr(it.get_key())) {
+	      result.shadow_addr = it.get_val().pladdr.get_paddr();
+	      return btree.remove(c, it);
+	    } else {
+	      return LBABtree::remove_iertr::make_ready_future<
+		LBABtree::iterator>(std::move(it));
+	    }
+	  }).si_then([&result](auto) {
 	    return std::make_optional<
-	      std::pair<paddr_t, extent_len_t>>(
-		val.pladdr.get_paddr(), val.len);
+	      intermediate_mappings_t>(
+		std::move(result));
 	  });
-	} else {
-	  return btree.update(c, iter, val, nullptr
-	  ).si_then([](auto) {
-	    return seastar::make_ready_future<
-	      std::optional<std::pair<paddr_t, extent_len_t>>>(std::nullopt);
-	  });
-	}
-      });
+	});
+      } else {
+	return btree.update(c, iter, val, nullptr
+	).si_then([&btree, c, val](auto it) {
+	  if (is_shadow_laddr(it.get_key())) {
+	    return btree.update(c, it, val, nullptr);
+	  } else {
+	    return LBABtree::update_iertr::make_ready_future<
+	      LBABtree::iterator>(std::move(it));
+	  }
+	}).si_then([](auto) {
+	  return seastar::make_ready_future<
+	    std::optional<intermediate_mappings_t>>(std::nullopt);
+	});
+      }
     });
   });
 }
@@ -964,7 +983,7 @@ BtreeLBAManager::update_refcount(
       });
     }
     auto fut = ref_iertr::make_ready_future<
-      std::optional<std::pair<paddr_t, extent_len_t>>>();
+      std::optional<intermediate_mappings_t>>();
     if (!result.val.refcount
 	&& result.val.pladdr.is_laddr()
 	&& cascade_remove) {

@@ -376,7 +376,7 @@ private:
     op_context_t<laddr_t> c,
     std::list<BtreeLBAMappingRef> &pin_list);
 
-  ref_iertr::future<std::optional<std::pair<paddr_t, extent_len_t>>>
+  ref_iertr::future<std::optional<intermediate_mappings_t>>
   _decref_intermediate(
     Transaction &t,
     laddr_t addr,
