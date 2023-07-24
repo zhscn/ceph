@@ -356,9 +356,9 @@ JournalTrimmerImpl::config_t::get_default(
   std::size_t target_alloc_bytes = 0;
   std::size_t max_journal_bytes = 0;
   if (type == journal_type_t::SEGMENTED) {
-    target_dirty_bytes = 12 * roll_size;
-    target_alloc_bytes = 2 * roll_size;
-    max_journal_bytes = 16 * roll_size;
+    target_dirty_bytes = 12 * roll_size * 16;
+    target_alloc_bytes = 2 * roll_size * 16;
+    max_journal_bytes = 16 * roll_size * 16;
   } else {
     assert(type == journal_type_t::RANDOM_BLOCK);
     target_dirty_bytes = roll_size / 4;
