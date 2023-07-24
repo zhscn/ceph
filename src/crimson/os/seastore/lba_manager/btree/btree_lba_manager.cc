@@ -900,7 +900,8 @@ BtreeLBAManager::_decref_intermediate(
 	return seastar::do_with(
 	  intermediate_mappings_t{},
 	  [&btree, c, iter=std::move(iter), val](auto &result) mutable {
-	  result.key = iter.get_key();
+	  auto key = iter.get_key();
+	  result.key = key;
 	  result.paddr = val.pladdr.get_paddr();
 	  result.len = val.len;
 	  return btree.remove(c, iter
@@ -912,6 +913,10 @@ BtreeLBAManager::_decref_intermediate(
 	      return LBABtree::remove_iertr::make_ready_future<
 		LBABtree::iterator>(std::move(it));
 	    }
+	  }).si_then([val, key, &btree, c](auto it) mutable {
+	    val.refcount = 1;
+	    val.pladdr = P_ADDR_ZERO;
+	    return btree.insert(c, it, key, val, nullptr);
 	  }).si_then([&result](auto) {
 	    return std::make_optional<
 	      intermediate_mappings_t>(
