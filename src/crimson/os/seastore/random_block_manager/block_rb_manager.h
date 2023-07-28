@@ -94,19 +94,25 @@ public:
   }
 
   void mark_space_used(paddr_t paddr, size_t len) final {
+    auto p = timepoint_to_mod(seastar::lowres_system_clock::now());
     assert(allocator);
     rbm_abs_addr addr = convert_paddr_to_abs_addr(paddr);
     assert(addr >= get_start_rbm_addr() &&
 	   addr + len <= device->get_shard_end());
     allocator->mark_extent_used(addr, len);
+    auto n = timepoint_to_mod(seastar::lowres_system_clock::now());
+    stats.mark_used_time += n - p;
   }
 
   void mark_space_free(paddr_t paddr, size_t len) final {
+    auto p = timepoint_to_mod(seastar::lowres_system_clock::now());
     assert(allocator);
     rbm_abs_addr addr = convert_paddr_to_abs_addr(paddr);
     assert(addr >= get_start_rbm_addr() &&
 	   addr + len <= device->get_shard_end());
     allocator->free_extent(addr, len);
+    auto n = timepoint_to_mod(seastar::lowres_system_clock::now());
+    stats.mark_free_time += n - p;
   }
 
   paddr_t get_start() final {
@@ -136,6 +142,15 @@ private:
   RBMDevice * device;
   std::string path;
   int stream_id; // for multi-stream
+
+  void register_metrics();
+
+  struct {
+    uint64_t alloc_time;
+    uint64_t mark_free_time;
+    uint64_t mark_used_time;
+  } stats;
+  seastar::metrics::metric_group metrics;
 };
 using BlockRBManagerRef = std::unique_ptr<BlockRBManager>;
 

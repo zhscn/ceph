@@ -553,6 +553,11 @@ std::size_t JournalTrimmerImpl::get_alloc_journal_size() const
 }
 
 seastar::future<> JournalTrimmerImpl::trim() {
+  auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+  if (stats.trim_point != 0) {
+    stats.trim_wait_time += point - stats.trim_point;
+  }
+  stats.trim_point = point;
   return seastar::when_all(
     [this] {
       if (should_trim_alloc()) {
@@ -578,7 +583,13 @@ seastar::future<> JournalTrimmerImpl::trim() {
         return seastar::now();
       }
     }
-  ).discard_result();
+  ).discard_result().then([this] {
+    auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+    if (stats.trim_point != 0) {
+      stats.trim_busy_time += point - stats.trim_point;
+    }
+    stats.trim_point = point;
+  });
 }
 
 JournalTrimmerImpl::trim_ertr::future<>
@@ -659,6 +670,12 @@ void JournalTrimmerImpl::register_metrics()
 {
   namespace sm = seastar::metrics;
   metrics.add_group("journal_trimmer", {
+    sm::make_counter("trim_wait_time",
+                     [this] { return stats.trim_wait_time; },
+                     sm::description("the size of the journal for dirty extents")),
+    sm::make_counter("trim_busy_time",
+                     [this] { return stats.trim_busy_time; },
+                     sm::description("the size of the journal for dirty extents")),
     sm::make_counter("dirty_journal_bytes",
                      [this] { return get_dirty_journal_size(); },
                      sm::description("the size of the journal for dirty extents")),
@@ -863,6 +880,12 @@ void SegmentCleaner::register_metrics()
   prefix.append("segment_cleaner");
 
   metrics.add_group(prefix, {
+    sm::make_counter("clean_wait_time",
+		     [this] { return stats.clean_wait_time; },
+		     sm::description("the number of segments")),
+    sm::make_counter("clean_busy_time",
+		     [this] { return stats.clean_busy_time; },
+		     sm::description("the number of segments")),
     sm::make_counter("segments_number",
 		     [this] { return segments.get_num_segments(); },
 		     sm::description("the number of segments")),
@@ -1147,6 +1170,13 @@ SegmentCleaner::do_reclaim_space(
 
 SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
 {
+  {
+    auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+    if (stats.clean_point != 0) {
+      stats.clean_wait_time += point - stats.clean_point;
+    }
+    stats.clean_point = point;
+  }
   LOG_PREFIX(SegmentCleaner::clean_space);
   assert(background_callback->is_ready());
   ceph_assert(can_clean_space());
@@ -1224,7 +1254,14 @@ SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
           reclaimed,
           runs
       ).safe_then([this, FNAME, pavail_ratio, start, &reclaimed, &runs] {
-        stats.reclaiming_bytes += reclaimed;
+	{
+	  auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+	  if (stats.clean_point != 0) {
+	    stats.clean_busy_time += point - stats.clean_point;
+	  }
+	  stats.clean_point = point;
+	}
+	stats.reclaiming_bytes += reclaimed;
         auto d = seastar::lowres_system_clock::now() - start;
         DEBUG("duration: {}, pavail_ratio before: {}, repeats: {}",
               d, pavail_ratio, runs);
@@ -1634,7 +1671,7 @@ void RBMCleaner::mark_space_used(
   for (auto rbm : rbms) {
     if (addr.get_device_id() == rbm->get_device_id()) {
       if (rbm->get_start() <= addr) {
-	INFO("allocate addr: {} len: {}", addr, len);
+	DEBUG("allocate addr: {} len: {}", addr, len);
 	stats.used_bytes += len;
 	rbm->mark_space_used(addr, len);
       }
@@ -1653,7 +1690,7 @@ void RBMCleaner::mark_space_free(
   for (auto rbm : rbms) {
     if (addr.get_device_id() == rbm->get_device_id()) {
       if (rbm->get_start() <= addr) {
-	INFO("free addr: {} len: {}", addr, len);
+	DEBUG("free addr: {} len: {}", addr, len);
 	ceph_assert(stats.used_bytes >= len);
 	stats.used_bytes -= len;
 	rbm->mark_space_free(addr, len);

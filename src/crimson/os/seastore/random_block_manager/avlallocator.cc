@@ -165,8 +165,8 @@ std::optional<interval_set<rbm_abs_addr>> AvlAllocator::alloc_extent(
   assert(!result.empty());
   assert(result.num_intervals() == 1);
   for (auto p : result) {
-    INFO("result start: {}, end: {}, extent_tree_size: {}, extent_size_tree_size: {}",
-	 p.first, p.first + p.second, extent_tree.size(), extent_size_tree.size());
+    DEBUG("result start: {}, end: {}, extent_tree_size: {}, extent_size_tree_size: {}",
+	  p.first, p.first + p.second, extent_tree.size(), extent_size_tree.size());
     if (detailed) {
       assert(!reserved_extent_tracker.contains(p.first, p.second));
       reserved_extent_tracker.insert(p.first, p.second);
@@ -198,5 +198,15 @@ bool AvlAllocator::is_free_extent(rbm_abs_addr start, size_t size)
     return true;
   }
   return false;
+}
+
+void AvlAllocator::register_metrics() {
+  namespace sm = seastar::metrics;
+
+  metrics.add_group("avl_allocator", {
+      sm::make_gauge("avl_tree_leaf_node_count",
+		     [this] { return extent_tree.size(); },
+		     sm::description(""))
+    });
 }
 }
