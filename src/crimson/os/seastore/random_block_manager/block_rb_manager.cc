@@ -48,6 +48,7 @@ device_config_t get_rbm_ephemeral_device_config(
 
 paddr_t BlockRBManager::alloc_extent(size_t size)
 {
+  auto p = timepoint_to_mod(seastar::lowres_system_clock::now());
   LOG_PREFIX(BlockRBManager::alloc_extent);
   assert(allocator);
   auto alloc = allocator->alloc_extent(size);
@@ -59,6 +60,8 @@ paddr_t BlockRBManager::alloc_extent(size_t size)
     device->get_device_id());
   DEBUG("allocated addr: {}, size: {}, requested size: {}",
 	paddr, extent.get_len(), size);
+  auto n = timepoint_to_mod(seastar::lowres_system_clock::now());
+  stats.alloc_time += n - p;
   return paddr;
 }
 
@@ -81,6 +84,7 @@ BlockRBManager::open_ertr::future<> BlockRBManager::open()
     device->get_shard_end() -
     ool_start,
     device->get_block_size());
+  register_metrics();
   return open_ertr::now();
 }
 
@@ -149,6 +153,19 @@ BlockRBManager::write_ertr::future<> BlockRBManager::write(
   return device->write(
     addr,
     std::move(bptr));
+}
+
+void BlockRBManager::register_metrics()
+{
+  namespace sm = seastar::metrics;
+  metrics.add_group("block_rbm_manager", {
+    sm::make_counter("alloc_time", stats.alloc_time,
+                     sm::description("the sum of blocking IOs")),
+    sm::make_counter("mark_free_time", stats.mark_free_time,
+                     sm::description("the sum of blocking IOs")),
+    sm::make_counter("mark_used_time", stats.mark_used_time,
+                     sm::description("the sum of blocking IOs"))
+  });
 }
 
 std::ostream &operator<<(std::ostream &out, const rbm_metadata_header_t &header)
