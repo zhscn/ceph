@@ -973,6 +973,27 @@ void SegmentCleaner::register_metrics()
                    [this] { return get_reclaim_ratio(); },
                    sm::description("ratio of reclaimable space to unavailable space")),
 
+    sm::make_counter("clean_retrieve_backref_count",
+		     [this] { return stats.retrieve_backref.count; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+    sm::make_counter("clean_retrieve_backref_busy_time",
+		     [this] { return stats.retrieve_backref.busy_time; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+
+    sm::make_counter("clean_get_extents_count",
+		     [this] { return stats.get_extents.count; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+    sm::make_counter("clean_get_extents_busy_time",
+		     [this] { return stats.get_extents.busy_time; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+
+    sm::make_counter("clean_rewrite_count",
+		     [this] { return stats.rewrite.count; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+    sm::make_counter("clean_rewrite_busy_time",
+		     [this] { return stats.rewrite.busy_time; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+
     sm::make_histogram("segment_utilization_distribution",
 		       [this]() -> seastar::metrics::histogram& {
 		         return stats.segment_util;
@@ -1123,6 +1144,7 @@ SegmentCleaner::do_reclaim_space(
         // retrieve live extents
         DEBUGT("start, backref_entries={}, backref_extents={}",
                t, backref_entries.size(), extents.size());
+	stats.get_extents.start();
 	return seastar::do_with(
 	  std::move(backref_entries),
 	  [this, &extents, &t](auto &backref_entries) {
@@ -1149,6 +1171,8 @@ SegmentCleaner::do_reclaim_space(
 	    });
 	  });
 	}).si_then([FNAME, &extents, this, &reclaimed, &t] {
+	  stats.get_extents.stop();
+	  stats.rewrite.start();
           DEBUGT("reclaim {} extents", t, extents.size());
           // rewrite live extents
           auto modify_time = segments[reclaim_state->get_segment_id()].modify_time;
@@ -1162,6 +1186,7 @@ SegmentCleaner::do_reclaim_space(
           });
         });
       }).si_then([this, &t] {
+	stats.rewrite.stop();
         return extent_callback->submit_transaction_direct(t);
       });
     });
@@ -1206,6 +1231,7 @@ SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
   return seastar::do_with(
     std::pair<std::vector<CachedExtentRef>, backref_pin_list_t>(),
     [this](auto &weak_read_ret) {
+      stats.retrieve_backref.start();
     return repeat_eagain([this, &weak_read_ret] {
       return extent_callback->with_transaction_intr(
 	  Transaction::src_t::READ,
@@ -1236,7 +1262,8 @@ SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
 	  });
 	});
       });
-    }).safe_then([&weak_read_ret] {
+    }).safe_then([this, &weak_read_ret] {
+      stats.retrieve_backref.stop();
       return std::move(weak_read_ret);
     });
   }).safe_then([this, FNAME, pavail_ratio, start](auto weak_read_ret) {

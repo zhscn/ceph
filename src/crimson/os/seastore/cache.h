@@ -1303,6 +1303,30 @@ public:
     }
   }
 
+  void start_delayed() {
+    stats.write_delayed.start();
+  }
+
+  void stop_delayed() {
+    stats.write_delayed.stop();
+  }
+
+  void start_alloced() {
+    stats.write_alloced.start();
+  }
+
+  void stop_alloced() {
+    stats.write_alloced.stop();
+  }
+
+  void start_journal() {
+    stats.submit_record.start();
+  }
+
+  void stop_journal()  {
+    stats.submit_record.stop();
+  }
+
 private:
   ExtentPlacementManager& epm;
   RootBlockRef root;               ///< ref to current root
@@ -1418,6 +1442,19 @@ private:
   static constexpr std::size_t NUM_SRC_COMB =
       TRANSACTION_TYPE_MAX * (TRANSACTION_TYPE_MAX + 1) / 2;
 
+  struct tracer_t {
+    uint64_t count = 0;
+    uint64_t busy_time = 0;
+    uint64_t start_time = 0;
+    void start() {
+      start_time = timepoint_to_mod(seastar::lowres_system_clock::now());
+    }
+    void stop() {
+      count++;
+      busy_time += timepoint_to_mod(seastar::lowres_system_clock::now()) - start_time;
+    }
+  };
+
   struct {
     counter_by_src_t<uint64_t> trans_created_by_src;
     counter_by_src_t<commit_trans_efforts_t> committed_efforts_by_src;
@@ -1452,6 +1489,10 @@ private:
     version_stat_t committed_dirty_version;
     version_stat_t committed_reclaim_version;
     version_stat_t committed_promote_version;
+
+    tracer_t write_delayed{};
+    tracer_t write_alloced{};
+    tracer_t submit_record{};
   } stats;
 
   template <typename CounterT>
