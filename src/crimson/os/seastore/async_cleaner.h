@@ -1602,6 +1602,19 @@ private:
   SpaceTrackerIRef space_tracker;
   segments_info_t segments;
 
+  struct tracer_t {
+    uint64_t count = 0;
+    uint64_t busy_time = 0;
+    uint64_t start_time = 0;
+    void start() {
+      start_time = timepoint_to_mod(seastar::lowres_system_clock::now());
+    }
+    void stop() {
+      count++;
+      busy_time += timepoint_to_mod(seastar::lowres_system_clock::now()) - start_time;
+    }
+  };
+
   struct {
     /**
      * used_bytes
@@ -1632,6 +1645,10 @@ private:
     mod_time_point_t clean_point = 0;
     uint64_t clean_wait_time = 0;
     uint64_t clean_busy_time = 0;
+
+    tracer_t retrieve_backref{};
+    tracer_t get_extents{};
+    tracer_t rewrite{};
 
     seastar::metrics::histogram segment_util;
   } stats;
