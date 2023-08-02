@@ -1037,7 +1037,7 @@ start_osd() {
         bottom_cpu=$(( osd * crimson_smp ))
         top_cpu=$(( bottom_cpu + crimson_smp - 1 ))
 	    # set a single CPU nodes for each osd
-	    extra_seastar_args="--cpuset $bottom_cpu-$top_cpu"
+	    extra_seastar_args="--cpuset 1-1"
 	    if [ "$debug" -ne 0 ]; then
 		extra_seastar_args+=" --debug"
 	    fi
