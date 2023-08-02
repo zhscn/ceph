@@ -89,6 +89,10 @@ public:
     epm->start_background();
   }
 
+  bool is_cold_device(device_id_t id) const {
+    return epm->is_cold_device(id);
+  }
+
   /**
    * get_pin
    *
@@ -647,6 +651,29 @@ public:
     croot->get_root().collection_root.update(cmroot);
   }
 
+  void update_non_volatile_cache(
+    laddr_t laddr,
+    extent_len_t length,
+    extent_types_t type,
+    bool check_cached) {
+    assert(nv_cache);
+    if (check_cached) {
+      nv_cache->move_to_top_if_cached(laddr, length, type);
+    } else {
+      nv_cache->move_to_top(laddr, length, type);
+    }
+  }
+
+  void remove_non_volatile_cache(
+    laddr_t laddr,
+    extent_len_t length,
+    extent_types_t type) {
+    if (!nv_cache) {
+      return;
+    }
+    nv_cache->remove(laddr, length, type);
+  }
+
   extent_len_t get_block_size() const {
     return epm->get_block_size();
   }
@@ -794,6 +821,9 @@ private:
       remap_length,
       original_laddr,
       std::move(original_bptr));
+    ext->set_laddr(remap_laddr);
+    auto lext = ext->template cast<CachedExtent>();
+    set_cache_info(t, lext, remap_laddr);
     return lba_manager->alloc_extent(
       t,
       remap_laddr,
@@ -808,6 +838,8 @@ private:
         <LBAMappingRef>(std::move(ref));
     });
   }
+
+  void set_cache_info(Transaction &t, CachedExtentRef &extent, laddr_t laddr);
 
   bool support_non_volatile_cache() const {
     return nv_cache != nullptr;
