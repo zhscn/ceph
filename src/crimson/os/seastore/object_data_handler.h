@@ -80,6 +80,14 @@ public:
     objaddr_t offset,
     const bufferlist &bl);
 
+  using set_alloc_hint_iertr = base_iertr;
+  using set_alloc_hint_ret = write_iertr::future<>;
+  set_alloc_hint_ret set_alloc_hint(
+    context_t ctx,
+    objaddr_t expected_object_size,
+    objaddr_t expected_write_size,
+    uint32_t flags);
+
   using zero_iertr = base_iertr;
   using zero_ret = zero_iertr::future<>;
   zero_ret zero(

@@ -863,7 +863,7 @@ SeaStore::Shard::read(
 	size - offset :
 	std::min(size - offset, len);
 
-      return ObjectDataHandler(max_object_size).read(
+      return ObjectDataHandler(get_max_object_size(onode)).read(
         ObjectDataHandler::context_t{
           *transaction_manager,
           t,
@@ -1163,7 +1163,7 @@ SeaStore::Shard::_fiemap_ret SeaStore::Shard::_fiemap(
   uint64_t len) const
 {
   return seastar::do_with(
-    ObjectDataHandler(max_object_size),
+    ObjectDataHandler(get_max_object_size(onode)),
     [=, this, &t, &onode] (auto &objhandler) {
     return objhandler.fiemap(
       ObjectDataHandler::context_t{
@@ -1421,8 +1421,13 @@ SeaStore::Shard::_do_transaction_step(
       }
       case Transaction::OP_SETALLOCHINT:
       {
-        // TODO
-        return tm_iertr::now();
+	DEBUG("asdfg call _set_alloc_hint");
+	return _set_alloc_hint(
+	  ctx,
+	  onodes[op->oid],
+	  op->expected_object_size,
+	  op->expected_write_size,
+	  op->hint);
       }
       default:
         ERROR("bad op {}", static_cast<unsigned>(op->op));
@@ -1481,7 +1486,7 @@ SeaStore::Shard::_remove(
   }
   return fut.si_then([this, &ctx, onode] {
     return seastar::do_with(
-      ObjectDataHandler(max_object_size),
+      ObjectDataHandler(get_max_object_size(*onode)),
       [=, this, &ctx](auto &objhandler) {
 	return objhandler.clear(
 	  ObjectDataHandler::context_t{
@@ -1540,7 +1545,7 @@ SeaStore::Shard::_write(
   }
   return seastar::do_with(
     std::move(_bl),
-    ObjectDataHandler(max_object_size),
+    ObjectDataHandler(get_max_object_size(*onode)),
     [=, this, &ctx, &onode](auto &bl, auto &objhandler) {
       return objhandler.write(
         ObjectDataHandler::context_t{
@@ -1554,6 +1559,37 @@ SeaStore::Shard::_write(
 }
 
 SeaStore::Shard::tm_ret
+SeaStore::Shard::_set_alloc_hint(
+  internal_context_t &ctx,
+  OnodeRef &onode,
+  uint64_t expected_object_size,
+  uint64_t expected_write_size,
+  uint32_t flags)
+{
+  LOG_PREFIX(SeaStore::_set_alloc_hint);
+  DEBUGT("onode={} expected_object_size={}", *ctx.transaction, *onode, expected_object_size);
+  {
+    ceph_assert(expected_object_size <= max_object_size);
+    auto &object_size = onode->get_mutable_layout(*ctx.transaction).size;
+    object_size = std::max<uint64_t>(expected_object_size, object_size);
+  }
+  return seastar::do_with(
+    ObjectDataHandler(max_object_size),
+    [this, &ctx, &onode, expected_object_size,
+     expected_write_size, flags](auto &objhandler) {
+      return objhandler.set_alloc_hint(
+        ObjectDataHandler::context_t{
+          *transaction_manager,
+          *ctx.transaction,
+          *onode,
+        },
+	expected_object_size,
+	expected_write_size,
+	flags);
+    });
+}
+
+SeaStore::Shard::tm_ret
 SeaStore::Shard::_zero(
   internal_context_t &ctx,
   OnodeRef &onode,
@@ -1562,13 +1598,13 @@ SeaStore::Shard::_zero(
 {
   LOG_PREFIX(SeaStore::_zero);
   DEBUGT("onode={} {}~{}", *ctx.transaction, *onode, offset, len);
-  if (offset + len >= max_object_size) {
+  if (offset + len >= get_max_object_size(*onode)) {
     return crimson::ct_error::input_output_error::make();
   }
   auto &object_size = onode->get_mutable_layout(*ctx.transaction).size;
   object_size = std::max<uint64_t>(offset + len, object_size);
   return seastar::do_with(
-    ObjectDataHandler(max_object_size),
+    ObjectDataHandler(get_max_object_size(*onode)),
     [=, this, &ctx, &onode](auto &objhandler) {
       return objhandler.zero(
         ObjectDataHandler::context_t{
@@ -1779,7 +1815,7 @@ SeaStore::Shard::_truncate(
   DEBUGT("onode={} size={}", *ctx.transaction, *onode, size);
   onode->get_mutable_layout(*ctx.transaction).size = size;
   return seastar::do_with(
-    ObjectDataHandler(max_object_size),
+    ObjectDataHandler(get_max_object_size(*onode)),
     [=, this, &ctx, &onode](auto &objhandler) {
     return objhandler.truncate(
       ObjectDataHandler::context_t{
