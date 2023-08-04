@@ -20,6 +20,68 @@ class transaction_manager_test_t;
 
 namespace crimson::os::seastore {
 
+class TokenBucket {
+public:
+  TokenBucket(uint64_t mt) :
+    tokens(mt), max_tokens(mt), timer(), sp(std::nullopt) {}
+
+  void start() {
+    if (max_tokens != 0) {
+      tokens = max_tokens;
+      timer.set_callback([this] {
+        tokens += max_tokens / 100;
+        if (tokens > max_tokens) {
+          tokens = max_tokens;
+        }
+        do_wake();
+      });
+      if (!timer.armed()) {
+        timer.arm_periodic(std::chrono::milliseconds(10));
+      }
+    }
+  }
+
+  void stop() {
+    if (max_tokens != 0) {
+      timer.cancel();
+      tokens = std::numeric_limits<uint64_t>::max();
+      do_wake();
+    }
+  }
+
+  seastar::future<> get(uint64_t size) {
+    if (max_tokens == 0) {
+      return seastar::now();
+    }
+    return seastar::repeat([this, size] {
+      if (tokens < size) {
+        if (!sp) {
+          sp.emplace(seastar::shared_promise<>());
+        }
+        return sp->get_shared_future().then([] {
+          return seastar::stop_iteration::no;
+        });
+      } else {
+        tokens -= size;
+        return seastar::make_ready_future<
+          seastar::stop_iteration>(seastar::stop_iteration::yes);
+      }
+    });
+  }
+
+private:
+  void do_wake() {
+    if (sp) {
+      sp->set_value();
+      sp.reset();
+    }
+  }
+  uint64_t tokens;
+  const uint64_t max_tokens;
+  seastar::timer<seastar::steady_clock_type> timer;
+  std::optional<seastar::shared_promise<>> sp;
+};
+
 /**
  * ExtentOolWriter
  *
@@ -59,9 +121,11 @@ public:
   SegmentedOolWriter(data_category_t category,
                      rewrite_gen_t gen,
                      SegmentProvider &sp,
-                     SegmentSeqAllocator &ssa);
+                     SegmentSeqAllocator &ssa,
+                     uint64_t bw_limit);
 
   open_ertr::future<> open() final {
+    token_bucket.start();
     return record_submitter.open(false).discard_result();
   }
 
@@ -70,6 +134,7 @@ public:
     std::list<LogicalCachedExtentRef> &extents) final;
 
   close_ertr::future<> close() final {
+    token_bucket.stop();
     return write_guard.close().then([this] {
       return record_submitter.close();
     }).safe_then([this] {
@@ -95,16 +160,18 @@ private:
   journal::SegmentAllocator segment_allocator;
   journal::RecordSubmitter record_submitter;
   seastar::gate write_guard;
+  TokenBucket token_bucket;
 };
 
 
 class RandomBlockOolWriter : public ExtentOolWriter {
 public:
-  RandomBlockOolWriter(RBMCleaner* rb_cleaner) :
-    rb_cleaner(rb_cleaner) {}
+  RandomBlockOolWriter(RBMCleaner* rb_cleaner, uint64_t bw_limit) :
+    rb_cleaner(rb_cleaner), token_bucket(bw_limit) {}
 
   using open_ertr = ExtentOolWriter::open_ertr;
   open_ertr::future<> open() final {
+    token_bucket.start();
     return open_ertr::now();
   }
 
@@ -113,6 +180,7 @@ public:
     std::list<LogicalCachedExtentRef> &extents) final;
 
   close_ertr::future<> close() final {
+    token_bucket.stop();
     return write_guard.close().then([this] {
       write_guard = seastar::gate();
       return close_ertr::now();
@@ -131,6 +199,7 @@ private:
 
   RBMCleaner* rb_cleaner;
   seastar::gate write_guard;
+  TokenBucket token_bucket;
 };
 
 struct cleaner_usage_t {
