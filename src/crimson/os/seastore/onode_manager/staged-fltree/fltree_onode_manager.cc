@@ -199,7 +199,7 @@ FLTreeOnodeManager::write_dirty_ret FLTreeOnodeManager::write_dirty(
 {
   return trans_intr::do_for_each(
     onodes,
-    [&trans](auto &onode) -> eagain_ifuture<> {
+    [&trans, this](auto &onode) -> eagain_ifuture<> {
       if (!onode) {
 	return eagain_iertr::make_ready_future<>();
       }
@@ -210,7 +210,23 @@ FLTreeOnodeManager::write_dirty_ret FLTreeOnodeManager::write_dirty(
       switch (flonode.status) {
       case FLTreeOnode::status_t::MUTATED: {
         flonode.populate_recorder(trans);
-        return eagain_iertr::make_ready_future<>();
+        const auto &obj_data = flonode.get_layout().object_data.get();
+        LOG_PREFIX(FLTreeOnodeManager::write_dirty);
+        DEBUGT("onode_base={}, extents_count={}",
+               trans, obj_data.get_reserved_data_base(),
+               obj_data.get_extents_count());
+        if (obj_data.get_extents_count() == 0) {
+          trans.update_onode_info(
+            obj_data.get_reserved_data_base(),
+            obj_data.get_reserved_data_len(),
+            extent_types_t::OBJECT_DATA_BLOCK,
+            Transaction::onode_op_t::REMOVE);
+          return tree.erase(trans, flonode);
+        } else {
+          assert(obj_data.get_extents_count() == -1 ||
+                 obj_data.get_extents_count() > 0);
+          return eagain_iertr::make_ready_future<>();
+        }
       }
       case FLTreeOnode::status_t::STABLE: {
         return eagain_iertr::make_ready_future<>();
