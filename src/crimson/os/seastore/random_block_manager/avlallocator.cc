@@ -165,8 +165,8 @@ std::optional<interval_set<rbm_abs_addr>> AvlAllocator::alloc_extent(
   assert(!result.empty());
   assert(result.num_intervals() == 1);
   for (auto p : result) {
-    INFO("result start: {}, end: {}, extent_tree_size: {}, extent_size_tree_size: {}",
-	 p.first, p.first + p.second, extent_tree.size(), extent_size_tree.size());
+    DEBUG("result start: {}, end: {}, extent_tree_size: {}, extent_size_tree_size: {}",
+	  p.first, p.first + p.second, extent_tree.size(), extent_size_tree.size());
     if (detailed) {
       assert(!reserved_extent_tracker.contains(p.first, p.second));
       reserved_extent_tracker.insert(p.first, p.second);
