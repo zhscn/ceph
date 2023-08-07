@@ -93,6 +93,9 @@ public:
     return epm->has_cold_tier();
   }
 
+  bool is_cold(paddr_t addr) const {
+    return epm->is_cold_device(addr.get_device_id());
+  }
   /**
    * get_pin
    *
@@ -193,6 +196,8 @@ public:
         auto pin_laddr = pin->get_key();
         if (pin->is_indirect()) {
           pin_laddr = pin->get_intermediate_key();
+	  assert(lextent->get_length() >=
+	    pin->get_length() + pin->get_intermediate_offset());
         }
         assert(lextent->get_laddr() == pin_laddr);
 #endif
@@ -752,31 +757,17 @@ public:
     croot->get_root().collection_root.update(cmroot);
   }
 
-  bool maybe_update_non_volatile_cache(
+  void update_non_volatile_cache(
     laddr_t laddr,
-    paddr_t paddr,
     extent_len_t length,
-    extent_types_t type) {
-    if (!nv_cache) {
-      return true;
-    }
-
-    auto ret = paddr.is_absolute() &&
-      !epm->is_cold_device(paddr.get_device_id());
-    if (ret) {
+    extent_types_t type,
+    bool check_cached) {
+    assert(nv_cache);
+    if (check_cached) {
+      nv_cache->move_to_top_if_cached(laddr, length, type);
+    } else {
       nv_cache->move_to_top(laddr, length, type);
     }
-    return ret;
-  }
-
-  bool update_non_volatile_cache_if_cached(
-    laddr_t laddr,
-    extent_len_t length,
-    extent_types_t type) {
-    if (!nv_cache) {
-      return true;
-    }
-    return nv_cache->move_to_top_if_cached(laddr, length, type);
   }
 
   void remove_non_volatile_cache(
@@ -803,6 +794,10 @@ public:
 
   store_statfs_t store_stat() const {
     return epm->get_stat();
+  }
+
+  bool support_non_volatile_cache() const {
+    return nv_cache != nullptr;
   }
 
   ~TransactionManager();
@@ -1015,10 +1010,6 @@ private:
   }
 
   void set_cache_info(Transaction &t, CachedExtentRef extent, laddr_t laddr);
-
-  bool support_non_volatile_cache() const {
-    return nv_cache != nullptr;
-  }
 
 public:
   // Testing interfaces

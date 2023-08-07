@@ -846,14 +846,14 @@ SeaStore::Shard::read(
 {
   LOG_PREFIX(SeaStore::read);
   DEBUG("oid {} offset {} len {}", oid, offset, len);
-  return repeat_with_onode<ceph::bufferlist>(
+  return repeat_with_onodes<ceph::bufferlist>(
     ch,
     oid,
     Transaction::src_t::READ,
     "read_obj",
     op_type_t::READ,
-    [=, this](auto &t, auto &onode) -> ObjectDataHandler::read_ret {
-      size_t size = onode.get_layout().size;
+    [=, this](auto &t, auto &history) -> ObjectDataHandler::read_ret {
+      size_t size = history.onode->get_layout().size;
 
       if (offset >= size) {
 	return seastar::make_ready_future<ceph::bufferlist>();
@@ -867,7 +867,10 @@ SeaStore::Shard::read(
         ObjectDataHandler::context_t{
           *transaction_manager,
           t,
-          onode,
+          *history.onode,
+	  nullptr,
+	  nullptr,
+	  &history.data_onodes
         },
         offset,
         corrected_len);

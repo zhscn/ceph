@@ -780,7 +780,24 @@ operate_ret operate_left(context_t ctx, LBAMappingRef &pin, const overwrite_plan
       }
       return ctx.tm.read_pin<ObjectDataBlock>(
 	ctx.t, pin->duplicate()
-      ).si_then([prepend_len, off](auto left_extent) {
+      ).si_then([prepend_len, off, ctx](auto left_extent) {
+        const auto object_data = ctx.onode.get_layout().object_data.get();
+	if (object_data.is_overlap(
+	      left_extent->get_laddr(),
+	      left_extent->get_length())) {
+	  left_extent->set_logical_cache_info(
+	    object_data.get_reserved_data_base(),
+	    object_data.get_reserved_data_len());
+	} else {
+          assert(!ctx.data_onodes->empty());
+	  auto object_len = object_data.get_reserved_data_len();
+          auto p = find_onode(
+	    *ctx.data_onodes,
+	    object_len,
+	    left_extent->get_laddr(),
+	    left_extent->get_length());
+          left_extent->set_logical_cache_info(p->first, object_len);
+	}
         return get_iertr::make_ready_future<operate_ret_bare>(
           std::nullopt,
           std::make_optional(bufferptr(
@@ -869,7 +886,24 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
       }
       return ctx.tm.read_pin<ObjectDataBlock>(
 	ctx.t, pin->duplicate()
-      ).si_then([append_offset, append_len](auto right_extent) {
+      ).si_then([append_offset, append_len, ctx](auto right_extent) {
+        const auto object_data = ctx.onode.get_layout().object_data.get();
+	if (object_data.is_overlap(
+	      right_extent->get_laddr(),
+	      right_extent->get_length())) {
+	  right_extent->set_logical_cache_info(
+	    object_data.get_reserved_data_base(),
+	    object_data.get_reserved_data_len());
+	} else {
+          assert(!ctx.data_onodes->empty());
+	  auto object_len = object_data.get_reserved_data_len();
+          auto p = find_onode(
+	    *ctx.data_onodes,
+	    object_len,
+	    right_extent->get_laddr(),
+	    right_extent->get_length());
+          right_extent->set_logical_cache_info(p->first, object_len);
+	}
         return get_iertr::make_ready_future<operate_ret_bare>(
           std::nullopt,
           std::make_optional(bufferptr(
@@ -1371,6 +1405,50 @@ ObjectDataHandler::write_ret ObjectDataHandler::write(
     });
 }
 
+void update_non_volatile_cache(
+  context_t &ctx,
+  lba_pin_list_t &_pins,
+  object_data_t object_data)
+{
+  if (!ctx.tm.support_non_volatile_cache()) {
+    return;
+  }
+  std::map<laddr_t, bool> onode_map;
+  assert(ctx.data_onodes);
+  auto onode_length = object_data.get_reserved_data_len();
+  for (auto &p : _pins) {
+    if (!p->get_val().is_absolute()) {
+      continue;
+    }
+
+    laddr_t base = L_ADDR_NULL;
+    if (object_data.is_overlap(p->get_key(), p->get_length())) {
+      base = object_data.get_reserved_data_base();
+    } else {
+      auto it = find_onode(
+	*ctx.data_onodes,
+	onode_length,
+	p->get_key(),
+	p->get_length());
+      auto onode = it->second;
+      auto &layout = onode->get_layout();
+      auto object_data = layout.object_data.get();
+      base = object_data.get_reserved_data_base();
+    }
+    auto [it, inserted] = onode_map.emplace(base, true);
+    if (p->get_val().is_absolute()) {
+      it->second &= ctx.tm.is_cold(p->get_val());
+    }
+  }
+  for (auto &om : onode_map) {
+    ctx.tm.update_non_volatile_cache(
+      om.first,
+      onode_length,
+      extent_types_t::OBJECT_DATA_BLOCK,
+      om.second);
+  }
+}
+
 ObjectDataHandler::read_ret ObjectDataHandler::read(
   context_t ctx,
   objaddr_t obj_offset,
@@ -1378,10 +1456,10 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 {
   return seastar::do_with(
     bufferlist(),
-    [ctx, obj_offset, len](auto &ret) {
+    [ctx, obj_offset, len](auto &ret) mutable {
       return with_object_data(
 	ctx,
-	[ctx, obj_offset, len, &ret](const auto &object_data) {
+	[ctx, obj_offset, len, &ret](const auto &object_data) mutable {
 	  LOG_PREFIX(ObjectDataHandler::read);
 	  DEBUGT("reading {}~{}",
 		 ctx.t,
@@ -1392,37 +1470,26 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 	  ceph_assert(!object_data.is_null());
 	  ceph_assert((obj_offset + len) <= object_data.get_reserved_data_len());
 	  ceph_assert(len > 0);
-	  auto onode_base = object_data.get_reserved_data_base();
-	  auto onode_length = object_data.get_reserved_data_len();
-	  laddr_t loffset = onode_base + obj_offset;
+	  laddr_t loffset = object_data.get_reserved_data_base() + obj_offset;
 	  return ctx.tm.get_pins(
 	    ctx.t,
 	    loffset,
 	    len
-	  ).si_then([ctx, loffset, len, onode_base,
-		     onode_length, &ret](auto _pins) {
+	  ).si_then([ctx, loffset, len, &object_data, &ret](auto _pins) mutable {
 	    // offset~len falls within reserved region and len > 0
 	    ceph_assert(_pins.size() >= 1);
 	    ceph_assert((*_pins.begin())->get_key() <= loffset);
-	    if (bool cached = ctx.tm.update_non_volatile_cache_if_cached(
-	          onode_base, onode_length, extent_types_t::OBJECT_DATA_BLOCK);
-		!cached) {
-	      for (auto &p : _pins) {
-		if (ctx.tm.maybe_update_non_volatile_cache(
-	              onode_base, p->get_val(), onode_length,
-		      extent_types_t::OBJECT_DATA_BLOCK)) {
-		  break;
-		}
-	      }
-	    }
+
+	    update_non_volatile_cache(ctx, _pins, object_data);
 	    return seastar::do_with(
 	      std::move(_pins),
 	      loffset,
-	      [ctx, loffset, len, onode_base, onode_length, &ret](auto &pins, auto &current) {
+	      [ctx, loffset, len, &object_data, &ret]
+	      (auto &pins, auto &current) {
 		return trans_intr::do_for_each(
 		  pins,
-		  [ctx, loffset, len, onode_base, onode_length, &current, &ret](auto &pin)
-		  -> read_iertr::future<> {
+		  [ctx, loffset, len, &object_data,
+		  &current, &ret](auto &pin) -> read_iertr::future<> {
 		    ceph_assert(current <= (loffset + len));
 		    ceph_assert(
 		      (loffset + len) > pin->get_key());
@@ -1462,7 +1529,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		      return ctx.tm.read_pin<ObjectDataBlock>(
 			ctx.t,
 			std::move(pin)
-		      ).si_then([&ret, &current, onode_base, onode_length,
+		      ).si_then([&ret, &current, &object_data, ctx,
 				end, key, off, is_indirect](auto extent) {
 			ceph_assert(
 			  is_indirect
@@ -1470,7 +1537,22 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 			    : (extent->get_laddr() + extent->get_length()) >= end);
 			ceph_assert(end > current);
 			auto lextent = extent->template cast<ObjectDataBlock>();
-			lextent->set_logical_cache_info(onode_base, onode_length);
+			if (object_data.is_overlap(
+			      lextent->get_laddr(),
+			      lextent->get_length())) {
+			  lextent->set_logical_cache_info(
+			    object_data.get_reserved_data_base(),
+			    object_data.get_reserved_data_len());
+			} else {
+			  assert(!ctx.data_onodes->empty());
+			  auto object_len = object_data.get_reserved_data_len();
+			  auto p = find_onode(
+			    *ctx.data_onodes,
+			    object_len,
+			    lextent->get_laddr(),
+			    lextent->get_length());
+			  lextent->set_logical_cache_info(p->first, object_len);
+			}
 			ret.append(
 			  bufferptr(
 			    extent->get_bptr(),
