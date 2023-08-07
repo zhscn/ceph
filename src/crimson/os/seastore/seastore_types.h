@@ -1429,17 +1429,22 @@ struct journal_tail_delta_t {
 
 std::ostream &operator<<(std::ostream &out, const journal_tail_delta_t &delta);
 
+class object_data_t;
+std::ostream &operator<<(std::ostream &out, const object_data_t &object_data);
 class object_data_t {
   laddr_t reserved_data_base = L_ADDR_NULL;
   extent_len_t reserved_data_len = 0;
+  int64_t extents_count = -1;
 
   bool dirty = false;
 public:
   object_data_t(
     laddr_t reserved_data_base,
-    extent_len_t reserved_data_len)
+    extent_len_t reserved_data_len,
+    int64_t extents_count)
     : reserved_data_base(reserved_data_base),
-      reserved_data_len(reserved_data_len) {}
+      reserved_data_len(reserved_data_len),
+      extents_count(extents_count) {}
 
   laddr_t get_reserved_data_base() const {
     return reserved_data_base;
@@ -1449,7 +1454,13 @@ public:
     return reserved_data_len;
   }
 
+  int64_t get_extents_count() const {
+    return extents_count;
+  }
+
   bool is_null() const {
+    assert(reserved_data_base == L_ADDR_NULL
+      ? (extents_count == -1) : true);
     return reserved_data_base == L_ADDR_NULL;
   }
 
@@ -1471,26 +1482,48 @@ public:
     reserved_data_len = len;
   }
 
+  bool is_overlap(laddr_t laddr, extent_len_t len) const {
+    return laddr >= reserved_data_base
+      && laddr + len <= reserved_data_base + reserved_data_len;
+  }
+
+  void set_extents_count(int64_t ec) {
+    dirty = true;
+    extents_count = ec;
+    assert(extents_count == -1 || extents_count >= 0);
+  }
+
+  void inc_extents_count(int64_t diff) {
+    dirty = true;
+    extents_count += diff;
+    assert(extents_count >= 0);
+  }
+
   void clear() {
     dirty = true;
     reserved_data_base = L_ADDR_NULL;
     reserved_data_len = 0;
+    extents_count = -1;
   }
+  friend std::ostream &operator<<(std::ostream &out, const object_data_t &);
 };
 
 struct __attribute__((packed)) object_data_le_t {
   laddr_le_t reserved_data_base = laddr_le_t(L_ADDR_NULL);
   extent_len_le_t reserved_data_len = init_extent_len_le(0);
+  ceph_les64 extents_count = ceph_les64(-1);
 
   void update(const object_data_t &nroot) {
     reserved_data_base = nroot.get_reserved_data_base();
     reserved_data_len = init_extent_len_le(nroot.get_reserved_data_len());
+    extents_count = ceph_les64(nroot.get_extents_count());
   }
 
   object_data_t get() const {
     return object_data_t(
       reserved_data_base,
-      reserved_data_len);
+      reserved_data_len,
+      extents_count);
   }
 };
 
@@ -2241,6 +2274,7 @@ template <> struct fmt::formatter<crimson::os::seastore::laddr_list_t> : fmt::os
 template <> struct fmt::formatter<crimson::os::seastore::omap_root_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::paddr_list_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::paddr_t> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<crimson::os::seastore::object_data_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::pladdr_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::placement_hint_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::device_type_t> : fmt::ostream_formatter {};

@@ -338,6 +338,15 @@ std::ostream &operator<<(std::ostream &out, const delta_info_t &delta)
 	     << ")";
 }
 
+std::ostream &operator<<(std::ostream &out, const object_data_t &odata)
+{
+  return out << "object_data("
+	     << "base: " << odata.reserved_data_base
+	     << ", len: " << odata.reserved_data_len
+	     << ", extents_count: " << odata.extents_count
+	     << ")";
+}
+
 std::ostream &operator<<(std::ostream &out, const journal_tail_delta_t &delta)
 {
   return out << "journal_tail_delta_t("
