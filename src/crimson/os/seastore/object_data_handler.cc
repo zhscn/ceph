@@ -22,6 +22,25 @@ namespace crimson::os::seastore {
 using context_t = ObjectDataHandler::context_t;
 using get_iertr = ObjectDataHandler::write_iertr;
 
+template<typename T>
+auto find_onode(
+  T &data_onodes, extent_len_t onode_length,
+  laddr_t laddr, extent_len_t length) {
+  assert(!data_onodes.empty());
+  auto p = data_onodes.lower_bound(laddr);
+  if (p != data_onodes.begin() &&
+      (p == data_onodes.end() || p->first > laddr)) {
+    --p;
+    if (p->first + onode_length <= laddr) {
+      ++p;
+    }
+  }
+  assert(p != data_onodes.end());
+  assert(p->first <= laddr &&
+         p->first + onode_length >= laddr + length);
+  return p;
+}
+
 /**
  * extent_to_write_t
  *
@@ -388,8 +407,31 @@ ObjectDataHandler::write_ret do_removals(
       return ctx.tm.dec_ref(
 	ctx.t,
 	pin->get_key()
-      ).si_then(
-	[](auto){},
+      ).si_then([ctx, &pin](auto result) {
+	  LOG_PREFIX(ObjectDataHandler::do_removals);
+	  if (result.refcount) {
+	    return seastar::now();
+	  }
+	  if (pin->is_indirect()) {
+	    auto &onode_map = *ctx.data_onodes;
+	    if (!result.removed_intermediate_mapping) {
+	      return seastar::now();
+	    }
+	    auto &m = *result.removed_intermediate_mapping;
+	    auto onode_length = onode_map.begin()->second->
+	    get_layout().object_data.get().get_reserved_data_len();
+	    auto p = find_onode(onode_map, onode_length, m.key, m.len);
+	    assert(p != onode_map.end());
+	    auto onode = p->second;
+	    auto &mlayout = onode->get_mutable_layout(ctx.t);
+	    auto object_data = mlayout.object_data.get();
+	    object_data.inc_extents_count(-1);
+	    DEBUGT("decreased object data {}",
+		   ctx.t, object_data);
+	    mlayout.object_data.update(object_data);
+	  }
+	  return seastar::now();
+	},
 	ObjectDataHandler::write_iertr::pass_further{},
 	crimson::ct_error::assert_all{
 	  "object_data_handler::do_removals invalid error"
@@ -1643,6 +1685,7 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
 	auto mobject_data = mlayout.object_data.get();
 	assert(mobject_data.is_null());
 	mobject_data.update_reserved(base, len);
+	mobject_data.set_extents_count(0);
 	mlayout.object_data.update(mobject_data);
       }
 
@@ -1663,6 +1706,22 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
 	  object_data.get_reserved_data_len());
 	return ctx.tm.get_pins(ctx.t, base, len
 	).si_then([ctx, &object_data, &d_object_data, base, this](auto pins) {
+	  if (ctx.new_data_onode) {
+	    auto &layout = ctx.new_data_onode->get_layout();
+	    auto data_obj_data = layout.object_data.get();
+	    for (auto &pin : pins) {
+	      auto paddr = pin->get_val();
+	      if (!pin->is_indirect() && !paddr.is_zero()) {
+		data_obj_data.inc_extents_count(1);
+	      }
+	    }
+	    LOG_PREFIX(ObjectDataHandler::clone);
+	    DEBUGT("new data onode {}", ctx.t, data_obj_data);
+	    if (data_obj_data.must_update()) {
+	      auto &mlayout = ctx.new_data_onode->get_mutable_layout(ctx.t);
+	      mlayout.object_data.update(data_obj_data);
+	    }
+	  }
 	  return seastar::do_with(
 	    std::move(pins),
 	    [ctx, &object_data, &d_object_data, base, this](auto &pins) {

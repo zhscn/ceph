@@ -345,13 +345,15 @@ public:
 
     tm_ret _remove(
       internal_context_t &ctx,
-      OnodeRef &onode);
+      OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes);
     tm_ret _touch(
       internal_context_t &ctx,
       OnodeRef &onode);
     tm_ret _write(
       internal_context_t &ctx,
       OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes,
       uint64_t offset, size_t len,
       ceph::bufferlist &&bl,
       uint32_t fadvise_flags);
@@ -364,6 +366,7 @@ public:
     tm_ret _zero(
       internal_context_t &ctx,
       OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes,
       objaddr_t offset, extent_len_t len);
     tm_ret _omap_set_values(
       internal_context_t &ctx,
@@ -387,7 +390,9 @@ public:
       std::string last);
     tm_ret _truncate(
       internal_context_t &ctx,
-      OnodeRef &onode, uint64_t size);
+      OnodeRef &onode,
+      std::map<laddr_t, OnodeRef> &data_onodes,
+      uint64_t size);
     tm_ret _setattrs(
       internal_context_t &ctx,
       OnodeRef &onode,

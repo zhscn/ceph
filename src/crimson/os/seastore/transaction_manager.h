@@ -254,11 +254,19 @@ public:
     Transaction &t,
     laddr_t offset);
 
+  using intermediate_mappings_t = LBAManager::intermediate_mappings_t;
   struct dec_res_t {
     unsigned refcount = 0;
     paddr_t shadow_paddr = P_ADDR_NULL;
-    dec_res_t(unsigned r, paddr_t p)
-      : refcount(r), shadow_paddr(p) {}
+    std::optional<intermediate_mappings_t> removed_intermediate_mapping;
+    dec_res_t(
+      unsigned r,
+      paddr_t p,
+      std::optional<intermediate_mappings_t> removed = std::nullopt)
+      : refcount(r),
+	shadow_paddr(p),
+	removed_intermediate_mapping(std::move(removed))
+    {}
   };
   using dec_ret = ref_iertr::future<dec_res_t>;
   /// Remove refcount for ref

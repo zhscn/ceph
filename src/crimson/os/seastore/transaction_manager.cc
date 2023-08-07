@@ -237,7 +237,10 @@ TransactionManager::dec_ret TransactionManager::dec_ref(
       }
     }
     return ref_iertr::make_ready_future<
-      dec_res_t>(result.refcount, P_ADDR_NULL);
+      dec_res_t>(
+        result.refcount,
+        P_ADDR_NULL,
+        std::move(result.removed_intermediate_mappings));
   });
 }
 
@@ -284,7 +287,10 @@ TransactionManager::dec_ret TransactionManager::dec_ref(
     }
 
     return fut.si_then([result=std::move(result)] {
-      return dec_res_t(result.refcount, result.shadow_addr);
+      return dec_res_t(
+        result.refcount,
+        result.shadow_addr,
+        std::move(result.removed_intermediate_mappings));
     });
   });
 }

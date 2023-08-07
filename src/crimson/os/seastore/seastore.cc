@@ -1398,6 +1398,25 @@ SeaStore::Shard::_do_transaction_step(
     } else {
       return OnodeManager::get_or_create_onode_iertr::now();
     }
+  }).si_then([&, op, this] {
+    LOG_PREFIX(SeaStore::_do_transaction_step);
+    if (op->op == Transaction::OP_WRITE ||
+        op->op == Transaction::OP_REMOVE ||
+        op->op == Transaction::OP_TRUNCATE ||
+        op->op == Transaction::OP_ZERO) {
+      TRACET("start get_history", *ctx.transaction);
+      return onode_manager->get_history(
+        *ctx.transaction,
+        i.get_oid(op->oid)
+      ).si_then([&, op](auto hist) mutable {
+	LOG_PREFIX(SeaStore::_do_transaction_step);
+        TRACET("get_history returns {} data onodes",
+               *ctx.transaction, hist.data_onodes.size());
+        data_onodes[op->oid].merge(hist.data_onodes);
+      });
+    } else {
+      return OnodeManager::get_onode_iertr::now();
+    }
   }).si_then([&, op, this]() -> tm_ret {
     LOG_PREFIX(SeaStore::_do_transaction_step);
     try {
@@ -1405,7 +1424,7 @@ SeaStore::Shard::_do_transaction_step(
       case Transaction::OP_REMOVE:
       {
 	TRACET("removing {}", *ctx.transaction, i.get_oid(op->oid));
-        return _remove(ctx, onodes[op->oid]
+        return _remove(ctx, onodes[op->oid], data_onodes[op->oid]
 	).si_then([&onodes, &d_onodes, op] {
 	  onodes[op->oid].reset();
 	  d_onodes[op->oid].reset();
@@ -1424,13 +1443,14 @@ SeaStore::Shard::_do_transaction_step(
         ceph::bufferlist bl;
         i.decode_bl(bl);
         return _write(
-	  ctx, onodes[op->oid], off, len, std::move(bl),
+	  ctx, onodes[op->oid], data_onodes[op->oid],
+	  off, len, std::move(bl),
 	  fadvise_flags);
       }
       case Transaction::OP_TRUNCATE:
       {
         uint64_t off = op->off;
-        return _truncate(ctx, onodes[op->oid], off);
+        return _truncate(ctx, onodes[op->oid], data_onodes[op->oid], off);
       }
       case Transaction::OP_SETATTR:
       {
@@ -1490,7 +1510,7 @@ SeaStore::Shard::_do_transaction_step(
       {
         objaddr_t off = op->off;
         extent_len_t len = op->len;
-        return _zero(ctx, onodes[op->oid], off, len);
+        return _zero(ctx, onodes[op->oid], data_onodes[op->oid], off, len);
       }
       case Transaction::OP_SETALLOCHINT:
       {
@@ -1558,7 +1578,8 @@ SeaStore::Shard::_do_transaction_step(
 SeaStore::Shard::tm_ret
 SeaStore::Shard::_remove(
   internal_context_t &ctx,
-  OnodeRef &onode)
+  OnodeRef &onode,
+  std::map<laddr_t, OnodeRef> &data_onodes)
 {
   LOG_PREFIX(SeaStore::_remove);
   DEBUGT("onode={}", *ctx.transaction, *onode);
@@ -1577,15 +1598,18 @@ SeaStore::Shard::_remove(
       );
     });
   }
-  return fut.si_then([this, &ctx, onode] {
+  return fut.si_then([this, &ctx, onode, &data_onodes] {
     return seastar::do_with(
       ObjectDataHandler(max_object_size),
-      [=, this, &ctx](auto &objhandler) {
+      [=, this, &ctx, &data_onodes](auto &objhandler) {
 	return objhandler.clear(
 	  ObjectDataHandler::context_t{
 	    *transaction_manager,
 	    *ctx.transaction,
 	    *onode,
+	    nullptr,
+	    nullptr,
+	    &data_onodes
 	  });
     });
   }).si_then([this, &ctx, onode]() mutable {
@@ -1624,6 +1648,7 @@ SeaStore::Shard::tm_ret
 SeaStore::Shard::_write(
   internal_context_t &ctx,
   OnodeRef &onode,
+  std::map<laddr_t, OnodeRef> &data_onodes,
   uint64_t offset, size_t len,
   ceph::bufferlist &&_bl,
   uint32_t fadvise_flags)
@@ -1639,12 +1664,15 @@ SeaStore::Shard::_write(
   return seastar::do_with(
     std::move(_bl),
     ObjectDataHandler(max_object_size),
-    [=, this, &ctx, &onode](auto &bl, auto &objhandler) {
+    [=, this, &ctx, &onode, &data_onodes](auto &bl, auto &objhandler) {
       return objhandler.write(
         ObjectDataHandler::context_t{
           *transaction_manager,
           *ctx.transaction,
           *onode,
+	  nullptr,
+	  nullptr,
+	  &data_onodes
         },
         offset,
         bl);
@@ -1684,6 +1712,7 @@ SeaStore::Shard::tm_ret
 SeaStore::Shard::_zero(
   internal_context_t &ctx,
   OnodeRef &onode,
+  std::map<laddr_t, OnodeRef> &data_onodes,
   objaddr_t offset,
   extent_len_t len)
 {
@@ -1696,12 +1725,15 @@ SeaStore::Shard::_zero(
   object_size = std::max<uint64_t>(offset + len, object_size);
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
-    [=, this, &ctx, &onode](auto &objhandler) {
+    [=, this, &ctx, &onode, &data_onodes](auto &objhandler) {
       return objhandler.zero(
         ObjectDataHandler::context_t{
           *transaction_manager,
           *ctx.transaction,
           *onode,
+	  nullptr,
+	  nullptr,
+	  &data_onodes
         },
         offset,
         len);
@@ -1900,6 +1932,7 @@ SeaStore::Shard::tm_ret
 SeaStore::Shard::_truncate(
   internal_context_t &ctx,
   OnodeRef &onode,
+  std::map<laddr_t, OnodeRef> &data_onodes,
   uint64_t size)
 {
   LOG_PREFIX(SeaStore::_truncate);
@@ -1907,12 +1940,15 @@ SeaStore::Shard::_truncate(
   onode->get_mutable_layout(*ctx.transaction).size = size;
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
-    [=, this, &ctx, &onode](auto &objhandler) {
+    [=, this, &ctx, &onode, &data_onodes](auto &objhandler) {
     return objhandler.truncate(
       ObjectDataHandler::context_t{
         *transaction_manager,
         *ctx.transaction,
-        *onode
+        *onode,
+	nullptr,
+	nullptr,
+	&data_onodes
       },
       size);
   });
