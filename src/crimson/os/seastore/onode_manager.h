@@ -42,6 +42,16 @@ public:
     Transaction &trans,
     const ghobject_t &hoid) = 0;
 
+  struct onode_history_t {
+    OnodeRef onode = nullptr;
+    std::map<laddr_t, OnodeRef> data_onodes{};
+  };
+  using get_history_ret = get_onode_iertr::future<
+    onode_history_t>;
+  virtual get_history_ret get_history(
+    Transaction &trans,
+    const ghobject_t &hoid) = 0;
+
   using get_or_create_onode_iertr = base_iertr::extend<
     crimson::ct_error::value_too_large>;
   using get_or_create_onode_ret = get_or_create_onode_iertr::future<

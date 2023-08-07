@@ -39,6 +39,112 @@ FLTreeOnodeManager::get_onode_ret FLTreeOnodeManager::get_onode(
   });
 }
 
+FLTreeOnodeManager::get_history_ret FLTreeOnodeManager::get_history(
+  Transaction &trans,
+  const ghobject_t &hoid)
+{
+  struct state_t {
+    const ghobject_t &hoid;
+    ghobject_t head;
+    ghobject_t start_hoid;
+    ghobject_t history_start;
+
+    onode_history_t res;
+
+    state_t(const ghobject_t &hoid)
+      : hoid(hoid), head(hoid), start_hoid(hoid),
+        history_start(hoid) {
+      head.hobj.snap = CEPH_NOSNAP;
+      if (hoid.hobj.is_head()) {
+        start_hoid.hobj.snap = CEPH_MAXSNAP + 1;
+      } else {
+        history_start.hobj.snap = CEPH_MAXSNAP - hoid.hobj.snap;
+      }
+    }
+
+    bool is_head() const {
+      return hoid.hobj.is_head();
+    }
+
+    void push(const ghobject_t &obj, OnodeTree::Cursor &cursor,
+              uint32_t default_data_reservation,
+              uint32_t default_metadata_range) {
+      auto onode = new FLTreeOnode(
+        default_data_reservation,
+        default_metadata_range,
+        cursor.value());
+      if (obj == hoid) {
+        res.onode = onode;
+      } else {
+        auto obj_data = onode->get_layout().object_data.get();
+        res.data_onodes.emplace(obj_data.get_reserved_data_base(), onode);
+      }
+    }
+  };
+
+  state_t s(hoid);
+  LOG_PREFIX(FLTreeOnodeManager::get_history);
+  DEBUGT("hoid: {}, start_hoid: {}", trans, hoid, s.start_hoid);
+  return tree.lower_bound(trans, s.start_hoid
+  ).si_then([this, &trans, s=std::move(s)](OnodeTree::Cursor cursor) {
+    return seastar::do_with(
+      cursor,
+      std::move(s),
+      [this, &trans](OnodeTree::Cursor &cursor, state_t &s) mutable {
+        return trans_intr::repeat([this, &trans, &cursor, &s]() mutable {
+          LOG_PREFIX(FLTreeOnodeManager::get_history);
+          auto obj = ghobject_t();
+          if (cursor == tree.end()) {
+            DEBUGT("reach tree end. hoid: {} head: {} start_hoid: {}, "
+		   "history_start: {} res length: {}",
+                   trans, s.hoid, s.head, s.start_hoid, s.history_start,
+		   s.res.data_onodes.size());
+            return get_onode_iertr::make_ready_future<
+              seastar::stop_iteration>(seastar::stop_iteration::yes);
+          } else {
+            obj = cursor.get_ghobj();
+            if ((s.is_head() && obj > s.head) ||
+                (!s.is_head() && obj >= s.head)) {
+              DEBUGT("cursor: {}. hoid: {} head: {} start_hoid: {}, "
+		     "history_start: {} res length: {}",
+                     trans, obj, s.hoid, s.head, s.start_hoid,
+                     s.history_start, s.res.data_onodes.size());
+              return get_onode_iertr::make_ready_future<
+                seastar::stop_iteration>(seastar::stop_iteration::yes);
+            }
+          }
+
+          DEBUGT("hoid: {}", trans, obj);
+          if (s.is_head() ||
+              obj == s.hoid ||
+              obj >= s.history_start) {
+            s.push(obj, cursor,
+	      default_data_reservation,
+	      default_metadata_range);
+          } else {
+            DEBUGT("skip hoid: {}", trans, obj);
+          }
+
+          return cursor.get_next(trans).si_then([&cursor](auto n) mutable {
+            cursor = n;
+            return get_onode_iertr::make_ready_future<
+              seastar::stop_iteration>(seastar::stop_iteration::no);
+          });
+        }).si_then([&s, &trans]() mutable -> get_history_ret {
+          LOG_PREFIX(FLTreeOnodeManager::get_history);
+          if (!s.res.onode) {
+            ERRORT("not found", trans);
+            return crimson::ct_error::enoent::make();
+          } else {
+            DEBUGT("find {} history", trans, s.res.data_onodes.size());
+            return get_onode_iertr::make_ready_future<
+              onode_history_t>(std::move(s.res));
+          }
+        });
+    });
+  });
+}
+
 FLTreeOnodeManager::get_or_create_onode_ret
 FLTreeOnodeManager::get_or_create_onode(
   Transaction &trans,

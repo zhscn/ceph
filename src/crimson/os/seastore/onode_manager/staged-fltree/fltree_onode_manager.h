@@ -142,6 +142,10 @@ public:
     Transaction &trans,
     const ghobject_t &hoid) final;
 
+  get_history_ret get_history(
+    Transaction &trans,
+    const ghobject_t &hoid) final;
+
   get_or_create_onode_ret get_or_create_onode(
     Transaction &trans,
     const ghobject_t &hoid) final;
