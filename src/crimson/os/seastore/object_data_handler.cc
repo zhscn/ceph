@@ -1817,6 +1817,24 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
 	      return clone_extents(ctx, d_object_data, pins, base);
 	    }).si_then([&pins, ctx] {
 	      return do_removals(ctx, pins);
+	    }).si_then([&pins, ctx] {
+	      return trans_intr::do_for_each(pins, [ctx](LBAMappingRef &pin) {
+		assert(!pin->is_shadow_mapping());
+		if (pin->is_indirect() || pin->get_val() == P_ADDR_ZERO) {
+		  // FIXME: merge continuous mappings
+		  return ctx.tm.reserve_region(
+		    ctx.t,
+		    pin->get_key(),
+		    pin->get_length()
+		  ).si_then([&pin](auto npin) {
+		    assert(pin->get_key() == npin->get_key());
+		    assert(npin->get_val() == P_ADDR_ZERO);
+		    assert(npin->get_length() == pin->get_length());
+		  });
+		} else {
+		  return clone_iertr::make_ready_future();
+		}
+	      });
 	    });
 	  });
 	});
