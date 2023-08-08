@@ -278,6 +278,13 @@ public:
     laddr_t laddr,
     extent_len_t len) = 0;
 
+  using remove_region_iertr = base_iertr;
+  using remove_region_ret = remove_region_iertr::future<>;
+  virtual remove_region_ret remove_region(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t length) = 0;
+
   virtual ~LBAManager() {}
 };
 using LBAManagerRef = std::unique_ptr<LBAManager>;

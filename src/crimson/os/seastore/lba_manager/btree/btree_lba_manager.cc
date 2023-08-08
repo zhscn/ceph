@@ -954,6 +954,47 @@ BtreeLBAManager::get_physical_extent_if_live(
     });
 }
 
+BtreeLBAManager::remove_region_ret
+BtreeLBAManager::remove_region(
+  Transaction &t,
+  laddr_t laddr,
+  extent_len_t length)
+{
+  LOG_PREFIX(BtreeLBAManager::remove_region);
+  DEBUGT("laddr={}, length={}", t, laddr, length);
+  auto c = get_context(t);
+  return with_btree<LBABtree>(
+    cache,
+    c,
+    [c, laddr, length, FNAME](auto &btree) {
+      return btree.lower_bound(
+        c, laddr
+      ).si_then([c, laddr, length, FNAME, &btree](auto iter) {
+        return seastar::do_with(iter, [c, laddr, length, FNAME, &btree](auto &iter) {
+          return trans_intr::repeat([c, laddr, length, FNAME, &iter, &btree] {
+            if (iter.is_end() || iter.get_key() >= (laddr + length)) {
+              return remove_region_iertr::make_ready_future<
+                seastar::stop_iteration>(seastar::stop_iteration::yes);
+            }
+            assert(iter.get_val().pladdr.is_paddr());
+            assert(iter.get_val().pladdr.get_paddr() == P_ADDR_ZERO);
+            TRACET("{}~{} got {}~{} {}~{}",
+                   c.trans, laddr, length, iter.get_key(), iter.get_val(),
+                   iter.get_val().pladdr, iter.get_val().len);
+            return btree.remove(c, iter
+            ).si_then([&iter](auto new_iter) mutable {
+              iter = new_iter;
+              return remove_region_iertr::make_ready_future<
+                seastar::stop_iteration>(seastar::stop_iteration::no);
+            });
+          });
+        });
+      }).si_then([] {
+        return remove_region_iertr::make_ready_future();
+      });
+    });
+}
+
 void BtreeLBAManager::register_metrics()
 {
   LOG_PREFIX(BtreeLBAManager::register_metrics);

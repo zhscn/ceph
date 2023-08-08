@@ -314,6 +314,12 @@ public:
     paddr_t addr,
     laddr_t laddr,
     extent_len_t len) final;
+
+  remove_region_ret remove_region(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t length) final;
+
 private:
   Cache &cache;
 
