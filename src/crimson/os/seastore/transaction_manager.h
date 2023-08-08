@@ -292,6 +292,15 @@ public:
     Transaction &t,
     std::vector<laddr_t> offsets);
 
+  using remove_region_iertr = LBAManager::remove_region_iertr;
+  using remove_region_ret = remove_region_iertr::future<>;
+  remove_region_ret remove_region(
+    Transaction &t,
+    laddr_t laddr,
+    extent_len_t length) {
+    return lba_manager->remove_region(t, laddr, length);
+  }
+
   /**
    * alloc_extent
    *
