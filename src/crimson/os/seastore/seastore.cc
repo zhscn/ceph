@@ -1608,6 +1608,17 @@ SeaStore::Shard::_remove(
     });
   }
   return fut.si_then([this, &ctx, onode, &data_onodes] {
+    auto onode_data = onode->get_layout().object_data.get();
+    auto laddr = onode_data.get_reserved_data_base();
+    auto len = onode_data.get_reserved_data_len();
+    if (laddr != L_ADDR_NULL) {
+      ctx.transaction->update_onode_info(
+	  laddr,
+	  len,
+	  extent_types_t::OBJECT_DATA_BLOCK,
+	  Transaction::onode_op_t::REMOVE);
+    }
+
     return seastar::do_with(
       ObjectDataHandler(max_object_size),
       [=, this, &ctx, &data_onodes](auto &objhandler) {
@@ -1622,19 +1633,7 @@ SeaStore::Shard::_remove(
 	  });
     });
   }).si_then([this, &ctx, onode]() mutable {
-    auto onode_data = onode->get_layout().object_data.get();
-    auto laddr = onode_data.get_reserved_data_base();
-    auto len = onode_data.get_reserved_data_len();
-    return onode_manager->erase_onode(*ctx.transaction, onode
-    ).si_then([&ctx, laddr, len] {
-      if (laddr != L_ADDR_NULL) {
-	ctx.transaction->update_onode_info(
-	  laddr,
-	  len,
-	  extent_types_t::OBJECT_DATA_BLOCK,
-	  Transaction::onode_op_t::REMOVE);
-      }
-    });
+    return onode_manager->erase_onode(*ctx.transaction, onode);
   }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
     crimson::ct_error::assert_all(

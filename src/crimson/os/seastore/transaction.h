@@ -531,7 +531,11 @@ public:
     } else {
       assert(p->length == length);
       assert(p->type == type);
-      p->op = op;
+      if (p->op == onode_op_t::NONE) {
+	p->op = op;
+      } else {
+	assert(p->op == op || op == onode_op_t::NONE);
+      }
     }
     cur_onode.emplace(onode_info_t(laddr, length, type, op));
   }
