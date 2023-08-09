@@ -415,7 +415,8 @@ TransactionManager::do_submit_transaction(
 	for (auto &info : tref.get_onode_info()) {
 	  if (info.op == Transaction::onode_op_t::PROMOTE) {
 	    nv_cache->move_to_top_if_not_cached(info.laddr, info.length, info.type);
-	  } else if (info.op == Transaction::onode_op_t::REMOVE) {
+	  } else if (info.op == Transaction::onode_op_t::REMOVE ||
+		     info.op == Transaction::onode_op_t::REMOVE_REGION) {
 	    nv_cache->remove(info.laddr, info.length, info.type);
 	  }
 	}

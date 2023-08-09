@@ -1290,7 +1290,7 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
               return trans_intr::do_for_each(
                 ctx.transaction->get_onode_info(),
                 [this, &ctx](auto &p) {
-                  if (p.op == Transaction::onode_op_t::REMOVE) {
+                  if (p.op == Transaction::onode_op_t::REMOVE_REGION) {
                     return transaction_manager->remove_region(
                       *ctx.transaction, p.laddr, p.length);
                   } else {

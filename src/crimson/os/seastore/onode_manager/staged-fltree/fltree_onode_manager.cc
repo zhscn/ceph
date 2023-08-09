@@ -220,7 +220,7 @@ FLTreeOnodeManager::write_dirty_ret FLTreeOnodeManager::write_dirty(
             obj_data.get_reserved_data_base(),
             obj_data.get_reserved_data_len(),
             extent_types_t::OBJECT_DATA_BLOCK,
-            Transaction::onode_op_t::REMOVE);
+            Transaction::onode_op_t::REMOVE_REGION);
           return tree.erase(trans, flonode);
         } else {
           assert(obj_data.get_extents_count() == -1 ||

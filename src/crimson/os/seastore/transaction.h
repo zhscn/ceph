@@ -492,7 +492,8 @@ public:
     NONE,
     // no READ, since read transaction doesn't need to submit
     PROMOTE,
-    REMOVE
+    REMOVE,
+    REMOVE_REGION
   };
   struct onode_info_t {
     laddr_t laddr = L_ADDR_NULL;
