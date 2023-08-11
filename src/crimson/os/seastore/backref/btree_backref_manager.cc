@@ -253,6 +253,93 @@ BtreeBackrefManager::new_mapping(
     });
 }
 
+BtreeBackrefManager::new_mappings_ret BtreeBackrefManager::new_mappings(
+    Transaction &t,
+    const std::vector<backref_entry_t> &merged_mappings)
+{
+  auto c = get_context(t);
+  return with_btree<BackrefBtree>(
+    cache,
+    c,
+    [c, &merged_mappings](BackrefBtree &btree) {
+      return btree.lower_bound(
+        c,
+	merged_mappings.front().paddr
+      ).si_then([c, &merged_mappings, &btree](BackrefBtree::iterator iter) {
+	return seastar::do_with(
+	  iter,
+	  [c, &merged_mappings, &btree](BackrefBtree::iterator &iter) -> new_mappings_ret {
+	    return trans_intr::do_for_each(
+	      merged_mappings,
+	      [c, &iter, &btree](const backref_entry_t &entry) {
+		LOG_PREFIX(BtreeBackrefManager::new_mappings);
+		if (!iter.is_end() && entry.paddr.add_offset(entry.len) > iter.get_key()) {
+		  ERRORT("insert {}~{} at {}~{}",
+			 c.trans, entry.paddr, entry.len,
+			 iter.get_key(), iter.get_val().len);
+		  ceph_abort();
+		}
+		ceph_assert(entry.laddr != L_ADDR_NULL);
+		return btree.insert(
+		  c,
+		  iter,
+		  entry.paddr,
+		  backref_map_val_t{
+		    entry.len,
+		    entry.laddr,
+		    entry.type
+		  },
+		  nullptr
+		).si_then([c](auto p) {
+		  return p.first.next(c);
+		}).si_then([&iter](auto p) {
+		  iter = p;
+		});
+	      });
+	  });
+      });
+    });
+}
+
+BtreeBackrefManager::remove_mappings_ret BtreeBackrefManager::remove_mappings(
+    Transaction &t,
+    const std::vector<backref_entry_t> &merged_mappings)
+{
+  auto c = get_context(t);
+  return with_btree<BackrefBtree>(
+    cache,
+    c,
+    [c, &merged_mappings](BackrefBtree &btree) {
+      return btree.lower_bound(
+        c,
+	merged_mappings.front().paddr
+      ).si_then([c, &merged_mappings, &btree](BackrefBtree::iterator iter) {
+	return seastar::do_with(
+	  iter,
+	  [c, &merged_mappings, &btree](BackrefBtree::iterator &iter) {
+	    return trans_intr::do_for_each(
+	      merged_mappings,
+	      [c, &iter, &btree](const backref_entry_t &entry) {
+		LOG_PREFIX(BtreeBackrefManager::remove_mappings);
+		ceph_assert(!iter.is_end());
+		ceph_assert(entry.laddr == L_ADDR_NULL);
+		if (iter.get_key() != entry.paddr) {
+		  ERRORT("remove {}~{} with {}~{}",
+			 c.trans, iter.get_key(), iter.get_val().len,
+			 entry.paddr, entry.len);
+		  ceph_abort();
+		}
+		return btree.remove(c, iter
+		).si_then([&iter](auto p) {
+		  iter = p;
+		  return remove_mapping_iertr::now();
+		});
+	      });
+	  });
+      });
+    });
+}
+
 BtreeBackrefManager::merge_cached_backrefs_ret
 BtreeBackrefManager::merge_cached_backrefs(
   Transaction &t,
@@ -269,9 +356,11 @@ BtreeBackrefManager::merge_cached_backrefs(
     return seastar::do_with(
       backref_entryrefs_by_seq.begin(),
       JOURNAL_SEQ_NULL,
-      [this, &t, &limit, &backref_entryrefs_by_seq, max](auto &iter, auto &inserted_to) {
+      std::vector<std::vector<backref_entry_t>>(),
+      [this, &t, &limit, &backref_entryrefs_by_seq, max](auto &iter, auto &inserted_to, auto &merged_backref_entries) {
       return trans_intr::repeat(
-        [&iter, this, &t, &limit, &backref_entryrefs_by_seq, max, &inserted_to]()
+        [&iter, this, &t, &limit, &backref_entryrefs_by_seq,
+	 max, &inserted_to, &merged_backref_entries]()
         -> merge_cached_backrefs_iertr::future<seastar::stop_iteration> {
         if (iter == backref_entryrefs_by_seq.end()) {
           return seastar::make_ready_future<seastar::stop_iteration>(
@@ -284,42 +373,80 @@ BtreeBackrefManager::merge_cached_backrefs(
           , t, seq, limit, t.get_num_fresh_backref());
         if (seq <= limit && t.get_num_fresh_backref() * BACKREF_NODE_SIZE < max) {
           inserted_to = seq;
-          return trans_intr::do_for_each(
-            backref_entry_refs,
-            [this, &t](auto &backref_entry_ref) {
-            LOG_PREFIX(BtreeBackrefManager::merge_cached_backrefs);
-            auto &backref_entry = *backref_entry_ref;
-            if (backref_entry.laddr != L_ADDR_NULL) {
-              DEBUGT("new mapping: {}~{} -> {}",
-                t,
-                backref_entry.paddr,
-                backref_entry.len,
-                backref_entry.laddr);
-              return new_mapping(
-                t,
-                backref_entry.paddr,
-                backref_entry.len,
-                backref_entry.laddr,
-                backref_entry.type).si_then([](auto &&pin) {
-                return seastar::now();
-              });
-            } else {
-              DEBUGT("remove mapping: {}", t, backref_entry.paddr);
-              return remove_mapping(
-                t,
-                backref_entry.paddr
-              ).si_then([](auto&&) {
-                return seastar::now();
-              }).handle_error_interruptible(
-                crimson::ct_error::input_output_error::pass_further(),
-                crimson::ct_error::assert_all("no enoent possible")
-              );
-            }
-          }).si_then([&iter] {
-            iter++;
-            return seastar::make_ready_future<seastar::stop_iteration>(
-              seastar::stop_iteration::no);
-          });
+	  {
+	    merged_backref_entries.clear();
+	    std::vector<backref_entry_t> entries;
+	    unsigned int merged_count = 0;
+	    for (auto &entry_ : backref_entry_refs) {
+	      backref_entry_t &entry = *entry_;
+	      DEBUGT("process {}~{} {}", t, entry.paddr, entry.len, entry.laddr);
+
+	      if (entries.empty()) {
+		DEBUGT("init with {}~{} {}", t, entry.paddr, entry.len, entry.laddr);
+		entries.emplace_back(entry);
+		continue;
+	      }
+
+	      bool cut_group = false;
+	      auto &last_entry = entries.back();
+	      auto is_null = [](const backref_entry_t &e) -> bool {
+		return e.laddr == L_ADDR_NULL;
+	      };
+
+	      if (last_entry.paddr.get_addr_type() != entry.paddr.get_addr_type() ||
+		  is_null(last_entry) != is_null(entry)) {
+		cut_group = true;
+	      } else if (last_entry.paddr.get_addr_type() == paddr_types_t::SEGMENT) {
+		auto &last_paddr = last_entry.paddr.as_seg_paddr();
+		auto &cur_paddr = entry.paddr.as_seg_paddr();
+		cut_group = (last_paddr.get_segment_id() != cur_paddr.get_segment_id()) ||
+		  (last_paddr.get_segment_off() + (int)last_entry.len != cur_paddr.get_segment_off());
+	      } else {
+		auto &last_paddr = last_entry.paddr.as_blk_paddr();
+		auto &cur_paddr = entry.paddr.as_blk_paddr();
+		cut_group = (last_paddr.get_device_id() != cur_paddr.get_device_id()) ||
+		  (last_paddr.get_device_off() + last_entry.len != cur_paddr.get_device_off());
+	      }
+
+	      if (cut_group) {
+		DEBUGT("group {}~{} to {}~{} with {} extents",
+		       t, entries.front().paddr, entries.front().len,
+		       entries.back().paddr, entries.back().len,
+		       entries.size());
+		merged_count += entries.size();
+		merged_backref_entries.emplace_back(std::move(entries));
+	      }
+	      DEBUGT("merge {}~{} {}", t, entry.paddr, entry.len, entry.laddr);
+	      entries.emplace_back(entry);
+	    }
+	    if (!entries.empty()) {
+	      DEBUGT("final group {}~{} to {}~{} with {} extents",
+		     t, entries.front().paddr, entries.front().len,
+		     entries.back().paddr, entries.back().len,
+		     entries.size());
+	      merged_count += entries.size();
+	      merged_backref_entries.emplace_back(std::move(entries));
+	    }
+	    ceph_assert(merged_count == backref_entry_refs.size());
+	  }
+	  return trans_intr::do_for_each(
+	    merged_backref_entries,
+	    [this, &t](const std::vector<backref_entry_t> &mappings) {
+	      assert(!mappings.empty());
+	      if (mappings.front().laddr != L_ADDR_NULL) {
+		return new_mappings(t, mappings);
+	      } else {
+		return remove_mappings(t, mappings
+		).handle_error_interruptible(
+                  crimson::ct_error::input_output_error::pass_further(),
+		  crimson::ct_error::assert_all("no enoent possible")
+                );
+	      }
+	    }).si_then([&iter] {
+	      iter++;
+	      return seastar::make_ready_future<seastar::stop_iteration>(
+                seastar::stop_iteration::no);
+	    });
         }
         return seastar::make_ready_future<seastar::stop_iteration>(
           seastar::stop_iteration::yes);

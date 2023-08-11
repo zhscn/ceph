@@ -74,6 +74,11 @@ public:
     laddr_t val,
     extent_types_t type) final;
 
+  using new_mappings_ret = new_mapping_iertr::future<>;
+  new_mappings_ret new_mappings(
+    Transaction &t,
+    const std::vector<backref_entry_t> &merged_mappings);
+
   merge_cached_backrefs_ret merge_cached_backrefs(
     Transaction &t,
     const journal_seq_t &limit,
@@ -82,6 +87,11 @@ public:
   remove_mapping_ret remove_mapping(
     Transaction &t,
     paddr_t offset) final;
+
+  using remove_mappings_ret = remove_mapping_iertr::future<>;
+  remove_mappings_ret remove_mappings(
+    Transaction &t,
+    const std::vector<backref_entry_t> &merged_mappings);
 
   check_child_trackers_ret check_child_trackers(Transaction &t) final;
 
