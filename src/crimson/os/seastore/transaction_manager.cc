@@ -785,6 +785,11 @@ TransactionManager::get_extents_if_live(
 	  [=, this, &t, pin_list=std::move(pin_list)](
             std::list<CachedExtentRef> &list) mutable
         {
+	  LOG_PREFIX(TransactionManager::get_extent_if_live);
+	  for (auto &pin : pin_list) {
+	    DEBUGT("{}~{} {}", t, pin->get_key(), pin->get_val(), pin->get_length());
+	  }
+
           auto paddr_seg_id = paddr.as_seg_paddr().get_segment_id();
           return trans_intr::parallel_for_each(
             pin_list,
@@ -805,8 +810,12 @@ TransactionManager::get_extents_if_live(
               return seastar::now();
             }
             // Only extent split can happen during the lookup
-            ceph_assert(pin_seg_paddr >= paddr &&
-                        pin_seg_paddr.add_offset(pin_len) <= paddr.add_offset(len));
+            if (!(pin_seg_paddr >= paddr &&
+		  pin_seg_paddr.add_offset(pin_len) <= paddr.add_offset(len))) {
+	      LOG_PREFIX(TransactionManager::get_extent_if_live);
+	      ERRORT("{}~{} {}~{}", t, pin_paddr, pin_len, paddr, len);
+	      ceph_abort();
+	    }
             return read_pin_by_type(t, std::move(pin), type
             ).si_then([&list](auto ret) {
               list.emplace_back(std::move(ret));
