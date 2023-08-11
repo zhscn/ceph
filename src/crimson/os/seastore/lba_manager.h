@@ -259,6 +259,28 @@ public:
     Transaction& t,
     const std::list<LogicalCachedExtentRef>& extents);
 
+  struct merged_mappings_t {
+    laddr_t laddr = 0;
+    extent_len_t length = 0;
+    struct mapping_t {
+      laddr_t laddr = L_ADDR_NULL;
+      paddr_t prior_paddr = P_ADDR_NULL;
+      paddr_t new_paddr = P_ADDR_NULL;
+      extent_len_t length = 0;
+    };
+    std::vector<mapping_t> mappings;
+    merged_mappings_t() = default;
+    merged_mappings_t(merged_mappings_t &&) = default;
+
+    friend auto operator<=>(const merged_mappings_t &l, const merged_mappings_t &r) {
+      return l.laddr <=> r.laddr;
+    }
+  };
+
+  virtual update_mappings_ret update_mappings(
+    Transaction &t,
+    const merged_mappings_t &merged_mappings) = 0;
+
   /**
    * get_physical_extent_if_live
    *

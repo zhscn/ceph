@@ -308,6 +308,10 @@ public:
     paddr_t paddr,
     LogicalCachedExtent*) final;
 
+  update_mappings_ret update_mappings(
+    Transaction &t,
+    const merged_mappings_t &merged_mappings) final;
+
   get_physical_extent_if_live_ret get_physical_extent_if_live(
     Transaction &t,
     extent_types_t type,
