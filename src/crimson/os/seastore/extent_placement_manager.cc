@@ -544,15 +544,18 @@ ExtentPlacementManager::BackgroundProcess::reserve_projected_usage(
     ++stats.io_blocked_count;
     stats.io_blocked_sum += stats.io_blocking_num;
 
-    return seastar::repeat([this, usage] {
+    auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+    return seastar::repeat([this, usage, point] {
       blocking_io = seastar::promise<>();
       return blocking_io->get_future(
-      ).then([this, usage] {
+      ).then([this, usage, point] {
         ceph_assert(!blocking_io);
         auto res = try_reserve_io(usage);
         if (res.is_successful()) {
           assert(stats.io_blocking_num == 1);
           --stats.io_blocking_num;
+          auto now = timepoint_to_mod(seastar::lowres_system_clock::now());
+          stats.io_blocked_time += now - point;
           return seastar::make_ready_future<seastar::stop_iteration>(
             seastar::stop_iteration::yes);
         } else {
@@ -843,6 +846,8 @@ void ExtentPlacementManager::BackgroundProcess::register_metrics()
                      sm::description("IOs that are blocked by trimming")),
     sm::make_counter("io_blocked_count_clean", stats.io_blocked_count_clean,
                      sm::description("IOs that are blocked by cleaning")),
+    sm::make_counter("io_blocked_time", stats.io_blocked_time,
+                     sm::description("the sum of IOs")),
     sm::make_counter("io_blocked_sum", stats.io_blocked_sum,
                      sm::description("the sum of blocking IOs"))
   });
