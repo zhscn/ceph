@@ -494,7 +494,7 @@ struct transaction_manager_test_t :
     using ret = ertr::future<TestBlockRef>;
     auto addr = pin->get_key();
     auto ext = with_trans_intr(*(t.t), [&](auto& trans) {
-      return tm->read_pin<TestBlock>(trans, std::move(pin));
+      return tm->read_pin<TestBlock>(trans, std::move(pin), [](auto&&) {});
     }).safe_then([](auto ext) -> ret {
       return ertr::make_ready_future<TestBlockRef>(ext);
     }).handle_error(

@@ -73,7 +73,8 @@ TMDriver::read_extents_ret TMDriver::read_extents(
 	      pin->get_length());
 	    return tm->read_pin<TestBlock>(
 	      t,
-	      std::move(pin)
+	      std::move(pin),
+	      [](auto&&) {}
 	    ).si_then([&ret](auto ref) mutable {
 	      ret.push_back(std::make_pair(ref->get_laddr(), ref));
 	      logger().debug(

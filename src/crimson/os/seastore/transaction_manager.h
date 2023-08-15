@@ -155,7 +155,7 @@ public:
             t, offset, length, *pin);
         ceph_assert(0 == "Should be impossible");
       }
-      return this->read_pin<T>(t, std::move(pin));
+      return this->read_pin<T>(t, std::move(pin), [](auto&&) {});
     });
   }
 
@@ -199,14 +199,15 @@ public:
             t, offset, *pin);
         ceph_assert(0 == "Should be impossible");
       }
-      return this->read_pin<T>(t, std::move(pin));
+      return this->read_pin<T>(t, std::move(pin), [](auto&&) {});
     });
   }
 
-  template <typename T>
+  template <typename T, typename FUNC>
   base_iertr::future<TCachedExtentRef<T>> read_pin(
     Transaction &t,
-    LBAMappingRef pin)
+    LBAMappingRef pin,
+    FUNC &&func)
   {
     auto v = pin->get_logical_extent(t);
     if (v.has_child()) {
@@ -224,7 +225,7 @@ public:
 	return extent->template cast<T>();
       });
     } else {
-      return pin_to_extent<T>(t, std::move(pin));
+      return pin_to_extent<T>(t, std::move(pin), std::move(func));
     }
   }
 
@@ -918,10 +919,11 @@ private:
   template <typename T>
   using pin_to_extent_ret = pin_to_extent_iertr::future<
     TCachedExtentRef<T>>;
-  template <typename T>
+  template <typename T, typename FUNC>
   pin_to_extent_ret<T> pin_to_extent(
     Transaction &t,
-    LBAMappingRef pin) {
+    LBAMappingRef pin,
+    FUNC &&init_func) {
     LOG_PREFIX(TransactionManager::pin_to_extent);
     SUBTRACET(seastore_tm, "getting extent {}", t, *pin);
     static_assert(is_logical_type(T::TYPE));
@@ -933,7 +935,7 @@ private:
       pref.is_indirect() ?
 	pref.get_intermediate_length() :
 	pref.get_length(),
-      [pin=std::move(pin)]
+      [pin=std::move(pin), init_func=std::move(init_func)]
       (T &extent) mutable {
 	assert(!extent.has_laddr());
 	assert(!extent.has_been_invalidated());
@@ -944,6 +946,7 @@ private:
 	  pin->is_indirect()
 	  ? pin->get_intermediate_key()
 	  : pin->get_key());
+	init_func(extent);
       }
     ).si_then([FNAME, &t](auto ref) mutable -> ret {
       SUBTRACET(seastore_tm, "got extent -- {}", t, *ref);
