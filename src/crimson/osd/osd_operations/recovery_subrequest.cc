@@ -1,3 +1,6 @@
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// vim: ts=8 sw=2 smarttab
+
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 
@@ -20,16 +23,18 @@ namespace crimson {
   };
 }
 
+SET_SUBSYS(osd);
+
 namespace crimson::osd {
 
 seastar::future<> RecoverySubRequest::with_pg(
   ShardServices &shard_services, Ref<PG> pgref)
 {
-  logger().debug("{}: {}", "RecoverySubRequest::with_pg", *this);
-
   track_event<StartEvent>();
   IRef opref = this;
   return interruptor::with_interruption([this, pgref] {
+    LOG_PREFIX(RecoverySubRequest::with_pg);
+    DEBUGI("{}: {}", "RecoverySubRequest::with_pg", *this);
     return pgref->get_recovery_backend()->handle_recovery_op(m, conn);
   }, [](std::exception_ptr) {
     return seastar::now();
