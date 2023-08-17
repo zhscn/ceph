@@ -95,7 +95,9 @@ class LRUMemoryCache : public MemoryCache {
     if (epm.is_cold_device(extent.get_paddr().get_device_id())) {
       if (extent.is_logical()) {
 	auto lextent = extent.cast<LogicalCachedExtent>();
-	ret = !lextent->is_shadow_extent() && lextent->is_fully_loaded();
+	ret = !lextent->is_shadow_extent() &&
+	  lextent->is_fully_loaded() &&
+	  lextent->get_user_hint() != placement_hint_t::COLD;
       } else {
 	ret = true;
       }

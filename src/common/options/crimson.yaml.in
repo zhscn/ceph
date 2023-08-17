@@ -162,3 +162,8 @@ options:
   level: advanced
   desc: maximum size of an extent in seastore
   default: 16384
+- name: seastore_write_through_size
+  type: size
+  level: dev
+  desc: select write through policy when data length is greater than this value.
+  default: 512_K

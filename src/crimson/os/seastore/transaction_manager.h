@@ -384,6 +384,12 @@ public:
     std::list<TCachedExtentRef<T>> ret;
     std::vector<LogicalCachedExtent*> nextents;
     auto num_extents = (len + max_extent_size - 1) / max_extent_size;
+    // TODO: move write through policy to EPM
+    auto write_through_size = crimson::common::get_conf<
+      Option::size_t>("seastore_write_through_size");
+    if (len >= write_through_size && T::TYPE == extent_types_t::OBJECT_DATA_BLOCK) {
+      placement_hint = placement_hint_t::COLD;
+    }
     for (uint64_t i = 0; i < num_extents; i++) {
       auto ext = cache->alloc_new_extent<T>(
 	t,
