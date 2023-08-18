@@ -1552,6 +1552,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 			      ? (key - off + extent.get_length()) >= end
 			      : (extent.get_laddr() + extent.get_length()) >= end);
 			  ceph_assert(end > current);
+			  extent.reset_promote();
 			  auto lextent = extent.template cast<ObjectDataBlock>();
 			  if (object_data.is_overlap(
 			        lextent->get_laddr(),

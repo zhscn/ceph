@@ -396,6 +396,9 @@ public:
 	(i == num_extents - 1) ? len - i * max_extent_size : max_extent_size,
 	placement_hint,
 	INIT_GENERATION);
+      if (placement_hint == placement_hint_t::COLD) {
+	ext->disable_promote();
+      }
       nextents.push_back(ext.get());
       ret.emplace_back(std::move(ext));
     }

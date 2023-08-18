@@ -97,7 +97,7 @@ class LRUMemoryCache : public MemoryCache {
 	auto lextent = extent.cast<LogicalCachedExtent>();
 	ret = !lextent->is_shadow_extent() &&
 	  lextent->is_fully_loaded() &&
-	  lextent->get_user_hint() != placement_hint_t::COLD;
+	  lextent->maybe_promote();
       } else {
 	ret = true;
       }

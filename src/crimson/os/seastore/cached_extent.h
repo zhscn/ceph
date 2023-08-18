@@ -602,6 +602,18 @@ public:
     cache_state = state;
   }
 
+  void reset_promote() {
+    may_promote = true;
+  }
+
+  void disable_promote() {
+    may_promote = false;
+  }
+
+  bool maybe_promote() const {
+    return may_promote;
+  }
+
 private:
   template <typename T>
   friend class read_set_item_t;
@@ -703,6 +715,7 @@ private:
 
   // opaque state to CachedExtent, used by MemoryCache
   uint8_t cache_state = 0;
+  bool may_promote = true;
 
 protected:
   trans_view_set_t mutation_pendings;
