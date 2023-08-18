@@ -725,7 +725,9 @@ BtreeLBAManager::alloc_extents(
 	    boost::make_counting_iterator(num_extents),
 	    [len, num_extents, max_extent_size, &btree,
 	    c, &state, addr, FNAME, hint](auto i) {
+	    boost::ignore_unused(addr);
 	    ceph_assert(len > i * max_extent_size);
+	    ceph_assert(state.nextents[i]);
 	    return btree.insert(
 	      c,
 	      *state.insert_iter,
@@ -734,16 +736,17 @@ BtreeLBAManager::alloc_extents(
 		(i == num_extents - 1)
 		  ? len - i * max_extent_size
 		  : max_extent_size,
-		addr + i * max_extent_size,
+		state.nextents[i]->get_paddr(),
 		1,
 		0},
 	      state.nextents[i]
 	    ).si_then([&state, FNAME, c, addr, len,
 		      i, max_extent_size, hint](auto &&p) {
+	      boost::ignore_unused(addr);
 	      auto [iter, inserted] = std::move(p);
 	      TRACET("{}~{}, hint={}, inserted at {}",
 		     c.trans,
-		     addr + i * max_extent_size,
+		     state.nextents[i]->get_paddr(),
 		     len - i * max_extent_size,
 		     hint,
 		     state.last_end + i * max_extent_size);
