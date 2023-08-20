@@ -167,7 +167,7 @@ using crimson::common::local_conf;
     LOG_PREFIX(ObjectContextLoader::get_or_load_obc);
     auto loaded =
       load_obc_iertr::make_ready_future<ObjectContextRef>(obc);
-    if (existed) {
+    if (existed && obc->is_fully_loaded()) {
       DEBUGDPP("cache hit on {}", dpp, obc->get_oid());
     } else {
       DEBUGDPP("cache miss on {}", dpp, obc->get_oid());
