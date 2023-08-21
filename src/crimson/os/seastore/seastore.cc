@@ -762,7 +762,7 @@ SeaStore::Shard::list_objects(CollectionRef ch,
 	    using list_iertr = OnodeManager::list_onodes_iertr;
 	    using repeat_ret = list_iertr::future<seastar::stop_iteration>;
             return trans_intr::repeat(
-              [this, &t, &ret, &limit,
+              [this, &t, &ret, &limit, end,
 	       filter, ranges = get_ranges(ch, start, end, filter)
 	      ]() mutable -> repeat_ret {
 		if (limit == 0 || ranges.empty()) {
@@ -778,7 +778,7 @@ SeaStore::Shard::list_objects(CollectionRef ch,
 		DEBUGT("pstart {}, pend {}, limit {}", t, pstart, pend, limit);
 		return onode_manager->list_onodes(
 		  t, pstart, pend, limit
-		).si_then([&limit, &ret, pend, &t, last=ranges.empty()]
+		).si_then([&limit, &ret, pend, &t, last=ranges.empty(), end]
 			  (auto &&_ret) mutable {
 		  auto &next_objects = std::get<0>(_ret);
 		  auto &ret_objects = std::get<0>(ret);
@@ -793,7 +793,7 @@ SeaStore::Shard::list_objects(CollectionRef ch,
 		  DEBUGT("got {} objects, left limit {}",
 		    t, next_objects.size(), limit);
 		  if (last && std::get<1>(ret) == pend) {
-		    std::get<1>(ret) = ghobject_t::get_max();
+		    std::get<1>(ret) = end;
 		  }
 		  assert(limit == 0 ||
 			 std::get<1>(ret) == pend ||
