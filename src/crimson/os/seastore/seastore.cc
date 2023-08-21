@@ -778,7 +778,8 @@ SeaStore::Shard::list_objects(CollectionRef ch,
 		DEBUGT("pstart {}, pend {}, limit {}", t, pstart, pend, limit);
 		return onode_manager->list_onodes(
 		  t, pstart, pend, limit
-		).si_then([&limit, &ret, pend](auto &&_ret) mutable {
+		).si_then([&limit, &ret, pend, &t, last=ranges.empty()]
+			  (auto &&_ret) mutable {
 		  auto &next_objects = std::get<0>(_ret);
 		  auto &ret_objects = std::get<0>(ret);
 		  ret_objects.insert(
@@ -788,6 +789,12 @@ SeaStore::Shard::list_objects(CollectionRef ch,
 		  std::get<1>(ret) = std::get<1>(_ret);
 		  assert(limit >= next_objects.size());
 		  limit -= next_objects.size();
+		  LOG_PREFIX(SeaStore::list_objects);
+		  DEBUGT("got {} objects, left limit {}",
+		    t, next_objects.size(), limit);
+		  if (last && std::get<1>(ret) == pend) {
+		    std::get<1>(ret) = ghobject_t::get_max();
+		  }
 		  assert(limit == 0 ||
 			 std::get<1>(ret) == pend ||
 			 std::get<1>(ret) == ghobject_t::get_max());
