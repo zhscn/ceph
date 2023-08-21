@@ -365,6 +365,30 @@ public:
     return {addr, std::move(bp), gen};
   }
 
+  std::pair<paddr_t, rewrite_gen_t> alloc_new_extents(
+    extent_types_t type,
+    extent_len_t alloc_length,
+    placement_hint_t hint,
+    rewrite_gen_t gen) {
+    data_category_t category = get_extent_category(type);
+    gen = adjust_generation(category, type, hint, gen, false);
+
+    paddr_t addr;
+    if (gen == INLINE_GENERATION) {
+      addr = make_record_relative_paddr(0);
+    } else if (category == data_category_t::DATA) {
+      assert(data_writers_by_gen[generation_to_writer(gen)]);
+      addr = data_writers_by_gen[
+	  generation_to_writer(gen)]->alloc_paddr(alloc_length);
+    } else {
+      assert(category == data_category_t::METADATA);
+      assert(md_writers_by_gen[generation_to_writer(gen)]);
+      addr = md_writers_by_gen[
+	  generation_to_writer(gen)]->alloc_paddr(alloc_length);
+    }
+    return {addr, gen};
+  }
+
   bool is_going_to_evict(const LogicalCachedExtent &extent) {
     auto type = extent.get_type();
     auto gen = adjust_generation(

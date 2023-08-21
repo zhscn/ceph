@@ -381,26 +381,17 @@ public:
     SUBTRACET(seastore_tm, "{} len={}, placement_hint={}, laddr_hint={}",
               t, T::TYPE, len, placement_hint, laddr_hint);
     ceph_assert(is_aligned(laddr_hint, epm->get_block_size()));
-    std::list<TCachedExtentRef<T>> ret;
     std::vector<LogicalCachedExtent*> nextents;
-    auto num_extents = (len + max_extent_size - 1) / max_extent_size;
     // TODO: move write through policy to EPM
     auto write_through_size = crimson::common::get_conf<
       Option::size_t>("seastore_write_through_size");
     if (len >= write_through_size && T::TYPE == extent_types_t::OBJECT_DATA_BLOCK) {
       placement_hint = placement_hint_t::COLD;
     }
-    for (uint64_t i = 0; i < num_extents; i++) {
-      auto ext = cache->alloc_new_extent<T>(
-	t,
-	(i == num_extents - 1) ? len - i * max_extent_size : max_extent_size,
-	placement_hint,
-	INIT_GENERATION);
-      if (placement_hint == placement_hint_t::COLD) {
-	ext->disable_promote();
-      }
-      nextents.push_back(ext.get());
-      ret.emplace_back(std::move(ext));
+    std::list<TCachedExtentRef<T>> ret = cache->alloc_new_extents<T>(
+      t, len, max_extent_size, placement_hint, INIT_GENERATION);
+    for (auto &e : ret) {
+      nextents.push_back(e.get());
     }
     return lba_manager->alloc_extents(
       t,

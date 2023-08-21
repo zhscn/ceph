@@ -883,30 +883,70 @@ RandomBlockOolWriter::do_write(
   assert(!extents.empty());
   DEBUGT("start with {} allocated extents",
          t, extents.size());
-  return trans_intr::do_for_each(extents,
-    [this, &t, FNAME](auto& ex) {
-    auto paddr = ex->get_paddr();
-    assert(paddr.is_absolute());
-    RandomBlockManager * rbm = rb_cleaner->get_rbm(paddr); 
-    assert(rbm);
-    TRACE("extent {}, allocated addr {}", fmt::ptr(ex.get()), paddr);
-    auto& stats = t.get_ool_write_stats();
-    stats.extents.num += 1;
-    stats.extents.bytes += ex->get_length();
-    stats.num_records += 1;
+  struct merged_extents_t {
+    explicit merged_extents_t() = default;
+    merged_extents_t(merged_extents_t &&) = default;
 
-    ex->prepare_write();
-    return rbm->write(paddr,
-      ex->get_bptr()
-    ).handle_error(
-      alloc_write_iertr::pass_further{},
-      crimson::ct_error::assert_all{
-	"Invalid error when writing record"}
-    ).safe_then([&t, &ex, paddr, FNAME]() {
-      TRACET("ool extent written at {} -- {}",
-	     t, paddr, *ex);
-      t.mark_allocated_extent_ool(ex);
-      return alloc_write_iertr::now();
+    std::vector<LogicalCachedExtent*> extents;
+    extent_len_t length;
+    std::optional<bufferptr> bp = std::nullopt;
+  };
+  using merged_group_t =std::map<paddr_t, merged_extents_t>;
+  return seastar::do_with(merged_group_t(), [&t, &extents, this, FNAME](merged_group_t &group) {
+    merged_extents_t merged_extents;
+
+    for (auto &e : extents) {
+      assert(e->get_paddr().is_absolute());
+      TRACET("extent {}, allocated addr {}", t, *e, e->get_paddr());
+      auto& stats = t.get_ool_write_stats();
+      stats.extents.num += 1;
+      stats.extents.bytes += e->get_length();
+      stats.num_records += 1;
+      e->prepare_write();
+
+      if (merged_extents.extents.empty()) {
+        merged_extents.extents.push_back(e.get());
+        merged_extents.length = e->get_length();
+        continue;
+      }
+      auto paddr = merged_extents.extents.front()->get_paddr();
+      if (paddr.add_offset(merged_extents.length) != e->get_paddr()) {
+        group.emplace(paddr, std::move(merged_extents));
+        merged_extents.length = 0;
+      }
+      merged_extents.extents.push_back(e.get());
+      merged_extents.length += e->get_length();
+    }
+    if (!merged_extents.extents.empty()) {
+      auto paddr = merged_extents.extents.front()->get_paddr();
+      group.emplace(paddr, std::move(merged_extents));
+    }
+    return trans_intr::do_for_each(group, [this, &t, FNAME](auto &p) {
+      const paddr_t &paddr = p.first;
+      merged_extents_t &merged_extents = p.second;
+      merged_extents.bp.emplace(ceph::bufferptr(buffer::create_page_aligned(merged_extents.length)));
+      std::size_t offset = 0;
+      for (auto e: merged_extents.extents) {
+        e->prepare_write();
+        merged_extents.bp->copy_in(offset, e->get_length(), e->get_bptr().c_str());
+        offset += e->get_length();
+      }
+      RandomBlockManager * rbm = rb_cleaner->get_rbm(paddr);
+      assert(rbm);
+      return rbm->write(paddr, *merged_extents.bp
+      ).handle_error(
+        alloc_write_iertr::pass_further{},
+        crimson::ct_error::assert_all{
+	  "Invalid error when writing record"}
+      ).safe_then([&t, &merged_extents, FNAME] {
+        for (auto &ex : merged_extents.extents) {
+          TRACET("ool extent written at {} -- {}",
+                 t, ex->get_paddr(), *ex);
+          LogicalCachedExtentRef e(ex);
+          t.mark_allocated_extent_ool(e);
+        }
+        return alloc_write_iertr::now();
+      });
     });
   });
 }

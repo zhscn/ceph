@@ -902,6 +902,52 @@ public:
     return ret;
   }
 
+  template <typename T>
+  std::list<TCachedExtentRef<T>> alloc_new_extents(
+    Transaction &t,
+    extent_len_t length,
+    extent_len_t max_extent_size,
+    placement_hint_t hint,
+    rewrite_gen_t gen
+  ) {
+    LOG_PREFIX(Cache::alloc_new_extent);
+    SUBTRACET(seastore_cache, "allocate {} {}B, hint={}, gen={}",
+              t, T::TYPE, length, hint, rewrite_gen_printer_t{gen});
+
+    std::list<TCachedExtentRef<T>> ret;
+    auto p = epm.alloc_new_extents(T::TYPE, length, hint, gen);
+    auto &paddr = p.first;
+    auto &tgen = p.second;
+
+    auto num_extents = (length + max_extent_size - 1) / max_extent_size;
+
+    for (uint64_t i = 0; i < num_extents; i++) {
+      auto extent_length = (i == num_extents - 1) ?
+	length - i * max_extent_size : max_extent_size;
+      auto bp = ceph::bufferptr(
+        buffer::create_page_aligned(extent_length));
+      bp.zero();
+      auto ext = CachedExtent::make_cached_extent_ref<T>(std::move(bp));
+      ext->init(CachedExtent::extent_state_t::INITIAL_WRITE_PENDING,
+                paddr.add_offset(i * max_extent_size),
+                hint,
+                tgen,
+	        t.get_trans_id());
+      t.add_fresh_extent(ext);
+
+      if (hint == placement_hint_t::COLD) {
+	ext->disable_promote();
+      }
+      SUBDEBUGT(seastore_cache,
+		"allocated {} {}B extent at {}, hint={}, gen={} -- {}",
+		t, T::TYPE, length, ext->get_paddr(),
+		hint, rewrite_gen_printer_t{ext->get_rewrite_generation()}, *ext);
+      ret.emplace_back(std::move(ext));
+    }
+
+    return ret;
+  }
+
   /**
    * alloc_remapped_extent
    *
