@@ -277,12 +277,19 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
           return seastar::make_ready_future<seastar::stop_iteration>(
             seastar::stop_iteration::yes);
         }
-        std::get<0>(ret).emplace_back(current_cursor.get_ghobj());
+        ghobject_t ghobj = current_cursor.get_ghobj();
+        bool consume = ghobj.hobj.snap <= CEPH_MAXSNAP ||
+          ghobj.hobj.snap >= CEPH_NOSNAP;
+        if (consume) {
+          std::get<0>(ret).emplace_back(std::move(ghobj));
+        }
         return tree.get_next(trans, current_cursor
-        ).si_then([&to_list, &current_cursor] (auto&& next_cursor) mutable {
+        ).si_then([&to_list, &current_cursor, consume] (auto&& next_cursor) mutable {
           // we intentionally hold the current_cursor during get_next() to
           // accelerate tree lookup.
-          --to_list;
+          if (consume) {
+            --to_list;
+          }
           current_cursor = next_cursor;
           return seastar::make_ready_future<seastar::stop_iteration>(
 	        seastar::stop_iteration::no);
