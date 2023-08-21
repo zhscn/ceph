@@ -252,6 +252,8 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
   const ghobject_t& end,
   uint64_t limit)
 {
+  LOG_PREFIX(FLTreeOnodeManager::list_onodes);
+  DEBUGT("start {}, end {}, limit {}", trans, start, end, limit);
   return tree.lower_bound(trans, start
   ).si_then([this, &trans, end, limit] (auto&& cursor) {
     using crimson::os::seastore::onode::full_key_t;
@@ -263,16 +265,21 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
       return trans_intr::repeat(
           [this, &trans, end, &to_list, &current_cursor, &ret] ()
           -> eagain_ifuture<seastar::stop_iteration> {
+	LOG_PREFIX(FLTreeOnodeManager::list_onodes);
         if (current_cursor.is_end()) {
+	  DEBUGT("reached the onode tree end", trans);
           std::get<1>(ret) = ghobject_t::get_max();
           return seastar::make_ready_future<seastar::stop_iteration>(
             seastar::stop_iteration::yes);
         } else if (current_cursor.get_ghobj() >= end) {
+	  DEBUGT("reached the end {} > {}",
+	    trans, current_cursor.get_ghobj(), end);
           std::get<1>(ret) = end;
           return seastar::make_ready_future<seastar::stop_iteration>(
             seastar::stop_iteration::yes);
         }
         if (to_list == 0) {
+	  DEBUGT("reached the limit", trans);
           std::get<1>(ret) = current_cursor.get_ghobj();
           return seastar::make_ready_future<seastar::stop_iteration>(
             seastar::stop_iteration::yes);
@@ -281,6 +288,7 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
         bool consume = ghobj.hobj.snap <= CEPH_MAXSNAP ||
           ghobj.hobj.snap >= CEPH_NOSNAP;
         if (consume) {
+	  DEBUGT("found onode for {}", trans, ghobj);
           std::get<0>(ret).emplace_back(std::move(ghobj));
         }
         return tree.get_next(trans, current_cursor
