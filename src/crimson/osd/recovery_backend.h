@@ -45,10 +45,9 @@ public:
       coll{coll},
       backend{backend} {}
   virtual ~RecoveryBackend() {}
-  WaitForObjectRecovery& add_recovering(const hobject_t& soid) {
+  std::pair<WaitForObjectRecovery*, bool> add_recovering(const hobject_t& soid) {
     auto [it, added] = recovering.emplace(soid, new WaitForObjectRecovery{});
-    assert(added);
-    return *(it->second);
+    return {it->second.get(), added};
   }
   WaitForObjectRecovery& get_recovering(const hobject_t& soid) {
     assert(is_recovering(soid));
