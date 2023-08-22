@@ -460,6 +460,7 @@ ObjectDataHandler::write_ret do_insertions(
 	       ctx.t,
 	       region.addr,
 	       region.len);
+	ctx.t.written_size += region.len;
 	return ctx.tm.alloc_extents<ObjectDataBlock>(
 	  ctx.t,
 	  region.addr,

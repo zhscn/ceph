@@ -240,6 +240,8 @@ void Cache::register_metrics()
     sm::make_counter("write_hit_cold", stats.write_hit_cold, sm::description("")),
     sm::make_counter("read_hit_hot", stats.read_hit_hot, sm::description("")),
     sm::make_counter("read_hit_cold", stats.read_hit_cold, sm::description("")),
+    sm::make_counter("mutate_size", stats.mutate_size, sm::description("")),
+    sm::make_counter("mutate_count", stats.mutate_count, sm::description("")),
   });
 
   {
@@ -1705,6 +1707,10 @@ void Cache::complete_commit(
 
   stats.write_hit_hot += t.write_hit_hot;
   stats.write_hit_cold += t.write_hit_cold;
+  if (t.written_size != 0) {
+    stats.mutate_size += t.written_size;
+    stats.mutate_count++;
+  }
 }
 
 void Cache::init()

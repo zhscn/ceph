@@ -379,6 +379,7 @@ public:
   uint64_t read_hit_cold = 0;
 
   void reset_preserve_handle(journal_seq_t initiated_after) {
+    written_size = 0;
     write_hit_hot = 0;
     write_hit_cold = 0;
     read_hit_hot = 0;
@@ -558,6 +559,8 @@ public:
     assert(cur_onode);
     return *cur_onode;
   }
+
+  std::size_t written_size = 0;
 
 private:
   friend class Cache;

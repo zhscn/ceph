@@ -1549,6 +1549,9 @@ private:
     tracer_t write_delayed{};
     tracer_t write_alloced{};
     tracer_t submit_record{};
+
+    uint64_t mutate_count = 0;
+    uint64_t mutate_size = 0;
   } stats;
 
   template <typename CounterT>
