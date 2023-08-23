@@ -245,6 +245,12 @@ public:
   bool maybe_get_excl() {
     return lock.try_lock_for_excl();
   }
+
+  ~ObjectContext() {
+    assert(!list_hook.is_linked());
+    assert(!set_hook.is_linked());
+    assert(!obc_accessing_hook.is_linked());
+  }
 };
 using ObjectContextRef = ObjectContext::Ref;
 
@@ -260,6 +266,10 @@ public:
   }
   ObjectContextRef maybe_get_cached_obc(const hobject_t &hoid) {
     return obc_lru.get(hoid);
+  }
+
+  void clear() {
+    obc_lru.clear();
   }
 
   void clear_range(const hobject_t &from,
