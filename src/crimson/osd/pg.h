@@ -221,10 +221,7 @@ public:
 	start_peering_event_operation(std::move(*on_grant));
       }) : nullptr,
       priority,
-      on_preempt ? make_lambda_context(
-	[this, on_preempt=std::move(on_preempt)] (int) {
-	start_peering_event_operation(std::move(*on_preempt));
-      }) : nullptr);
+      nullptr);
   }
 
   void update_local_background_io_priority(
