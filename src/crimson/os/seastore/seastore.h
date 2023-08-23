@@ -242,7 +242,9 @@ public:
 	  static_cast<SeastoreCollection&>(*(ctx.ch)).ordering_lock
 	).then([this] {
 	  return throttler.get(1);
-	}).then([&, this] {
+	}).then([&, this, op_type] {
+	  add_wait_latency_sample(op_type,
+	      std::chrono::steady_clock::now() - ctx.begin_timestamp);
 	  stats.inflight_io_count++;
 	  return repeat_eagain([&, this] {
 	    ctx.reset_preserve_handle(*transaction_manager);
@@ -484,6 +486,7 @@ public:
 
     mutable struct {
       std::array<seastar::metrics::histogram, LAT_MAX> op_lat;
+      std::array<seastar::metrics::histogram, LAT_MAX> op_wait_lat;
       uint64_t inflight_io_count = 0;
       uint64_t inflight_read_count = 0;
     } stats;
@@ -494,12 +497,25 @@ public:
       return stats.op_lat[static_cast<std::size_t>(op_type)];
     }
 
+    seastar::metrics::histogram& get_wait_latency(
+      op_type_t op_type) {
+      assert(static_cast<std::size_t>(op_type) < stats.op_lat.size());
+      return stats.op_wait_lat[static_cast<std::size_t>(op_type)];
+    }
+
     void add_latency_sample(op_type_t op_type,
         std::chrono::steady_clock::duration dur) {
       seastar::metrics::histogram& lat = get_latency(op_type);
       lat.sample_count++;
       lat.sample_sum += std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
-     }
+    }
+
+    void add_wait_latency_sample(op_type_t op_type,
+        std::chrono::steady_clock::duration dur) {
+      seastar::metrics::histogram& lat = get_wait_latency(op_type);
+      lat.sample_count++;
+      lat.sample_sum += std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
+    }
 
   private:
     std::string root;

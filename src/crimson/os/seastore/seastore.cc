@@ -168,6 +168,19 @@ void SeaStore::Shard::register_metrics()
         ),
       }
     );
+
+    metrics.add_group(
+      "seastore",
+      {
+        sm::make_histogram(
+          "op_wait_lat", [this, op_type=op_type] {
+            return get_wait_latency(op_type);
+          },
+          sm::description(desc),
+          {label}
+        ),
+      }
+    );
   }
 
   metrics.add_group(
