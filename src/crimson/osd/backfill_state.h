@@ -55,6 +55,9 @@ struct BackfillState {
   struct Triggered : sc::event<Triggered> {
   };
 
+  struct RequestDone : sc::event<RequestDone> {
+  };
+
 private:
   // internal events
   struct RequestPrimaryScanning : sc::event<RequestPrimaryScanning> {
@@ -64,9 +67,6 @@ private:
   };
 
   struct RequestWaiting : sc::event<RequestWaiting> {
-  };
-
-  struct RequestDone : sc::event<RequestDone> {
   };
 
   class ProgressTracker;
