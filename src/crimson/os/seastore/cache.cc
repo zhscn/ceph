@@ -213,6 +213,26 @@ void Cache::register_metrics()
   }
 
   for (auto& [src, src_label] : labels_by_src) {
+    metrics.add_group(
+      "cache",
+      {
+        sm::make_counter(
+          "lba_alloc_count",
+          get_by_src(stats.lba_alloc_count, src).lba_alloc_count,
+          sm::description("total number of transaction created"),
+          {src_label}
+        ),
+        sm::make_counter(
+          "lba_alloc_count_total",
+          get_by_src(stats.lba_alloc_count, src).total_lba_alloc_count,
+          sm::description("total number of transaction created"),
+          {src_label}
+        )
+      }
+    );
+  }
+
+  for (auto& [src, src_label] : labels_by_src) {
     auto &e = get_by_src(stats.read_exts, src);
     for (auto& [et, et_label] : labels_by_ext) {
       metrics.add_group(
@@ -1727,6 +1747,10 @@ void Cache::complete_commit(
     stats.mutate_size += t.written_size;
     stats.mutate_count++;
   }
+  auto &alloc_status = get_by_src(stats.lba_alloc_count, t.get_src());
+  alloc_status.lba_alloc_count += t.lba_alloc_count;
+  alloc_status.total_lba_alloc_count += t.lba_alloc_count;
+  alloc_status.total_lba_alloc_count += t.rollback_lba_alloc_count;
 }
 
 void Cache::init()

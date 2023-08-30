@@ -378,7 +378,12 @@ public:
   uint64_t read_hit_hot = 0;
   uint64_t read_hit_cold = 0;
 
+  uint64_t rollback_lba_alloc_count = 0;
+  uint64_t lba_alloc_count = 0;
+
   void reset_preserve_handle(journal_seq_t initiated_after) {
+    rollback_lba_alloc_count += lba_alloc_count;
+    lba_alloc_count = 0;
     written_size = 0;
     write_hit_hot = 0;
     write_hit_cold = 0;

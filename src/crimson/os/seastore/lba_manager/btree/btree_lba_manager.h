@@ -248,7 +248,7 @@ public:
     retire_promotion_func_t retire_func,
     update_nextent_func_t update_func) final;
 
-  alloc_extents_ret alloc_extents(
+  alloc_extents_ret batch_alloc_extents(
     Transaction &t,
     laddr_t hint,
     extent_len_t len,

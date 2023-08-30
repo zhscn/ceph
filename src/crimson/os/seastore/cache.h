@@ -1504,7 +1504,13 @@ private:
     }
   };
 
+  struct search_status_t {
+    uint64_t lba_alloc_count = 0;
+    uint64_t total_lba_alloc_count = 0;
+  };
+
   struct {
+    counter_by_src_t<search_status_t> lba_alloc_count;
     counter_by_src_t<counter_by_extent_t<uint64_t>> read_exts;
     counter_by_src_t<uint64_t> trans_created_by_src;
     counter_by_src_t<commit_trans_efforts_t> committed_efforts_by_src;

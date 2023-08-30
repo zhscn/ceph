@@ -138,7 +138,7 @@ public:
 
   using alloc_extents_iertr = base_iertr;
   using alloc_extents_ret = alloc_extents_iertr::future<lba_pin_list_t>;
-  virtual alloc_extents_ret alloc_extents(
+  virtual alloc_extents_ret batch_alloc_extents(
     Transaction &t,
     laddr_t hint,
     extent_len_t len,

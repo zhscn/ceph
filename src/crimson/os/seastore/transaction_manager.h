@@ -393,7 +393,7 @@ public:
     for (auto &e : ret) {
       nextents.push_back(e.get());
     }
-    return lba_manager->alloc_extents(
+    return lba_manager->batch_alloc_extents(
       t,
       laddr_hint,
       len,

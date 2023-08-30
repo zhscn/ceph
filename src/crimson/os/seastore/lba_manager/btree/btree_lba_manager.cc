@@ -416,6 +416,7 @@ BtreeLBAManager::alloc_extent(
 	      interruptible::ready_future_marker{},
 	      seastar::stop_iteration::yes);
 	  } else {
+	    t.lba_alloc_count++;
 	    if (!is_shadow_laddr(pos.get_key())) {
 	      state.last_end = pos.get_key() + pos.get_val().len;
 	    }
@@ -651,7 +652,7 @@ BtreeLBAManager::demote_region(
 }
 
 BtreeLBAManager::alloc_extents_ret
-BtreeLBAManager::alloc_extents(
+BtreeLBAManager::batch_alloc_extents(
   Transaction &t,
   laddr_t hint,
   extent_len_t len,
@@ -669,7 +670,7 @@ BtreeLBAManager::alloc_extents(
     state_t(laddr_t hint) : last_end(hint) {}
   };
 
-  LOG_PREFIX(BtreeLBAManager::alloc_extents);
+  LOG_PREFIX(BtreeLBAManager::batch_alloc_extents);
   TRACET("{}~{}, hint={}", t, addr, len, hint);
   auto c = get_context(t);
   ++stats.num_alloc_extents;
