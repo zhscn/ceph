@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <ostream>
+#include <random>
 
 #include "common/hobject.h"
 #include "crimson/os/seastore/onode.h"
@@ -46,9 +47,14 @@ static laddr_t get_lba_hint(shard_t shard, pool_t pool, crush_hash_t crush) {
   // FIXME: It is possible that PGs from different pools share the same prefix
   // if the mask 0xFF is not long enough, result in unexpected transaction
   // conflicts.
-  return ((uint64_t)(shard & 0XFF)<<56 |
-          (uint64_t)(pool  & 0xFF)<<48 |
-          (uint64_t)(crush       )<<16);
+  static thread_local std::random_device r;
+  static thread_local std::default_random_engine e1(r());
+  static thread_local std::uniform_int_distribution<uint32_t> uniform_dist(0, std::numeric_limits<uint32_t>::max());
+  crush = uniform_dist(e1);
+  auto value = ((uint64_t)(shard & 0XFF)<<56 |
+                (uint64_t)(pool  & 0xFF)<<48 |
+                (uint64_t)(crush       )<<16);
+  return value;
 }
 
 struct node_offset_packed_t {
