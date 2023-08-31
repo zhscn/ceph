@@ -143,6 +143,8 @@ class ValueDeltaRecorder {
                                  NodeExtentMutable&,
                                  laddr_t) = 0;
 
+  virtual void record_delta(NodeExtentMutable &value) = 0;
+
  protected:
   ValueDeltaRecorder(ceph::bufferlist& encoded) : encoded{encoded} {}
 

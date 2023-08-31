@@ -94,6 +94,9 @@ class NodeExtentMutable {
       node_offset_t offset, node_offset_t len) const {
     return get_mutable_absolute(get_read() + offset, len);
   }
+  void reset() {
+    std::memset(p_start, 0, length);
+  }
 
  private:
   NodeExtentMutable(char* p_start, extent_len_t length)

@@ -87,6 +87,7 @@ class TestValue final : public Value {
     magic_t value;
   } __attribute__((packed));
 
+  class Recorder;
  private:
   struct payload_t {
     id_t id;
@@ -108,6 +109,8 @@ class TestValue final : public Value {
     static payload_t* get_write(NodeExtentMutable& payload_mut) {
       return reinterpret_cast<payload_t*>(payload_mut.get_write());
     }
+
+    friend class Recorder;
   };
 
  public:
@@ -118,16 +121,25 @@ class TestValue final : public Value {
       : ValueDeltaRecorder(encoded) {}
     ~Recorder() override = default;
 
-    void encode_set_id(NodeExtentMutable& payload_mut, id_t id) {
+    void encode_set_id(NodeExtentMutable& payload_mut) {
+      auto p_payload = Replayable::get_write(payload_mut);
       auto& encoded = get_encoded(payload_mut);
       ceph::encode(delta_op_t::UPDATE_ID, encoded);
-      ceph::encode(id, encoded);
+      ceph::encode(p_payload->id, encoded);
     }
 
-    void encode_set_tail_magic(NodeExtentMutable& payload_mut, magic_t magic) {
+    void encode_set_tail_magic(NodeExtentMutable& payload_mut) {
+      auto length = payload_mut.get_length();
+      auto offset_magic = length - sizeof(magic_t);
+      auto magic = *(magic_t*)(payload_mut.get_write() + offset_magic);
       auto& encoded = get_encoded(payload_mut);
       ceph::encode(delta_op_t::UPDATE_TAIL_MAGIC, encoded);
       ceph::encode(magic, encoded);
+    }
+
+    void record_delta(NodeExtentMutable &value) override {
+      encode_set_id(value);
+      encode_set_tail_magic(value);
     }
 
    protected:
@@ -185,10 +197,10 @@ class TestValue final : public Value {
   }
   void set_id_replayable(Transaction& t, id_t id) {
     auto value_mutable = prepare_mutate_payload<payload_t, Recorder>(t);
-    if (value_mutable.second) {
-      value_mutable.second->encode_set_id(value_mutable.first, id);
-    }
     Replayable::set_id(value_mutable.first, id);
+    if (value_mutable.second) {
+      value_mutable.second->encode_set_id(value_mutable.first);
+    }
   }
 
   magic_t get_tail_magic() const {
@@ -199,10 +211,10 @@ class TestValue final : public Value {
   }
   void set_tail_magic_replayable(Transaction& t, magic_t magic) {
     auto value_mutable = prepare_mutate_payload<payload_t, Recorder>(t);
-    if (value_mutable.second) {
-      value_mutable.second->encode_set_tail_magic(value_mutable.first, magic);
-    }
     Replayable::set_tail_magic(value_mutable.first, magic);
+    if (value_mutable.second) {
+      value_mutable.second->encode_set_tail_magic(value_mutable.first);
+    }
   }
 
   /*
@@ -215,6 +227,7 @@ class TestValue final : public Value {
     ceph_assert(get_payload_size() + sizeof(value_header_t) == item.size);
     set_id_replayable(t, item.id);
     set_tail_magic_replayable(t, item.magic);
+    this->item = item;
   }
 
   void validate(const item_t& item) const {
@@ -222,6 +235,8 @@ class TestValue final : public Value {
     ceph_assert(get_id() == item.id);
     ceph_assert(get_tail_magic() == item.magic);
   }
+ private:
+  item_t item;
 };
 
 using UnboundedValue = TestValue<

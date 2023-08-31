@@ -61,7 +61,7 @@ struct FLTreeOnode final : Onode, Value {
       bliter.copy(value.get_length(), value.get_write());
     }
 
-    void record_delta(NodeExtentMutable &value) {
+    void record_delta(NodeExtentMutable &value) override {
       // TODO: probably could use versioning, etc
       assert(value.get_length() == sizeof(onode_layout_t));
       ceph::buffer::ptr bptr(value.get_length());

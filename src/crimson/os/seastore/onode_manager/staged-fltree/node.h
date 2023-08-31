@@ -108,6 +108,13 @@ class tree_cursor_t final
    */
   bool is_invalid() const { return !ref_leaf_node; }
 
+  /**
+   * is_mutate
+   *
+   * Represents a cursor whose value may have been mutated.
+   */
+  bool is_mutate() const { return is_mutated; }
+
   /// Returns the key view in tree if it is not an end cursor.
   const key_view_t& get_key_view(value_magic_t magic) const {
     assert(is_tracked());
@@ -150,6 +157,9 @@ class tree_cursor_t final
 
   /// Trim and shrink the value payload.
   eagain_ifuture<> trim_value(context_t, value_size_t);
+
+  /// Reset the value payload to 0
+  void reset_value(context_t);
 
   static Ref<tree_cursor_t> get_invalid() {
     Ref<tree_cursor_t> INVALID = new tree_cursor_t();
@@ -704,6 +714,7 @@ class LeafNode final : public Node {
   Ref<tree_cursor_t> track_insert(
       const search_position_t&, match_stage_t, const value_header_t*);
   void track_split(const search_position_t&, Ref<LeafNode>);
+  void reset_values_on_split(context_t c, const search_position_t &split_pos);
   void track_erase(const search_position_t&, match_stage_t);
   void validate_tracked_cursors() const {
 #ifndef NDEBUG

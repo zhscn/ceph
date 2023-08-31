@@ -1592,12 +1592,21 @@ TEST_F(d_seastore_tm_test_t, 6_random_tree_insert_erase)
       INTR(tree->bootstrap, *t).unsafe_get();
       submit_transaction(std::move(t));
     }
+    if constexpr (TEST_SEASTORE) {
+      restart();
+      tree->reload(NodeExtentManager::create_seastore(*tm));
+    }
 
+    logger().info("to insert");
     // test insert
     {
       auto t = create_mutate_transaction();
       INTR(tree->insert, *t).unsafe_get();
       submit_transaction(std::move(t));
+    }
+    if constexpr (TEST_SEASTORE) {
+      restart();
+      tree->reload(NodeExtentManager::create_seastore(*tm));
     }
     {
       auto t = create_read_transaction();

@@ -153,6 +153,20 @@ tree_cursor_t::trim_value(context_t c, value_size_t trim_size)
   return ref_leaf_node->trim_value(c, position, trim_size);
 }
 
+void tree_cursor_t::reset_value(context_t c)
+{
+  LOG_PREFIX(LeafNode::reset_value);
+  DEBUGT("resetting pos {}", c.t, position);
+  assert(is_tracked());
+  assert(is_mutate());
+  auto [node_mutable, value_delta_recorder] =
+    prepare_mutate_value_payload(c);
+  if (value_delta_recorder) {
+    node_mutable.reset();
+    value_delta_recorder->record_delta(node_mutable);
+  }
+}
+
 template <bool VALIDATE>
 void tree_cursor_t::update_track(
     Ref<LeafNode> node, const search_position_t& pos)
@@ -1537,7 +1551,7 @@ eagain_ifuture<Ref<InternalNode>> InternalNode::insert_or_split(
     auto insert_value = insert_child->impl->laddr();
     auto [split_pos, is_insert_left, p_value] = impl->split_insert(
         fresh_right.mut, *right_node->impl, insert_key, insert_value,
-        insert_pos, insert_stage, insert_size);
+        insert_pos, insert_stage, insert_size, [](auto) {});
     assert(p_value->value == insert_value);
     track_split(split_pos, right_node);
 
@@ -2117,7 +2131,8 @@ eagain_ifuture<Ref<tree_cursor_t>> LeafNode::insert_value(
     impl->prepare_mutate(c);
     auto [split_pos, is_insert_left, p_value_header] = impl->split_insert(
         fresh_right.mut, *right_node->impl, key, vconf,
-        insert_pos, insert_stage, insert_size);
+        insert_pos, insert_stage, insert_size,
+	[this, c](auto split_pos) { reset_values_on_split(c, split_pos); });
     assert(p_value_header->payload_size == vconf.payload_size);
     track_split(split_pos, right_node);
     Ref<tree_cursor_t> ret;
@@ -2226,14 +2241,33 @@ Ref<tree_cursor_t> LeafNode::track_insert(
       this, insert_pos);
 }
 
+void LeafNode::reset_values_on_split(
+    context_t c, const search_position_t &split_pos)
+{
+  LOG_PREFIX(LeafNode::reset_values_on_split);
+  DEBUGT("split_pos {}", c.t, split_pos);
+  for (auto iter = tracked_cursors.lower_bound(split_pos);
+      iter != tracked_cursors.end();
+      iter++) {
+    auto p_cursor = iter->second;
+    DEBUGT("resetting {}", c.t, p_cursor->get_position());
+    if (p_cursor->is_mutate()) {
+      p_cursor->reset_value(c);
+    }
+  }
+}
+
 void LeafNode::track_split(
     const search_position_t& split_pos, Ref<LeafNode> right_node)
 {
+  LOG_PREFIX(LeafNode::track_split);
+  DEBUG("split_pos {}", split_pos);
   // update cursor ownership and position
   auto iter = tracked_cursors.lower_bound(split_pos);
   while (iter != tracked_cursors.end()) {
     auto new_pos = iter->first;
     auto p_cursor = iter->second;
+    DEBUG("updating track {}", p_cursor->get_position());
     iter = tracked_cursors.erase(iter);
     new_pos -= split_pos;
     p_cursor->update_track<false>(right_node, new_pos);

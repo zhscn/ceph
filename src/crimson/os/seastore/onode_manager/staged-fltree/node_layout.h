@@ -604,7 +604,8 @@ class NodeLayoutT final : public InternalNodeImpl, public LeafNodeImpl {
       NodeExtentMutable& right_mut, NodeImpl& _right_impl,
       const full_key_t<KEY_TYPE>& key, const value_input_t& value,
       search_position_t& _insert_pos, match_stage_t& insert_stage,
-      node_offset_t& insert_size) override {
+      node_offset_t& insert_size,
+      on_split_func_t on_split) override {
     LOG_PREFIX(OTree::Layout::split_insert);
     assert(_right_impl.node_type() == NODE_TYPE);
     assert(_right_impl.field_type() == FIELD_TYPE);
@@ -765,6 +766,8 @@ class NodeLayoutT final : public InternalNodeImpl, public LeafNodeImpl {
     }
     right_impl.validate_layout();
 
+    assert(split_at.valid());
+    on_split(normalize(split_at.get_pos()));
     // mutate left node
     if (is_insert_left) {
       SUBDEBUG(seastore_onode,

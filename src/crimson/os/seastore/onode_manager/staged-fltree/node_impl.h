@@ -58,6 +58,7 @@ class NodeExtentMutable;
  */
 class NodeImpl {
  public:
+  using on_split_func_t = std::function<void(const search_position_t&)>;
   virtual ~NodeImpl() = default;
 
   virtual node_type_t node_type() const = 0;
@@ -161,7 +162,7 @@ class InternalNodeImpl : public NodeImpl {
   #pragma GCC diagnostic ignored "-Woverloaded-virtual"
   virtual std::tuple<search_position_t, bool, const laddr_packed_t*> split_insert(
       NodeExtentMutable&, NodeImpl&, const key_view_t&, const laddr_t&,
-      search_position_t&, match_stage_t&, node_offset_t&) {
+      search_position_t&, match_stage_t&, node_offset_t&, on_split_func_t) {
     ceph_abort("impossible path");
   }
 
@@ -241,7 +242,7 @@ class LeafNodeImpl : public NodeImpl {
   #pragma GCC diagnostic ignored "-Woverloaded-virtual"
   virtual std::tuple<search_position_t, bool, const value_header_t*> split_insert(
       NodeExtentMutable&, NodeImpl&, const key_hobj_t&, const value_config_t&,
-      search_position_t&, match_stage_t&, node_offset_t&) {
+      search_position_t&, match_stage_t&, node_offset_t&, on_split_func_t) {
     ceph_abort("impossible path");
   }
 
