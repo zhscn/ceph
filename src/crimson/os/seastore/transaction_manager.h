@@ -216,7 +216,7 @@ public:
         auto lextent = extent->template cast<LogicalCachedExtent>();
         auto pin_laddr = pin->get_key();
         if (pin->is_indirect()) {
-          pin_laddr = pin->get_intermediate_key();
+          pin_laddr = pin->get_intermediate_base();
 	  assert(lextent->get_length() >=
 	    pin->get_length() + pin->get_intermediate_offset());
         }
@@ -511,7 +511,7 @@ public:
             remaps.end(),
             [this, &t, &original_bptr, &ret,
 	    &count, intermediate_base, intermediate_key, dec_res=std::move(dec_res),
-	    original_laddr, original_paddr, original_len](auto &remap) {
+	    original_laddr, original_paddr, original_len](auto &remap) mutable {
             LOG_PREFIX(TransactionManager::remap_pin);
             auto remap_offset = remap.offset;
             auto remap_len = remap.len;
@@ -528,6 +528,10 @@ public:
 	    auto shadow_paddr = dec_res.shadow_paddr;
 	    if (shadow_paddr != P_ADDR_NULL) {
 	      shadow_paddr = shadow_paddr.add_offset(remap_offset);
+	    }
+	    if (intermediate_key != L_ADDR_NULL) {
+	      assert(intermediate_base != L_ADDR_NULL);
+	      intermediate_key += remap_offset;
 	    }
             return alloc_remapped_extent<T>(
               t,
@@ -590,7 +594,7 @@ public:
    * clone_extent
    *
    * create an indirect lba mapping pointing to the physical
-   * lba mapping whose key is clone_offset. Resort to btree_lba_manager.h
+   * lba mapping whose key is intermediate_key. Resort to btree_lba_manager.h
    * for the definition of "indirect lba mapping" and "physical lba mapping"
    *
    */
@@ -600,25 +604,29 @@ public:
     Transaction &t,
     laddr_t hint,
     const LBAMapping &mapping) {
-    auto clone_offset =
+    auto intermediate_key =
       mapping.is_indirect()
 	? mapping.get_intermediate_key()
 	: mapping.get_key();
+    auto intermediate_base =
+      mapping.is_indirect()
+      ? mapping.get_intermediate_base()
+      : mapping.get_key();
 
     LOG_PREFIX(TransactionManager::clone_extent);
-    SUBDEBUGT(seastore_tm, "len={}, laddr_hint={}, clone_offset {}",
-      t, mapping.get_length(), hint, clone_offset);
+    SUBDEBUGT(seastore_tm, "len={}, laddr_hint={}, intermediate_key {}",
+      t, mapping.get_length(), hint, intermediate_key);
     ceph_assert(is_aligned(hint, epm->get_block_size()));
     return lba_manager->alloc_extent(
       t,
       hint,
       mapping.get_length(),
-      clone_offset,
+      intermediate_key,
       mapping.get_val(),
-      clone_offset,
+      intermediate_key,
       nullptr
-    ).si_then([this, &t, clone_offset](auto pin) {
-      return inc_ref(t, clone_offset
+    ).si_then([this, &t, intermediate_base](auto pin) {
+      return inc_ref(t, intermediate_base
       ).si_then([pin=std::move(pin)](auto) mutable {
 	return std::move(pin);
       }).handle_error_interruptible(
@@ -944,7 +952,7 @@ private:
 	pin->link_child(&extent);
 	extent.set_laddr(
 	  pin->is_indirect()
-	  ? pin->get_intermediate_key()
+	  ? pin->get_intermediate_base()
 	  : pin->get_key());
 	init_func(extent);
       }
@@ -991,7 +999,7 @@ private:
 	pin->link_child(&lextent);
 	lextent.set_laddr(
 	  pin->is_indirect()
-	  ? pin->get_intermediate_key()
+	  ? pin->get_intermediate_base()
 	  : pin->get_key());
       }
     ).si_then([FNAME, &t](auto ref) {
