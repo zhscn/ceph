@@ -694,6 +694,16 @@ ReplicatedRecoveryBackend::_handle_pull_response(
         recovery_waiter.obc = obc;
         obc->obs.oi.decode_no_oid(push_op.attrset.at(OI_ATTR), push_op.soid);
         pull_info.recovery_info.oi = obc->obs.oi;
+
+        auto ss_attr_iter = push_op.attrset.find(SS_ATTR);
+        if (ss_attr_iter != push_op.attrset.end()) {
+          if (!obc->ssc) {
+            obc->ssc = new crimson::osd::SnapSetContext(
+              push_op.soid.get_snapdir());
+          }
+          obc->ssc->snapset = SnapSet(ss_attr_iter->second);
+          obc->ssc->exists = true;
+        }
         return crimson::osd::PG::load_obc_ertr::now();
       }).handle_error_interruptible(crimson::ct_error::assert_all{});
   };
