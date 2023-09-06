@@ -785,6 +785,7 @@ _init_cached_extent(
       LOG_PREFIX(BtreeLBAManager::init_cached_extent);
       if (!iter.is_end() &&
 	  iter.get_key() == logn->get_laddr() &&
+	  iter.get_val().pladdr.is_paddr() &&
 	  iter.get_val().pladdr.get_paddr() == logn->get_paddr()) {
 	assert(!iter.get_leaf_node()->is_pending());
 	iter.get_leaf_node()->link_child(logn.get(), iter.get_leaf_pos());
