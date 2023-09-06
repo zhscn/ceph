@@ -209,22 +209,57 @@ auto ClientRequest::reply_op_error(const Ref<PG>& pg, int err)
 }
 
 ClientRequest::interruptible_future<>
-ClientRequest::process_op(instance_handle_t &ihref, Ref<PG> &pg)
+ClientRequest::recover_missings(
+  instance_handle_t &ihref, Ref<PG> &pg)
 {
   return ihref.enter_stage<interruptor>(
-    client_pp(*pg).recover_missing,
-    *this
-  ).then_interruptible(
-    [this, pg]() mutable {
-    LOG_PREFIX(ClientRequest::process_op);
-    if (pg->is_primary()) {
-      return do_recover_missing(pg, m->get_hobj());
-    } else {
+    client_pp(*pg).recover_missing, *this
+  ).then_interruptible([this, pg]() mutable {
+    if (!pg->is_primary()) {
+      LOG_PREFIX(ClientRequest::recover_missings);
       DEBUGI("process_op: Skipping do_recover_missing"
                      "on non primary pg");
       return interruptor::now();
     }
-  }).then_interruptible([this, pg, &ihref]() mutable {
+    auto fut = interruptor::now();
+    auto soid = m->get_hobj();
+    if (!soid.is_head()) {
+      fut = do_recover_missing(pg, soid.get_head());
+    }
+    return fut.then_interruptible([this, pg, soid] {
+      return pg->obc_loader.with_obc<RWState::RWREAD>(
+        soid.get_head(),
+        [this, pg, soid](auto head, auto) mutable {
+        auto oid = resolve_oid(head->get_head_ss(), soid);
+        assert(oid);
+        return do_recover_missing(pg, *oid
+        ).then_interruptible([this, pg, soid, head] {
+          return seastar::do_with(
+            snaps_need_to_recover(),
+            [pg, soid, head](auto &snaps) {
+            return interruptor::do_for_each(
+              snaps,
+              [pg, soid, head](auto &snap) mutable {
+              auto coid = head->obs.oi.soid;
+              coid.snap = snap;
+              auto oid = resolve_oid(head->get_head_ss(), coid);
+              assert(oid);
+              return do_recover_missing(pg, *oid);
+            });
+          });
+        });
+      });
+    }).handle_error_interruptible(
+      crimson::ct_error::assert_all("unexpected error")
+    );
+  });
+}
+
+ClientRequest::interruptible_future<>
+ClientRequest::process_op(instance_handle_t &ihref, Ref<PG> &pg)
+{
+  return recover_missings(ihref, pg
+  ).then_interruptible([this, pg, &ihref]() mutable {
     return pg->already_complete(m->get_reqid()).then_interruptible(
       [this, pg, &ihref](auto completed) mutable
       -> PG::load_obc_iertr::future<> {
@@ -243,7 +278,7 @@ ClientRequest::process_op(instance_handle_t &ihref, Ref<PG> &pg)
           op_info.set_from_op(&*m, *pg->get_osdmap());
           return pg->with_locked_obc(
             m->get_hobj(), op_info,
-            [this, pg, &ihref](auto obc) mutable {
+            [this, pg, &ihref](auto head, auto obc) mutable {
               LOG_PREFIX(ClientRequest::process_op);
               DEBUGI("{}: got obc {}", *this, obc->obs);
               return ihref.enter_stage<interruptor>(

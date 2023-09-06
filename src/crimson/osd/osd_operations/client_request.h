@@ -160,6 +160,16 @@ public:
   }
   auto get_instance_handle() { return instance_handle; }
 
+  std::vector<snapid_t> snaps_need_to_recover() {
+    std::vector<snapid_t> ret;
+    for (auto &op : m->ops) {
+      if (op.op.op == CEPH_OSD_OP_ROLLBACK) {
+	ret.emplace_back((snapid_t)op.op.snap.snapid);
+      }
+    }
+    return ret;
+  }
+
   using ordering_hook_t = boost::intrusive::list_member_hook<>;
   ordering_hook_t ordering_hook;
   class Orderer {
@@ -238,6 +248,10 @@ private:
   ::crimson::interruptible::interruptible_future<
     ::crimson::osd::IOInterruptCondition> process_pg_op(
     Ref<PG> &pg);
+  ::crimson::interruptible::interruptible_future<
+    ::crimson::osd::IOInterruptCondition> recover_missings(
+      instance_handle_t &ihref,
+      Ref<PG> &pg);
   ::crimson::interruptible::interruptible_future<
     ::crimson::osd::IOInterruptCondition> process_op(
       instance_handle_t &ihref,
