@@ -47,19 +47,13 @@ FLTreeOnodeManager::get_history_ret FLTreeOnodeManager::get_history(
     const ghobject_t &hoid;
     ghobject_t head;
     ghobject_t start_hoid;
-    ghobject_t history_start;
 
     onode_history_t res;
 
     state_t(const ghobject_t &hoid)
-      : hoid(hoid), head(hoid), start_hoid(hoid),
-        history_start(hoid) {
+      : hoid(hoid), head(hoid), start_hoid(hoid) {
       head.hobj.snap = CEPH_NOSNAP;
-      if (hoid.hobj.is_head()) {
-        start_hoid.hobj.snap = CEPH_MAXSNAP + 1;
-      } else {
-        history_start.hobj.snap = CEPH_MAXSNAP - hoid.hobj.snap;
-      }
+      start_hoid.hobj.snap = 0;
     }
 
     bool is_head() const {
@@ -96,8 +90,8 @@ FLTreeOnodeManager::get_history_ret FLTreeOnodeManager::get_history(
           auto obj = ghobject_t();
           if (cursor == tree.end()) {
             DEBUGT("reach tree end. hoid: {} head: {} start_hoid: {}, "
-		   "history_start: {} res length: {}",
-                   trans, s.hoid, s.head, s.start_hoid, s.history_start,
+		   "res length: {}",
+                   trans, s.hoid, s.head, s.start_hoid,
 		   s.res.data_onodes.size());
             return get_onode_iertr::make_ready_future<
               seastar::stop_iteration>(seastar::stop_iteration::yes);
@@ -106,24 +100,18 @@ FLTreeOnodeManager::get_history_ret FLTreeOnodeManager::get_history(
             if ((s.is_head() && obj > s.head) ||
                 (!s.is_head() && obj >= s.head)) {
               DEBUGT("cursor: {}. hoid: {} head: {} start_hoid: {}, "
-		     "history_start: {} res length: {}",
+		     "res length: {}",
                      trans, obj, s.hoid, s.head, s.start_hoid,
-                     s.history_start, s.res.data_onodes.size());
+                     s.res.data_onodes.size());
               return get_onode_iertr::make_ready_future<
                 seastar::stop_iteration>(seastar::stop_iteration::yes);
             }
           }
 
           DEBUGT("hoid: {}", trans, obj);
-          if (s.is_head() ||
-              obj == s.hoid ||
-              obj >= s.history_start) {
-            s.push(obj, cursor,
-	      default_data_reservation,
-	      default_metadata_range);
-          } else {
-            DEBUGT("skip hoid: {}", trans, obj);
-          }
+	  s.push(obj, cursor,
+	    default_data_reservation,
+	    default_metadata_range);
 
           return cursor.get_next(trans).si_then([&cursor](auto n) mutable {
             cursor = n;
