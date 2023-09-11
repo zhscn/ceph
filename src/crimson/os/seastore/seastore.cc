@@ -1395,7 +1395,8 @@ SeaStore::Shard::_do_transaction_step(
 
   using onode_iertr = OnodeManager::get_onode_iertr::extend<
     crimson::ct_error::value_too_large>;
-  auto fut = onode_iertr::make_ready_future<OnodeRef>(OnodeRef());
+  auto fut = onode_iertr::make_ready_future<
+    std::tuple<bool, OnodeRef>>(std::make_tuple(false, OnodeRef()));
   bool create = false;
   if (op->op == Transaction::OP_TOUCH ||
       op->op == Transaction::OP_CREATE ||
@@ -1405,13 +1406,18 @@ SeaStore::Shard::_do_transaction_step(
   }
   if (!onodes[op->oid]) {
     if (!create) {
-      fut = onode_manager->get_onode(*ctx.transaction, i.get_oid(op->oid));
+      fut = onode_manager->get_onode(*ctx.transaction, i.get_oid(op->oid)
+	).si_then([](auto onode) {
+	  return onode_iertr::make_ready_future<
+	    std::tuple<bool, OnodeRef>>(std::make_tuple(false, onode));
+	});
     } else {
       fut = onode_manager->get_or_create_onode(
         *ctx.transaction, i.get_oid(op->oid));
     }
   }
-  return fut.si_then([&, op](auto get_onode) {
+  return fut.si_then([&, op](auto t) {
+    auto &get_onode = std::get<1>(t);
     OnodeRef &o = onodes[op->oid];
     if (!o) {
       assert(get_onode);
@@ -1423,7 +1429,9 @@ SeaStore::Shard::_do_transaction_step(
       //      support parallel extents loading
       return onode_manager->get_or_create_onode(
 	*ctx.transaction, i.get_oid(op->dest_oid)
-      ).si_then([&, op](auto dest_onode) {
+      ).si_then([&, op](auto t) {
+	assert(std::get<0>(t));
+	auto &dest_onode = std::get<1>(t);
 	assert(dest_onode);
 	auto &d_o = onodes[op->dest_oid];
 	assert(!d_o);
@@ -1432,26 +1440,29 @@ SeaStore::Shard::_do_transaction_step(
 	d_onodes[op->dest_oid] = dest_onode;
 	const auto &src_oid = i.get_oid(op->oid);
 	const auto &dst_oid = i.get_oid(op->dest_oid);
-	if (src_oid.hobj.is_head()) {
-	  // clone
-	  return seastar::do_with(
-	    src_oid,
-	    [&dst_oid, &src_oid, this, &data_onodes,
-	    op, &new_data_onode, &ctx](auto &data_oid) {
+	return seastar::do_with(
+	  ghobject_t(src_oid.hobj.get_head()),
+	  [&dst_oid, &src_oid, this, &data_onodes,
+	  op, &new_data_onode, &ctx](auto &data_oid) {
+	  if (src_oid.hobj.is_head()) {
+	    assert(!dst_oid.hobj.is_head());
 	    data_oid.hobj.snap.val -= dst_oid.hobj.snap.val;
-            assert(data_oid > dst_oid && data_oid < src_oid);
-	    return onode_manager->get_or_create_onode(*ctx.transaction, data_oid
-	    ).si_then([&, op](auto data_onode) {
+	  } else {
+	    assert(dst_oid.hobj.is_head());
+	    data_oid.hobj.snap.val -= src_oid.hobj.snap.val;
+	  }
+	  assert((data_oid > dst_oid && data_oid < src_oid)
+	    || (data_oid < dst_oid && data_oid > src_oid));
+	  return onode_manager->get_or_create_onode(*ctx.transaction, data_oid
+	  ).si_then([&, op](auto t) {
+	    auto created = std::get<0>(t);
+	    auto &data_onode = std::get<1>(t);
+	    if (created) {
 	      new_data_onode = data_onode;
 	      data_onodes[op->oid] = {};
-	    });
+	    }
 	  });
-	} else {
-	  //rollback
-	  assert(dst_oid.hobj.is_head());
-	  assert(src_oid.hobj.is_snap());
-          return OnodeManager::get_or_create_onode_iertr::now();
-	}
+	});
 	return OnodeManager::get_or_create_onode_iertr::now();
       });
     } else {

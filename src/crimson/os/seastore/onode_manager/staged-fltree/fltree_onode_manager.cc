@@ -153,9 +153,8 @@ FLTreeOnodeManager::get_or_create_onode(
       DEBUGT("created onode for entry for {}", trans, hoid);
       val->get_mutable_layout(trans) = onode_layout_t{};
     }
-    return get_or_create_onode_iertr::make_ready_future<OnodeRef>(
-      val
-    );
+    return get_or_create_onode_iertr::make_ready_future<
+      std::tuple<bool, OnodeRef>>(std::make_tuple(created, val));
   });
 }
 
@@ -172,7 +171,8 @@ FLTreeOnodeManager::get_or_create_onodes(
         hoids,
         [this, &trans, &ret](auto &hoid) {
           return get_or_create_onode(trans, hoid
-          ).si_then([&ret](auto &&onoderef) {
+          ).si_then([&ret](auto t) {
+	    auto &onoderef = std::get<1>(t);
             ret.push_back(std::move(onoderef));
           });
         }).si_then([&ret] {

@@ -115,11 +115,11 @@ struct fltree_onode_manager_test_t
   void with_onode_write(iterator_t& it, F&& f) {
     with_transaction([this, &it, f=std::move(f)] (auto& t) {
       auto p_kv = *it;
-      auto onode = with_trans_intr(t, [&](auto &t) {
+      auto [created, onode] = with_trans_intr(t, [&](auto &t) {
         return manager->get_or_create_onode(t, p_kv->key);
       }).unsafe_get0();
       std::invoke(f, t, *onode, p_kv->value);
-      with_trans_intr(t, [&](auto &t) {
+      with_trans_intr(t, [&, onode=onode](auto &t) {
 	if (onode->is_alive()) {
 	  return manager->write_dirty(t, {onode});
 	} else {

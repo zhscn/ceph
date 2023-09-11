@@ -55,7 +55,7 @@ public:
   using get_or_create_onode_iertr = base_iertr::extend<
     crimson::ct_error::value_too_large>;
   using get_or_create_onode_ret = get_or_create_onode_iertr::future<
-    OnodeRef>;
+    std::tuple<bool, OnodeRef>>;
   virtual get_or_create_onode_ret get_or_create_onode(
     Transaction &trans,
     const ghobject_t &hoid) = 0;
