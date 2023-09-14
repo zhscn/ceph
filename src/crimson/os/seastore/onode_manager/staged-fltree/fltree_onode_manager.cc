@@ -44,7 +44,7 @@ FLTreeOnodeManager::get_history_ret FLTreeOnodeManager::get_history(
   const ghobject_t &hoid)
 {
   struct state_t {
-    const ghobject_t &hoid;
+    ghobject_t hoid;
     ghobject_t head;
     ghobject_t start_hoid;
 
