@@ -468,7 +468,10 @@ public:
             ret->cast<T>());
         });
       } else {
-        touch_extent(*ret);
+	assert(!ret->is_mutable());
+	if (!ret->is_exist_clean()) {
+	  touch_extent(*ret);
+	}
         SUBDEBUGT(seastore_cache, "{} {}~{} is present on t without been \
           fully loaded, reading ... {}", t, T::TYPE, offset, length, *ret);
         auto bp = alloc_cache_buf(ret->get_length());
@@ -566,7 +569,10 @@ public:
     // user should not see RETIRED_PLACEHOLDER extents
     ceph_assert(p_extent->get_type() != extent_types_t::RETIRED_PLACEHOLDER);
     if (!p_extent->is_fully_loaded()) {
-      touch_extent(*p_extent);
+      assert(!p_extent->is_mutable());
+      if (!p_extent->is_exist_clean()) {
+	touch_extent(*p_extent);
+      }
       LOG_PREFIX(Cache::get_extent_viewable_by_trans);
       SUBDEBUG(seastore_cache,
         "{} {}~{} is present without been fully loaded, reading ... -- {}",
@@ -666,7 +672,10 @@ private:
 	  return seastar::make_ready_future<CachedExtentRef>(ret);
         });
       } else {
-        touch_extent(*ret);
+	assert(!ret->is_mutable());
+	if (!ret->is_exist_clean()) {
+	  touch_extent(*ret);
+	}
         SUBDEBUGT(seastore_cache, "{} {}~{} {} is present on t without been \
                   fully loaded, reading ...", t, type, offset, length, laddr);
         auto bp = alloc_cache_buf(ret->get_length());
