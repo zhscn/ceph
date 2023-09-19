@@ -226,17 +226,17 @@ ClientRequest::recover_missings(
     if (!soid.is_head()) {
       fut = do_recover_missing(pg, soid.get_head());
     }
-    return fut.then_interruptible([this, pg, soid] {
+    return fut.then_interruptible([this, pg, soid]() mutable {
       return pg->obc_loader.with_obc<RWState::RWREAD>(
         soid.get_head(),
         [this, pg, soid](auto head, auto) mutable {
         auto oid = resolve_oid(head->get_head_ss(), soid);
         assert(oid);
         return do_recover_missing(pg, *oid
-        ).then_interruptible([this, pg, soid, head] {
+        ).then_interruptible([this, pg, soid, head]() mutable {
           return seastar::do_with(
             snaps_need_to_recover(),
-            [pg, soid, head](auto &snaps) {
+            [pg, soid, head](auto &snaps) mutable {
             return interruptor::do_for_each(
               snaps,
               [pg, soid, head](auto &snap) mutable {

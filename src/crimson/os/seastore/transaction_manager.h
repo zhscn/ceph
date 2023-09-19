@@ -474,7 +474,7 @@ public:
 				  ? pin->get_intermediate_key()
 				  : L_ADDR_NULL,
               original_paddr = pin->get_val(),
-              original_len = pin->get_length()](auto ext) {
+              original_len = pin->get_length()](auto ext) mutable {
       std::optional<ceph::bufferptr> original_bptr;
       LOG_PREFIX(TransactionManager::remap_pin);
       SUBDEBUGT(seastore_tm,
@@ -501,11 +501,11 @@ public:
         std::vector<remap_entry>(remaps.begin(), remaps.end()),
         [this, &t, original_laddr, original_paddr,
 	original_len, intermediate_base, intermediate_key]
-        (auto &ret, auto &count, auto &original_bptr, auto &remaps) {
+        (auto &ret, auto &count, auto &original_bptr, auto &remaps) mutable {
         return dec_ref(t, original_laddr, false
         ).si_then([this, &t, &original_bptr, &ret, &count,
 		   &remaps, intermediate_base, intermediate_key,
-                   original_laddr, original_paddr, original_len](auto dec_res) {
+                   original_laddr, original_paddr, original_len](auto dec_res) mutable {
           return trans_intr::do_for_each(
             remaps.begin(),
             remaps.end(),
