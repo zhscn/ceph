@@ -29,14 +29,14 @@ public:
     if (max_tokens != 0) {
       tokens = max_tokens;
       timer.set_callback([this] {
-        tokens += max_tokens / 100;
+        tokens += max_tokens / 10;
         if (tokens > max_tokens) {
           tokens = max_tokens;
         }
         do_wake();
       });
       if (!timer.armed()) {
-        timer.arm_periodic(std::chrono::milliseconds(10));
+        timer.arm_periodic(std::chrono::milliseconds(100));
       }
     }
   }
