@@ -122,7 +122,7 @@ public:
                      rewrite_gen_t gen,
                      SegmentProvider &sp,
                      SegmentSeqAllocator &ssa,
-                     uint64_t bw_limit);
+                     TokenBucket &buckets);
 
   open_ertr::future<> open() final {
     token_bucket.start();
@@ -160,14 +160,14 @@ private:
   journal::SegmentAllocator segment_allocator;
   journal::RecordSubmitter record_submitter;
   seastar::gate write_guard;
-  TokenBucket token_bucket;
+  TokenBucket &token_bucket;
 };
 
 
 class RandomBlockOolWriter : public ExtentOolWriter {
 public:
-  RandomBlockOolWriter(RBMCleaner* rb_cleaner, uint64_t bw_limit) :
-    rb_cleaner(rb_cleaner), token_bucket(bw_limit) {}
+  RandomBlockOolWriter(RBMCleaner* rb_cleaner, TokenBucket &bucket) :
+    rb_cleaner(rb_cleaner), token_bucket(bucket) {}
 
   using open_ertr = ExtentOolWriter::open_ertr;
   open_ertr::future<> open() final {
@@ -199,7 +199,7 @@ private:
 
   RBMCleaner* rb_cleaner;
   seastar::gate write_guard;
-  TokenBucket token_bucket;
+  TokenBucket &token_bucket;
 };
 
 struct cleaner_usage_t {
@@ -1075,6 +1075,7 @@ private:
   std::vector<ExtentOolWriter*> data_writers_by_gen;
   // gen 0 METADATA writer is the journal writer
   std::vector<ExtentOolWriter*> md_writers_by_gen;
+  std::vector<TokenBucket> token_buckets;
 
   std::vector<Device*> devices_by_id;
   Device* primary_device = nullptr;

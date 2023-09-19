@@ -15,7 +15,7 @@ SegmentedOolWriter::SegmentedOolWriter(
   rewrite_gen_t gen,
   SegmentProvider& sp,
   SegmentSeqAllocator &ssa,
-  uint64_t bw_limit)
+  TokenBucket &bucket)
   : segment_allocator(nullptr, category, gen, sp, ssa),
     record_submitter(crimson::common::get_conf<uint64_t>(
                        "seastore_journal_iodepth_limit"),
@@ -26,7 +26,7 @@ SegmentedOolWriter::SegmentedOolWriter(
                      crimson::common::get_conf<double>(
                        "seastore_journal_batch_preferred_fullness"),
                      segment_allocator),
-    token_bucket(bw_limit)
+    token_bucket(bucket)
 {
 }
 
@@ -204,6 +204,8 @@ void ExtentPlacementManager::init(
   auto secondary_bw_limit = crimson::common::get_conf<
     Option::size_t>("seastore_secondary_backend_bw_throttle");
 
+  token_buckets.emplace_back(main_bw_limit);
+
   if (trimmer->get_journal_type() == journal_type_t::SEGMENTED) {
     auto segment_cleaner = dynamic_cast<SegmentCleaner*>(cleaner.get());
     ceph_assert(segment_cleaner != nullptr);
@@ -213,7 +215,7 @@ void ExtentPlacementManager::init(
     for (rewrite_gen_t gen = OOL_GENERATION; gen < MIN_COLD_GENERATION; ++gen) {
       writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
 	    data_category_t::DATA, gen, *segment_cleaner,
-            *ool_segment_seq_allocator, main_bw_limit));
+            *ool_segment_seq_allocator, token_buckets.back()));
       data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
     }
 
@@ -221,7 +223,7 @@ void ExtentPlacementManager::init(
     for (rewrite_gen_t gen = OOL_GENERATION; gen < MIN_COLD_GENERATION; ++gen) {
       writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
 	    data_category_t::METADATA, gen, *segment_cleaner,
-            *ool_segment_seq_allocator, main_bw_limit));
+            *ool_segment_seq_allocator, token_buckets.back()));
       md_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
     }
 
@@ -237,7 +239,7 @@ void ExtentPlacementManager::init(
     data_writers_by_gen.resize(num_writers, {});
     md_writers_by_gen.resize(num_writers, {});
     writer_refs.emplace_back(std::make_unique<RandomBlockOolWriter>(
-	    rb_cleaner, main_bw_limit));
+	    rb_cleaner, token_buckets.back()));
     // TODO: implement eviction in RBCleaner and introduce further writers
     data_writers_by_gen[generation_to_writer(OOL_GENERATION)] = writer_refs.back().get();
     md_writers_by_gen[generation_to_writer(OOL_GENERATION)] = writer_refs.back().get();
@@ -247,18 +249,19 @@ void ExtentPlacementManager::init(
   }
 
   if (cold_cleaner) {
+    token_buckets.emplace_back(secondary_bw_limit);
     if (cold_cleaner->get_backend_type() == backend_type_t::SEGMENTED) {
       auto cold_segment_cleaner = static_cast<SegmentCleaner*>(cold_cleaner.get());
       for (rewrite_gen_t gen = MIN_COLD_GENERATION; gen < REWRITE_GENERATIONS; ++gen) {
         writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
               data_category_t::DATA, gen, *cold_segment_cleaner,
-              *ool_segment_seq_allocator, secondary_bw_limit));
+              *ool_segment_seq_allocator, token_buckets.back()));
         data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
       }
       for (rewrite_gen_t gen = MIN_COLD_GENERATION; gen < REWRITE_GENERATIONS; ++gen) {
         writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
               data_category_t::METADATA, gen, *cold_segment_cleaner,
-              *ool_segment_seq_allocator, secondary_bw_limit));
+              *ool_segment_seq_allocator, token_buckets.back()));
         md_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
       }
       for (auto *device : cold_segment_cleaner->get_segment_manager_group()
@@ -269,7 +272,7 @@ void ExtentPlacementManager::init(
       ceph_assert(cold_cleaner->get_backend_type() == backend_type_t::RANDOM_BLOCK);
       auto rb_cleaner = static_cast<RBMCleaner*>(cold_cleaner.get());
       ceph_assert(rb_cleaner);
-      writer_refs.emplace_back(std::make_unique<RandomBlockOolWriter>(rb_cleaner, secondary_bw_limit));
+      writer_refs.emplace_back(std::make_unique<RandomBlockOolWriter>(rb_cleaner, token_buckets.back()));
       for (rewrite_gen_t gen = MIN_COLD_GENERATION; gen < REWRITE_GENERATIONS; ++gen) {
         data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
       }
