@@ -444,6 +444,13 @@ public:
            state == extent_state_t::EXIST_CLEAN;
   }
 
+  /// Returns true if extent is stable and clean
+  bool is_stable_clean() const {
+    ceph_assert(is_valid());
+    return state == extent_state_t::CLEAN ||
+           state == extent_state_t::CLEAN_PENDING;
+  }
+
   /// Ruturns true if data is persisted while metadata isn't
   bool is_exist_clean() const {
     return state == extent_state_t::EXIST_CLEAN;

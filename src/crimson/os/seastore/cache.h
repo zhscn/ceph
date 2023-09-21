@@ -469,9 +469,7 @@ public:
         });
       } else {
 	assert(!ret->is_mutable());
-	if (!ret->is_exist_clean()) {
-	  touch_extent(*ret);
-	}
+	touch_extent(*ret);
         SUBDEBUGT(seastore_cache, "{} {}~{} is present on t without been \
           fully loaded, reading ... {}", t, T::TYPE, offset, length, *ret);
         auto bp = alloc_cache_buf(ret->get_length());
@@ -570,9 +568,7 @@ public:
     ceph_assert(p_extent->get_type() != extent_types_t::RETIRED_PLACEHOLDER);
     if (!p_extent->is_fully_loaded()) {
       assert(!p_extent->is_mutable());
-      if (!p_extent->is_exist_clean()) {
-	touch_extent(*p_extent);
-      }
+      touch_extent(*p_extent);
       LOG_PREFIX(Cache::get_extent_viewable_by_trans);
       SUBDEBUG(seastore_cache,
         "{} {}~{} is present without been fully loaded, reading ... -- {}",
@@ -673,9 +669,7 @@ private:
         });
       } else {
 	assert(!ret->is_mutable());
-	if (!ret->is_exist_clean()) {
-	  touch_extent(*ret);
-	}
+	touch_extent(*ret);
         SUBDEBUGT(seastore_cache, "{} {}~{} {} is present on t without been \
                   fully loaded, reading ...", t, type, offset, length, laddr);
         auto bp = alloc_cache_buf(ret->get_length());
@@ -1356,7 +1350,7 @@ public:
   {
     if (p_src && is_background_transaction(*p_src))
       return;
-    if (ext.is_clean() && !ext.is_placeholder()) {
+    if (ext.is_stable_clean() && !ext.is_placeholder()) {
       memory_cache->move_to_top(ext);
     }
   }
