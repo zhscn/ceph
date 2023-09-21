@@ -34,7 +34,7 @@ seastar::future<> PGShardManager::load_pgs(crimson::os::FuturizedStore& store)
 	      return shard_services.load_pg(
 		pgid
 	      ).then([pgid, &per_shard_state](auto &&pg) {
-		logger().info("load_pgs: loaded {}", pgid);
+		logger().info("load_pgs: loaded {}", *pg);
 		per_shard_state.pg_map.pg_loaded(pgid, std::move(pg));
 		return seastar::now();
 	      });

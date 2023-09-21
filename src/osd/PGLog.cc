@@ -1093,6 +1093,7 @@ namespace {
     std::optional<std::string> next;
 
     void process_entry(const auto& key, const auto& value) {
+      ldpp_dout(dpp, 20) << " pg(" << info.pgid << ") read_log_and_missing key: " << key << dendl;
       if (key[0] == '_')
         return;
       //Copy ceph::buffer::list before creating iterator
@@ -1100,7 +1101,7 @@ namespace {
       auto bp = bl.cbegin();
       if (key == "divergent_priors") {
         decode(divergent_priors, bp);
-        ldpp_dout(dpp, 20) << "read_log_and_missing " << divergent_priors.size()
+        ldpp_dout(dpp, 20) << "pg(" << info.pgid << ") read_log_and_missing " << divergent_priors.size()
                            << " divergent_priors" << dendl;
         ceph_assert("crimson shouldn't have had divergent_priors" == 0);
       } else if (key == "can_rollback_to") {
@@ -1128,7 +1129,7 @@ namespace {
       } else {
         pg_log_entry_t e;
         e.decode_with_checksum(bp);
-        ldpp_dout(dpp, 20) << "read_log_and_missing " << e << dendl;
+        ldpp_dout(dpp, 20) << "pg(" << info.pgid << ") read_log_and_missing " << e << dendl;
         if (!entries.empty()) {
           pg_log_entry_t last_e(entries.back());
           ceph_assert(last_e.version.version < e.version.version);
@@ -1154,6 +1155,12 @@ namespace {
                ghobject_t &pgmeta_oid,
                std::optional<std::string> &start) {
           return seastar::repeat([this, &ch, &pgmeta_oid, &start]() {
+	    if (start) {
+	      ldpp_dout(dpp, 20) << "pg(" << info << ") getting pglog" << dendl;
+	    } else {
+	      ldpp_dout(dpp, 20) << "pg(" << info.pgid
+				 << ") getting pglog start: " << *start << dendl;
+	    }
             return store.omap_get_values(
               ch, pgmeta_oid, start
             ).safe_then([this, &start](const auto& ret) {

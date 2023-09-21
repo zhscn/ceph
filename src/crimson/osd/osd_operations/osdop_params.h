@@ -20,3 +20,22 @@ struct osd_op_params_t {
 
   osd_op_params_t() = default;
 };
+
+inline std::ostream &operator<<(std::ostream &out, const osd_op_params_t &osdop_param)
+{
+  return out << "osdop_param("
+	     << "req_id=(" << osdop_param.req_id << "), "
+	     << "at_version=(" << osdop_param.at_version << "), "
+	     << "pg_trim_to=(" << osdop_param.pg_trim_to << "), "
+	     << "min_last_complete_ondisk=("
+	     << osdop_param.min_last_complete_ondisk << "), "
+	     << "last_complete=(" << osdop_param.last_complete << "), "
+	     << "user_at_version=(" << osdop_param.user_at_version << "), "
+	     << "user_modify=(" << osdop_param.user_modify << "), "
+	     << "clean_regions=(" << osdop_param.clean_regions << "), "
+	     << ")" << std::endl;
+}
+
+#if FMT_VERSION >= 90000
+template <> struct fmt::formatter<osd_op_params_t> : fmt::ostream_formatter {};
+#endif

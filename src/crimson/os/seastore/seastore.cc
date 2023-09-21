@@ -1072,6 +1072,8 @@ SeaStore::Shard::omap_get_values(
   const omap_keys_t &keys)
 {
   auto c = static_cast<SeastoreCollection*>(ch.get());
+  LOG_PREFIX(SeaStore::omap_get_values);
+  DEBUG("{} {} for keys", c->get_cid(), oid);
   return repeat_with_onode<omap_values_t>(
     c,
     oid,

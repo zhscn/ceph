@@ -1259,7 +1259,7 @@ void PG::log_operation(
   bool transaction_applied,
   ObjectStore::Transaction &txn,
   bool async) {
-  logger().debug("{}", __func__);
+  logger().debug("{} trim_to {}", __func__, trim_to);
   if (is_primary()) {
     ceph_assert(trim_to <= peering_state.get_last_update_ondisk());
   }

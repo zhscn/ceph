@@ -492,7 +492,7 @@ ReplicatedRecoveryBackend::read_metadata_for_push_op(
 	  logger().debug("read_metadata_for_push_op, error {} when getting attrs: {}", e, oid);
 	  return seastar::make_ready_future<crimson::os::FuturizedStore::Shard::attrs_t>();
 	}))
-  )).then_unpack_interruptible([&new_progress, push_op](auto bl, auto attrs) {
+  )).then_unpack_interruptible([&new_progress, push_op, oid](auto bl, auto attrs) {
     if (bl.length() == 0) {
       logger().warn("read_metadata_for_push_op: fail to read omap header");
     } else if (attrs.empty()) {
@@ -501,9 +501,11 @@ ReplicatedRecoveryBackend::read_metadata_for_push_op(
     }
     push_op->omap_header.claim_append(std::move(bl));
     for (auto&& [key, val] : attrs) {
+      logger().debug("read_metadata_for_push_op: {} attr {}", oid, key);
       push_op->attrset.emplace(std::move(key), std::move(val));
     }
-    logger().debug("read_metadata_for_push_op: {}", push_op->attrset[OI_ATTR]);
+    logger().debug("read_metadata_for_push_op: {} {}",
+      oid, push_op->attrset[OI_ATTR]);
     object_info_t oi;
     oi.decode_no_oid(push_op->attrset[OI_ATTR]);
     new_progress.first = false;
@@ -1149,8 +1151,14 @@ ReplicatedRecoveryBackend::submit_push_data(
 
     if (!omap_entries.empty())
       t->omap_setkeys(coll->get_cid(), ghobject_t(target_oid), omap_entries);
-    if (!attrs.empty())
+    if (!attrs.empty()) {
+#ifndef NDEBUG
+      for (auto &attr : attrs) {
+        logger().debug("submit_push_data: {} attr {}", recovery_info.soid, attr.first);
+      }
+#endif
       t->setattrs(coll->get_cid(), ghobject_t(target_oid), attrs);
+    }
 
     if (complete) {
       if (!first) {
