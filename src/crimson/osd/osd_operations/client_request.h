@@ -249,10 +249,6 @@ private:
     ::crimson::osd::IOInterruptCondition> process_pg_op(
     Ref<PG> &pg);
   ::crimson::interruptible::interruptible_future<
-    ::crimson::osd::IOInterruptCondition> recover_missings(
-      instance_handle_t &ihref,
-      Ref<PG> &pg);
-  ::crimson::interruptible::interruptible_future<
     ::crimson::osd::IOInterruptCondition> process_op(
       instance_handle_t &ihref,
       Ref<PG> &pg);
