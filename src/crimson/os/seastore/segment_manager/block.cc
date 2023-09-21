@@ -738,7 +738,7 @@ void BlockSegmentManager::register_metrics()
   DEBUG("{}", device_id_printer_t{get_device_id()});
   namespace sm = seastar::metrics;
   std::vector<sm::label_instance> label_instances;
-  label_instances.push_back(sm::label_instance("device_id", get_device_id()));
+  label_instances.push_back(sm::label_instance("device_id", (int)get_device_id()));
   stats.reset();
   metrics.add_group(
     "segment_manager",
