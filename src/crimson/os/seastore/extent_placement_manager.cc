@@ -205,6 +205,7 @@ void ExtentPlacementManager::init(
     Option::size_t>("seastore_secondary_backend_bw_throttle");
 
   token_buckets.emplace_back(main_bw_limit);
+  token_buckets.back().start();
 
   if (trimmer->get_journal_type() == journal_type_t::SEGMENTED) {
     auto segment_cleaner = dynamic_cast<SegmentCleaner*>(cleaner.get());
@@ -250,6 +251,7 @@ void ExtentPlacementManager::init(
 
   if (cold_cleaner) {
     token_buckets.emplace_back(secondary_bw_limit);
+    token_buckets.back().start();
     if (cold_cleaner->get_backend_type() == backend_type_t::SEGMENTED) {
       auto cold_segment_cleaner = static_cast<SegmentCleaner*>(cold_cleaner.get());
       for (rewrite_gen_t gen = MIN_COLD_GENERATION; gen < REWRITE_GENERATIONS; ++gen) {
@@ -407,6 +409,9 @@ ExtentPlacementManager::close()
 {
   LOG_PREFIX(ExtentPlacementManager::close);
   INFO("started");
+  for (auto &token_bucket : token_buckets) {
+    token_bucket.stop();
+  }
   return crimson::do_for_each(data_writers_by_gen, [](auto &writer) {
     if (writer) {
       return writer->close();

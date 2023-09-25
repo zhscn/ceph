@@ -125,7 +125,6 @@ public:
                      TokenBucket &buckets);
 
   open_ertr::future<> open() final {
-    token_bucket.start();
     return record_submitter.open(false).discard_result();
   }
 
@@ -134,7 +133,6 @@ public:
     std::list<LogicalCachedExtentRef> &extents) final;
 
   close_ertr::future<> close() final {
-    token_bucket.stop();
     return write_guard.close().then([this] {
       return record_submitter.close();
     }).safe_then([this] {
@@ -171,7 +169,6 @@ public:
 
   using open_ertr = ExtentOolWriter::open_ertr;
   open_ertr::future<> open() final {
-    token_bucket.start();
     return open_ertr::now();
   }
 
@@ -180,7 +177,6 @@ public:
     std::list<LogicalCachedExtentRef> &extents) final;
 
   close_ertr::future<> close() final {
-    token_bucket.stop();
     return write_guard.close().then([this] {
       write_guard = seastar::gate();
       return close_ertr::now();
