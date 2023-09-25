@@ -204,8 +204,8 @@ void ExtentPlacementManager::init(
   auto secondary_bw_limit = crimson::common::get_conf<
     Option::size_t>("seastore_secondary_backend_bw_throttle");
 
-  token_buckets.emplace_back(main_bw_limit);
-  token_buckets.back().start();
+  token_buckets.emplace_back(std::make_unique<TokenBucket>(main_bw_limit));
+  token_buckets.back()->start();
 
   if (trimmer->get_journal_type() == journal_type_t::SEGMENTED) {
     auto segment_cleaner = dynamic_cast<SegmentCleaner*>(cleaner.get());
@@ -216,7 +216,7 @@ void ExtentPlacementManager::init(
     for (rewrite_gen_t gen = OOL_GENERATION; gen < MIN_COLD_GENERATION; ++gen) {
       writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
 	    data_category_t::DATA, gen, *segment_cleaner,
-            *ool_segment_seq_allocator, token_buckets.back()));
+            *ool_segment_seq_allocator, *token_buckets.back()));
       data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
     }
 
@@ -224,7 +224,7 @@ void ExtentPlacementManager::init(
     for (rewrite_gen_t gen = OOL_GENERATION; gen < MIN_COLD_GENERATION; ++gen) {
       writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
 	    data_category_t::METADATA, gen, *segment_cleaner,
-            *ool_segment_seq_allocator, token_buckets.back()));
+            *ool_segment_seq_allocator, *token_buckets.back()));
       md_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
     }
 
@@ -240,7 +240,7 @@ void ExtentPlacementManager::init(
     data_writers_by_gen.resize(num_writers, {});
     md_writers_by_gen.resize(num_writers, {});
     writer_refs.emplace_back(std::make_unique<RandomBlockOolWriter>(
-	    rb_cleaner, token_buckets.back()));
+	    rb_cleaner, *token_buckets.back()));
     // TODO: implement eviction in RBCleaner and introduce further writers
     data_writers_by_gen[generation_to_writer(OOL_GENERATION)] = writer_refs.back().get();
     md_writers_by_gen[generation_to_writer(OOL_GENERATION)] = writer_refs.back().get();
@@ -250,20 +250,20 @@ void ExtentPlacementManager::init(
   }
 
   if (cold_cleaner) {
-    token_buckets.emplace_back(secondary_bw_limit);
-    token_buckets.back().start();
+    token_buckets.emplace_back(std::make_unique<TokenBucket>(secondary_bw_limit));
+    token_buckets.back()->start();
     if (cold_cleaner->get_backend_type() == backend_type_t::SEGMENTED) {
       auto cold_segment_cleaner = static_cast<SegmentCleaner*>(cold_cleaner.get());
       for (rewrite_gen_t gen = MIN_COLD_GENERATION; gen < REWRITE_GENERATIONS; ++gen) {
         writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
               data_category_t::DATA, gen, *cold_segment_cleaner,
-              *ool_segment_seq_allocator, token_buckets.back()));
+              *ool_segment_seq_allocator, *token_buckets.back()));
         data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
       }
       for (rewrite_gen_t gen = MIN_COLD_GENERATION; gen < REWRITE_GENERATIONS; ++gen) {
         writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
               data_category_t::METADATA, gen, *cold_segment_cleaner,
-              *ool_segment_seq_allocator, token_buckets.back()));
+              *ool_segment_seq_allocator, *token_buckets.back()));
         md_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
       }
       for (auto *device : cold_segment_cleaner->get_segment_manager_group()
@@ -274,7 +274,7 @@ void ExtentPlacementManager::init(
       ceph_assert(cold_cleaner->get_backend_type() == backend_type_t::RANDOM_BLOCK);
       auto rb_cleaner = static_cast<RBMCleaner*>(cold_cleaner.get());
       ceph_assert(rb_cleaner);
-      writer_refs.emplace_back(std::make_unique<RandomBlockOolWriter>(rb_cleaner, token_buckets.back()));
+      writer_refs.emplace_back(std::make_unique<RandomBlockOolWriter>(rb_cleaner, *token_buckets.back()));
       for (rewrite_gen_t gen = MIN_COLD_GENERATION; gen < REWRITE_GENERATIONS; ++gen) {
         data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
       }
@@ -410,7 +410,7 @@ ExtentPlacementManager::close()
   LOG_PREFIX(ExtentPlacementManager::close);
   INFO("started");
   for (auto &token_bucket : token_buckets) {
-    token_bucket.stop();
+    token_bucket->stop();
   }
   return crimson::do_for_each(data_writers_by_gen, [](auto &writer) {
     if (writer) {

@@ -82,6 +82,8 @@ private:
   std::optional<seastar::shared_promise<>> sp;
 };
 
+using TokenBucketRef = std::unique_ptr<TokenBucket>;
+
 /**
  * ExtentOolWriter
  *
@@ -1071,7 +1073,7 @@ private:
   std::vector<ExtentOolWriter*> data_writers_by_gen;
   // gen 0 METADATA writer is the journal writer
   std::vector<ExtentOolWriter*> md_writers_by_gen;
-  std::vector<TokenBucket> token_buckets;
+  std::vector<TokenBucketRef> token_buckets;
 
   std::vector<Device*> devices_by_id;
   Device* primary_device = nullptr;
