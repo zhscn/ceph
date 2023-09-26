@@ -725,6 +725,7 @@ private:
   bool may_promote = true;
 
 protected:
+  void erase_index_state(extent_types_t t, extent_len_t l);
   trans_view_set_t mutation_pendings;
 
   CachedExtent(CachedExtent &&other) = delete;
@@ -899,6 +900,10 @@ class ExtentIndex {
   friend class Cache;
   CachedExtent::index extent_index;
 public:
+  constexpr static int extent_num = static_cast<int>(extent_types_t::NONE);
+  std::array<uint64_t, extent_num> extent_count;
+  std::array<uint64_t, extent_num> extent_size;
+
   auto get_overlap(paddr_t addr, extent_len_t len) {
     auto bottom = extent_index.upper_bound(addr, paddr_cmp());
     if (bottom != extent_index.begin())
@@ -922,6 +927,8 @@ public:
     };
     extent_index.clear_and_dispose(cached_extent_disposer());
     bytes = 0;
+    extent_count.fill(0);
+    extent_size.fill(0);
   }
 
   void insert(CachedExtent &extent) {
@@ -937,9 +944,11 @@ public:
     extent.parent_index = this;
 
     bytes += extent.get_length();
+    extent_count[static_cast<int>(extent.get_type())]++;
+    extent_size[static_cast<int>(extent.get_type())] += extent.get_length();
   }
 
-  void erase(CachedExtent &extent) {
+  void erase(CachedExtent &extent, bool is_going_to_destruct = false) {
     assert(extent.parent_index);
     assert(extent.is_linked());
     [[maybe_unused]] auto erased = extent_index.erase(
@@ -948,6 +957,16 @@ public:
 
     assert(erased);
     bytes -= extent.get_length();
+
+    if (!is_going_to_destruct) {
+      extent_count[static_cast<int>(extent.get_type())]--;
+      extent_size[static_cast<int>(extent.get_type())] -= extent.get_length();
+    }
+  }
+
+  void erase_state(extent_types_t t, extent_len_t l) {
+    extent_count[static_cast<int>(t)]--;
+    extent_size[static_cast<int>(t)] -= l;
   }
 
   void replace(CachedExtent &to, CachedExtent &from) {
@@ -1107,6 +1126,10 @@ class RetiredExtentPlaceholder : public CachedExtent {
 public:
   RetiredExtentPlaceholder(extent_len_t length)
     : CachedExtent(CachedExtent::retired_placeholder_t{}, length) {}
+
+  ~RetiredExtentPlaceholder() {
+    erase_index_state(TYPE, get_length());
+  }
 
   CachedExtentRef duplicate_for_write(Transaction&) final {
     ceph_assert(0 == "Should never happen for a placeholder");

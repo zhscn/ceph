@@ -100,6 +100,10 @@ struct CollectionNode
     : LogicalCachedExtent(other),
       decoded(other.decoded) {}
 
+  ~CollectionNode() {
+    erase_index_state(TYPE, get_length());
+  }
+
   static constexpr extent_types_t type = extent_types_t::COLL_BLOCK;
 
   coll_map_t decoded;

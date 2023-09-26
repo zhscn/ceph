@@ -161,14 +161,17 @@ seastar::future<> ClientRequest::with_pg_int(
 	pgref->client_request_orderer.remove_request(*this);
 	complete_request();
       });
-    }, [this, this_instance_id, pgref](std::exception_ptr eptr) {
+    }, [this, this_instance_id, pgref, &shard_services](std::exception_ptr eptr) {
       LOG_PREFIX(ClientRequest::with_pg_int);
       // TODO: better debug output
       DEBUGI("{}.{}: interrupted {}", *this, this_instance_id, eptr);
+      shard_services.reset_tracer(this);
     }, pgref).finally(
       [opref=std::move(opref), pgref=std::move(pgref),
-       instance_handle=std::move(instance_handle), &ihref] {
+       instance_handle=std::move(instance_handle), &ihref,
+       &shard_services, this] {
       ihref.handle.exit();
+      shard_services.stop_tracer(this);
     });
 }
 
@@ -178,6 +181,7 @@ seastar::future<> ClientRequest::with_pg(
   put_historic_shard_services = &shard_services;
   pgref->client_request_orderer.add_request(*this);
   auto ret = on_complete.get_future();
+  shard_services.get_tracer(trace_stage_t::TOTAL).start(this);
   std::ignore = with_pg_int(
     shard_services, std::move(pgref)
   );
@@ -214,8 +218,14 @@ ClientRequest::process_op(instance_handle_t &ihref, Ref<PG> &pg)
   return ihref.enter_stage<interruptor>(
     client_pp(*pg).recover_missing, *this
   ).then_interruptible([pg, this]() mutable {
+    if (put_historic_shard_services) {
+      put_historic_shard_services->get_tracer(trace_stage_t::RECOVER_MISSING).start(this);
+    }
     return recover_missings(pg, m->get_hobj(), snaps_need_to_recover());
   }).then_interruptible([this, pg, &ihref]() mutable {
+    if (put_historic_shard_services) {
+      put_historic_shard_services->get_tracer(trace_stage_t::RECOVER_MISSING).stop(this);
+    }
     return pg->already_complete(m->get_reqid()).then_interruptible(
       [this, pg, &ihref](auto completed) mutable
       -> PG::load_obc_iertr::future<> {
@@ -232,9 +242,15 @@ ClientRequest::process_op(instance_handle_t &ihref, Ref<PG> &pg)
           LOG_PREFIX(ClientRequest::process_op);
           DEBUGI("{}: in get_obc stage", *this);
           op_info.set_from_op(&*m, *pg->get_osdmap());
+          if (put_historic_shard_services) {
+            put_historic_shard_services->get_tracer(trace_stage_t::LOCK_OBC).start(this);
+          }
           return pg->with_locked_obc(
             m->get_hobj(), op_info,
             [this, pg, &ihref](auto head, auto obc) mutable {
+              if (put_historic_shard_services) {
+                put_historic_shard_services->get_tracer(trace_stage_t::LOCK_OBC).stop(this);
+              }
               LOG_PREFIX(ClientRequest::process_op);
               DEBUGI("{}: got obc {}", *this, obc->obs);
               return ihref.enter_stage<interruptor>(
@@ -322,14 +338,24 @@ ClientRequest::do_process(
                      __func__, m->get_hobj());
     }
   }
+  if (put_historic_shard_services) {
+    put_historic_shard_services->get_tracer(trace_stage_t::SUBMITTED).start(this);
+    put_historic_shard_services->get_tracer(trace_stage_t::ALL_COMPLETED).start(this);
+  }
   return pg->do_osd_ops(m, conn, obc, op_info, snapc).safe_then_unpack_interruptible(
     [this, pg, &ihref](auto submitted, auto all_completed) mutable {
       return submitted.then_interruptible([this, pg, &ihref] {
+        if (put_historic_shard_services) {
+          put_historic_shard_services->get_tracer(trace_stage_t::SUBMITTED).stop(this);
+        }
 	return ihref.enter_stage<interruptor>(client_pp(*pg).wait_repop, *this);
       }).then_interruptible(
 	[this, pg, all_completed=std::move(all_completed), &ihref]() mutable {
 	  return all_completed.safe_then_interruptible(
 	    [this, pg, &ihref](MURef<MOSDOpReply> reply) {
+              if (put_historic_shard_services) {
+                put_historic_shard_services->get_tracer(trace_stage_t::ALL_COMPLETED).stop(this);
+              }
 	      return ihref.enter_stage<interruptor>(client_pp(*pg).send_reply, *this
 	      ).then_interruptible(
 		[this, reply=std::move(reply)]() mutable {

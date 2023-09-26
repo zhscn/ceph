@@ -45,7 +45,9 @@ class SeastoreNodeExtent final: public NodeExtent {
     : NodeExtent(std::move(ptr)) {}
   SeastoreNodeExtent(const SeastoreNodeExtent& other)
     : NodeExtent(other) {}
-  ~SeastoreNodeExtent() override = default;
+  ~SeastoreNodeExtent() override {
+    erase_index_state(TYPE, get_length());
+  }
 
   constexpr static extent_types_t TYPE = extent_types_t::ONODE_BLOCK_STAGED;
   extent_types_t get_type() const override {

@@ -43,7 +43,7 @@
 	url = https://github.com/ceph/dmclock.git
 [submodule "src/seastar"]
 	path = src/seastar
-	url = https://github.com/ceph/seastar.git
+        utl = git@git-biz.qianxin-inc.cn:cloud_platform/cloud_iaas/storage/seastar.git
 [submodule "src/fmt"]
 	path = src/fmt
 	url = https://github.com/ceph/fmt.git

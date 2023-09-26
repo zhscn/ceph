@@ -66,6 +66,7 @@ public:
     detailed(detailed) {
     max_alloc_size = crimson::common::get_conf<
       Option::size_t>("seastore_rbm_allocator_max_alloc_size");
+    register_metrics();
   }
   std::optional<interval_set<rbm_abs_addr>> alloc_extent(
     size_t size) final;

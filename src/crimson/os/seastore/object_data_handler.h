@@ -34,6 +34,10 @@ struct ObjectDataBlock : crimson::os::seastore::LogicalCachedExtent {
   explicit ObjectDataBlock(extent_len_t length)
     : LogicalCachedExtent(length) {}
 
+  ~ObjectDataBlock() {
+    erase_index_state(TYPE, get_length());
+  }
+
   void set_logical_cache_info(laddr_t laddr, extent_len_t len) {
     onode_info = std::make_optional<logical_bucket_t>(laddr, len);
   }

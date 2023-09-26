@@ -204,8 +204,11 @@ void AvlAllocator::register_metrics() {
   namespace sm = seastar::metrics;
 
   metrics.add_group("avl_allocator", {
-      sm::make_gauge("avl_tree_leaf_node_count",
+      sm::make_gauge("offset_tree_leaf_node_count",
 		     [this] { return extent_tree.size(); },
+		     sm::description("")),
+      sm::make_gauge("size_tree_leaf_node_count",
+		     [this] { return extent_size_tree.size(); },
 		     sm::description(""))
     });
 }
