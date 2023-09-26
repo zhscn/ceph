@@ -87,6 +87,11 @@ options:
   level: advanced
   desc: Size in bytes of extents for promotion to the hot tier.
   default: 2_M
+- name: seastore_cache_dirty_size_capacity
+  type: size
+  level: advanced
+  desc: Size in bytes of extents for promotion to the hot tier.
+  default: 2_G
 - name: seastore_non_volatile_cache_capacity
   type: size
   level: advanced

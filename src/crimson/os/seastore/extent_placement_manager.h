@@ -239,10 +239,12 @@ struct io_usage_t {
 
 struct reserve_io_result_t {
   bool reserve_inline_success = true;
+  bool reserve_memory = true;
   reserve_cleaner_result_t cleaner_result;
 
   bool is_successful() const {
     return reserve_inline_success &&
+      reserve_memory &&
       cleaner_result.is_successful();
   }
 };
@@ -286,6 +288,14 @@ public:
 
   store_statfs_t get_stat() const {
     return background_process.get_stat();
+  }
+
+  void set_dirty_cb(std::function<bool()> cb) {
+    background_process.set_dirty_cb(std::move(cb));
+  }
+
+  void set_block_dirty_cb(std::function<bool()> cb) {
+    background_process.set_block_dirty_cb(std::move(cb));
   }
 
   NonVolatileCache *get_non_volatile_cache() {
@@ -681,6 +691,14 @@ private:
       }
     }
 
+    void set_dirty_cb(std::function<bool()> cb) {
+      force_trim_dirty.emplace(std::move(cb));
+    }
+
+    void set_block_dirty_cb(std::function<bool()> cb) {
+      block_trim_dirty.emplace(std::move(cb));
+    }
+
     store_statfs_t get_stat() const {
       auto stat = main_cleaner->get_stat();
       if (has_cold_tier()) {
@@ -885,7 +903,16 @@ private:
       maybe_update_eviction_mode();
       return main_cleaner_should_run()
         || cold_cleaner_should_run()
-        || trimmer->should_trim();
+        || trimmer->should_trim()
+        || should_force_trim_dirty();
+    }
+
+    bool should_force_trim_dirty() const {
+      return force_trim_dirty && (*force_trim_dirty)();
+    }
+
+    bool should_block_trim_dirty() const {
+      return block_trim_dirty && (*block_trim_dirty)();
     }
 
     bool main_cleaner_should_run() const {
@@ -905,6 +932,7 @@ private:
     bool should_block_io() const {
       assert(is_ready());
       return trimmer->should_block_io_on_trim() ||
+             should_force_trim_dirty() ||
              main_cleaner->should_block_io_on_clean() ||
              (has_cold_tier() &&
               cold_cleaner->should_block_io_on_clean());
@@ -1048,6 +1076,8 @@ private:
     AsyncCleanerRef main_cleaner;
     MemoryCache *memory_cache;
     NonVolatileCacheRef nv_cache;
+    std::optional<std::function<bool()>> force_trim_dirty = std::nullopt;
+    std::optional<std::function<bool()>> block_trim_dirty = std::nullopt;
 
     /*
      * cold tier (optional, see has_cold_tier())
