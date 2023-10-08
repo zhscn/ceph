@@ -542,27 +542,49 @@ ExtentPlacementManager::BackgroundProcess::reserve_projected_usage(
     return seastar::now();
   } else {
     abort_io_usage(usage, res);
+    bool blocking_on_trim = false;
+    bool blocking_on_trim_memroy = false;
+    bool blocking_on_clean = false;
     if (!res.reserve_inline_success ||
         !res.reserve_memory) {
       ++stats.io_blocked_count_trim;
+      ++stats.io_blocking_num_trim;
+      blocking_on_trim = true;
+      if (!res.reserve_memory) {
+        ++stats.io_blocking_num_trim_memory;
+        blocking_on_trim_memroy = true;
+      }
     }
     if (!res.cleaner_result.is_successful()) {
       ++stats.io_blocked_count_clean;
+      ++stats.io_blocking_num_clean;
+      blocking_on_clean = true;
     }
     ++stats.io_blocking_num;
     ++stats.io_blocked_count;
     stats.io_blocked_sum += stats.io_blocking_num;
 
     auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
-    return seastar::repeat([this, usage, point] {
+    return seastar::repeat([this, usage, point, blocking_on_trim,
+                            blocking_on_trim_memroy, blocking_on_clean] {
       blocking_io = seastar::promise<>();
       return blocking_io->get_future(
-      ).then([this, usage, point] {
+      ).then([this, usage, point, blocking_on_trim,
+              blocking_on_trim_memroy, blocking_on_clean] {
         ceph_assert(!blocking_io);
         auto res = try_reserve_io(usage);
         if (res.is_successful()) {
           assert(stats.io_blocking_num == 1);
           --stats.io_blocking_num;
+          if (blocking_on_trim) {
+            --stats.io_blocking_num_trim;
+            if (blocking_on_trim_memroy) {
+              --stats.io_blocking_num_trim_memory;
+            }
+          }
+          if (blocking_on_clean) {
+            --stats.io_blocking_num_clean;
+          }
           auto now = timepoint_to_mod(seastar::lowres_system_clock::now());
           stats.io_blocked_time += now - point;
           return seastar::make_ready_future<seastar::stop_iteration>(
@@ -849,6 +871,14 @@ void ExtentPlacementManager::BackgroundProcess::register_metrics()
 {
   namespace sm = seastar::metrics;
   metrics.add_group("background_process", {
+    sm::make_counter("io_blocking_num", stats.io_blocking_num,
+                     sm::description("the sum of IOs blocking")),
+    sm::make_counter("io_blocking_num_trim", stats.io_blocking_num_trim,
+                     sm::description("the sum of IOs blocking")),
+    sm::make_counter("io_blocking_num_trim_memory", stats.io_blocking_num_trim_memory,
+                     sm::description("the sum of IOs blocking")),
+    sm::make_counter("io_blocking_num_clean", stats.io_blocking_num_clean,
+                     sm::description("the sum of IOs blocking")),
     sm::make_counter("io_count", stats.io_count,
                      sm::description("the sum of IOs")),
     sm::make_counter("io_blocked_count", stats.io_blocked_count,
