@@ -1560,6 +1560,8 @@ private:
 
     uint64_t mutate_count = 0;
     uint64_t mutate_size = 0;
+
+    counter_by_src_t<int64_t> dirty_bytes_by_src;
   } stats;
 
   template <typename CounterT>
