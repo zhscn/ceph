@@ -8,6 +8,7 @@
 #include "include/buffer_fwd.h"
 #include "crimson/osd/exceptions.h"
 
+#include "crimson/common/config_proxy.h"
 #include "crimson/os/seastore/transaction.h"
 #include <string.h>
 #include "include/buffer.h"
@@ -62,7 +63,10 @@ struct extent_range_t {
 class AvlAllocator : public ExtentAllocator {
 public:
   AvlAllocator(bool detailed) :
-    detailed(detailed) {}
+    detailed(detailed) {
+    max_alloc_size = crimson::common::get_conf<
+      Option::size_t>("seastore_rbm_allocator_max_alloc_size");
+  }
   std::optional<interval_set<rbm_abs_addr>> alloc_extent(
     size_t size) final;
 

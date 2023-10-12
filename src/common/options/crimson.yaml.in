@@ -167,3 +167,8 @@ options:
   level: dev
   desc: select write through policy when data length is greater than this value.
   default: 512_K
+- name: seastore_rbm_allocator_max_alloc_size
+  type: size
+  level: dev
+  desc: maximum contiguous size of a block in rbm allocator
+  default: 4_M
