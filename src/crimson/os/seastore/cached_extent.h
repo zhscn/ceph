@@ -376,7 +376,7 @@ public:
    * LogicalCachedExtent overrides this method and provides a simpler
    * apply_delta override for LogicalCachedExtent implementers.
    */
-  virtual void apply_delta_and_adjust_crc(
+  virtual void apply_delta_and_adjust_crc_impl(
     paddr_t base, const ceph::bufferlist &bl) = 0;
 
   /**
@@ -1146,7 +1146,7 @@ public:
     return TYPE;
   }
 
-  void apply_delta_and_adjust_crc(
+  void apply_delta_and_adjust_crc_impl(
     paddr_t base, const ceph::bufferlist &bl) final {
     ceph_assert(0 == "Should never happen for a placeholder");
   }
@@ -1258,7 +1258,7 @@ public:
     return is_shadow_laddr(laddr);
   }
 
-  void apply_delta_and_adjust_crc(
+  void apply_delta_and_adjust_crc_impl(
     paddr_t base, const ceph::bufferlist &bl) final {
     apply_delta(bl);
     set_last_committed_crc(get_crc32c());

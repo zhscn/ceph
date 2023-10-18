@@ -113,7 +113,7 @@ struct TestBlockPhysical : crimson::os::seastore::CachedExtent{
 
   ceph::bufferlist get_delta() final;
 
-  void apply_delta_and_adjust_crc(paddr_t, const ceph::bufferlist &bl) final;
+  void apply_delta_and_adjust_crc_impl(paddr_t, const ceph::bufferlist &bl) final;
 };
 using TestBlockPhysicalRef = TCachedExtentRef<TestBlockPhysical>;
 

@@ -75,7 +75,7 @@ struct RootBlock : CachedExtent {
   }
 
   /// overwrites root
-  void apply_delta_and_adjust_crc(paddr_t base, const ceph::bufferlist &_bl) final {
+  void apply_delta_and_adjust_crc_impl(paddr_t base, const ceph::bufferlist &_bl) final {
     assert(_bl.length() == sizeof(root_t));
     ceph::bufferlist bl = _bl;
     bl.rebuild();
