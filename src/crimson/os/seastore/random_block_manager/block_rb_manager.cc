@@ -84,7 +84,7 @@ BlockRBManager::open_ertr::future<> BlockRBManager::open()
     device->get_shard_end() -
     ool_start,
     device->get_block_size());
-  register_metrics();
+  // register_metrics();
   return open_ertr::now();
 }
 
