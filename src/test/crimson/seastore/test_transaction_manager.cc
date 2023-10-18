@@ -903,7 +903,7 @@ struct transaction_manager_test_t :
 	    gen = i;
 	    if (get_extent_category(t) == data_category_t::METADATA &&
 		gen >= MIN_COLD_GENERATION) {
-	      return MIN_COLD_GENERATION - 1;
+	      gen = MIN_COLD_GENERATION - 1;
 	    }
           }
         }
@@ -944,6 +944,10 @@ struct transaction_manager_test_t :
 
       // verify that no data should go to the cold tier
       update_data_gen_mapping([](data_category_t category, rewrite_gen_t gen) -> rewrite_gen_t {
+	if (category == data_category_t::METADATA &&
+	    gen >= MIN_COLD_GENERATION) {
+	  return MIN_COLD_GENERATION - 1;
+	}
         if (gen == MIN_COLD_GENERATION) {
           return MIN_COLD_GENERATION - 1;
         } else {
@@ -979,7 +983,7 @@ struct transaction_manager_test_t :
       run_until(ratio_D_size).get();
       update_data_gen_mapping([](data_category_t category, rewrite_gen_t gen) -> rewrite_gen_t {
 	if (category == data_category_t::METADATA &&
-	    gen >= MIN_COLD_GENERATION) {
+	    gen >= MIN_REWRITE_GENERATION) {
 	  return MIN_COLD_GENERATION - 1;
 	}
         if (gen >= MIN_REWRITE_GENERATION && gen < MIN_COLD_GENERATION) {
