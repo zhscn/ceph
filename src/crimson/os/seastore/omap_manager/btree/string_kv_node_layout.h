@@ -287,6 +287,7 @@ namespace crimson::os::seastore::omap_manager {
  *                   +----------------------------------------------------------------+
  */
 class StringKVInnerNodeLayout {
+protected:
   char *buf = nullptr;
 
   using L = absl::container_internal::Layout<ceph_le32, omap_node_meta_le_t, omap_inner_key_le_t>;
@@ -909,6 +910,7 @@ private:
  *                   +-------------------------------------------------------------------+
  */
 class StringKVLeafNodeLayout {
+protected:
   char *buf = nullptr;
 
   using L = absl::container_internal::Layout<ceph_le32, omap_node_meta_le_t, omap_leaf_key_le_t>;

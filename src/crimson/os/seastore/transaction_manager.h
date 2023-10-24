@@ -87,6 +87,7 @@ public:
   }
 
   void start_background() {
+    cache->drop_dirty_extents();
     epm->start_background();
   }
 
@@ -958,7 +959,7 @@ private:
       }
     ).si_then([FNAME, &t](auto ref) mutable -> ret {
       SUBTRACET(seastore_tm, "got extent -- {}", t, *ref);
-      assert(ref->is_fully_loaded());
+      ceph_assert(ref->is_latest());
       return pin_to_extent_ret<T>(
 	interruptible::ready_future_marker{},
 	std::move(ref));
@@ -1004,7 +1005,7 @@ private:
       }
     ).si_then([FNAME, &t](auto ref) {
       SUBTRACET(seastore_tm, "got extent -- {}", t, *ref);
-      assert(ref->is_fully_loaded());
+      ceph_assert(ref->is_latest());
       return pin_to_extent_by_type_ret(
 	interruptible::ready_future_marker{},
 	std::move(ref->template cast<LogicalCachedExtent>()));

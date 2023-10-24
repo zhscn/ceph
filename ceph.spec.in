@@ -20,6 +20,7 @@
 # please read this for explanation of bcond syntax:
 # https://rpm-software-management.github.io/rpm/manual/conditionalbuilds.html
 #################################################################################
+%global debug_package %{nil}
 %bcond_with make_check
 %bcond_with zbd
 %bcond_with cmake_verbose_logging

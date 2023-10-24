@@ -352,6 +352,7 @@ public:
       ).then([ret=std::move(ret)]() mutable
 	     -> get_extent_ret<T> {
         // ret may be invalid, caller must check
+        ceph_assert(ret->is_latest());
         return get_extent_ret<T>(
           get_extent_ertr::ready_future_marker{},
           std::move(ret));
@@ -430,6 +431,7 @@ public:
     t.add_to_read_set(ret);
     touch_extent(*ret);
     return ret->wait_io().then([ret] {
+      ceph_assert(ret->is_latest());
       return get_extent_if_cached_iertr::make_ready_future<
         CachedExtentRef>(ret);
     });
@@ -464,6 +466,7 @@ public:
         SUBTRACET(seastore_cache, "{} {}~{} is present on t -- {}",
                   t, T::TYPE, offset, length, *ret);
         return ret->wait_io().then([ret] {
+	  ceph_assert(ret->is_latest());
 	  return seastar::make_ready_future<TCachedExtentRef<T>>(
             ret->cast<T>());
         });
@@ -557,6 +560,9 @@ public:
     Transaction &t,
     CachedExtentRef extent)
   {
+    LOG_PREFIX(Cache::get_extent_viewable_by_trans);
+    SUBDEBUGT(seastore_cache, "{}", t, *extent);
+
     auto p_extent = extent->get_transactional_view(t);
     if (!p_extent->is_pending_in_trans(t.get_trans_id())) {
       t.add_to_read_set(p_extent);
@@ -580,6 +586,7 @@ public:
     }
     return p_extent->wait_io(
     ).then([p_extent] {
+      ceph_assert(p_extent->is_latest());
       return get_extent_ertr::make_ready_future<CachedExtentRef>(
         CachedExtentRef(p_extent));
     });
@@ -665,6 +672,7 @@ private:
         SUBTRACET(seastore_cache, "{} {}~{} {} is present on t -- {}",
                   t, type, offset, length, laddr, *ret);
         return ret->wait_io().then([ret] {
+	  ceph_assert(ret->is_latest());
 	  return seastar::make_ready_future<CachedExtentRef>(ret);
         });
       } else {
@@ -1379,6 +1387,14 @@ public:
     stats.submit_record.stop();
   }
 
+  void drop_dirty_extents() {
+    for (auto &e : dirty) {
+      if (e.transactions.size() == 0) {
+	e.reset_buffer(__FUNCTION__);
+      }
+    }
+  }
+
 private:
   ExtentPlacementManager& epm;
   RootBlockRef root;               ///< ref to current root
@@ -1515,6 +1531,7 @@ private:
   struct {
     counter_by_src_t<search_status_t> lba_alloc_count;
     counter_by_src_t<counter_by_extent_t<uint64_t>> read_exts;
+    counter_by_src_t<counter_by_extent_t<uint64_t>> fill_dirty_exts;
     counter_by_src_t<uint64_t> trans_created_by_src;
     counter_by_src_t<commit_trans_efforts_t> committed_efforts_by_src;
     counter_by_src_t<invalid_trans_efforts_t> invalidated_efforts_by_src;
@@ -1577,6 +1594,8 @@ private:
     }
     return stats.dirty_bytes >= dirty_bytes_capacity;
   }
+
+  uint32_t deltas_limit;
 
   template <typename CounterT>
   CounterT& get_by_src(
@@ -1681,7 +1700,11 @@ private:
   ) {
     assert(extent->state == CachedExtent::extent_state_t::CLEAN_PENDING ||
       extent->state == CachedExtent::extent_state_t::EXIST_CLEAN ||
-      extent->state == CachedExtent::extent_state_t::CLEAN);
+      extent->state == CachedExtent::extent_state_t::CLEAN ||
+      (extent->state == CachedExtent::extent_state_t::DIRTY &&
+       extent->need_replay));
+    LOG_PREFIX(Cache::read_extent);
+    SUBDEBUG(seastore_cache, "set io wait -- {}", *extent);
     extent->set_io_wait();
     return epm.read(
       extent->get_paddr(),
@@ -1690,6 +1713,13 @@ private:
     ).safe_then(
       [this, src, extent=std::move(extent)]() mutable {
         LOG_PREFIX(Cache::read_extent);
+	auto is_dirty = [](CachedExtent *extent) {
+	  auto state = extent->state;
+	  return state != CachedExtent::extent_state_t::INITIAL_WRITE_PENDING &&
+	    state != CachedExtent::extent_state_t::CLEAN &&
+	    state != CachedExtent::extent_state_t::CLEAN_PENDING &&
+	    state != CachedExtent::extent_state_t::EXIST_CLEAN;
+	};
 	if (likely(extent->state == CachedExtent::extent_state_t::CLEAN_PENDING)) {
 	  extent->state = CachedExtent::extent_state_t::CLEAN;
 	  /* TODO: crc should be checked against LBA manager */
@@ -1700,13 +1730,21 @@ private:
           extent->state == CachedExtent::extent_state_t::CLEAN) {
 	  /* TODO: crc should be checked against LBA manager */
 	  extent->set_last_committed_crc(extent->get_crc32c());
+	} else if (extent->is_valid() && is_dirty(extent.get())) {
+	  extent->on_maybe_replay();
+	  extent->on_clean_read();
+	  extent->maybe_replay_delta();
         } else {
 	  ceph_assert(!extent->is_valid());
 	}
         extent->complete_io();
         SUBDEBUG(seastore_cache, "read extent done -- {}", *extent);
 	if (src != Transaction::src_t::MAX) {
-	  get_by_ext(get_by_src(stats.read_exts, src), extent->get_type()) += extent->get_length();
+	  if (is_dirty(extent.get())) {
+	    get_by_ext(get_by_src(stats.fill_dirty_exts, src), extent->get_type()) += extent->get_length();
+	  } else {
+	    get_by_ext(get_by_src(stats.read_exts, src), extent->get_type()) += extent->get_length();
+	  }
 	}
         return get_extent_ertr::make_ready_future<TCachedExtentRef<T>>(
           std::move(extent));
@@ -1714,6 +1752,41 @@ private:
       get_extent_ertr::pass_further{},
       crimson::ct_error::assert_all{
         "Cache::get_extent: invalid error"
+      }
+    );
+  }
+
+  get_extent_ertr::future<> fill_dirty_extent(
+    Transaction::src_t src,
+    CachedExtentRef extent
+  ) {
+    ceph_assert(extent->is_valid());
+    ceph_assert(extent->state == CachedExtent::extent_state_t::DIRTY);
+    ceph_assert(extent->need_replay);
+    LOG_PREFIX(Cache::fill_dirty_extent);
+    SUBDEBUG(seastore_cache, "set io wait -- {}", *extent);
+    extent->set_io_wait();
+    return epm.read(
+      extent->get_paddr(),
+      extent->get_length(),
+      extent->get_bptr()
+    ).safe_then(
+      [this, src, extent=std::move(extent)]() mutable {
+        LOG_PREFIX(Cache::fill_dirty_extent);
+	ceph_assert(extent->is_valid());
+	extent->on_maybe_replay();
+	extent->on_clean_read();
+	extent->maybe_replay_delta();
+        extent->complete_io();
+        SUBDEBUG(seastore_cache, "fill dirty extent done -- {}", *extent);
+	if (src != Transaction::src_t::MAX) {
+	  get_by_ext(get_by_src(stats.fill_dirty_exts, src), extent->get_type()) += extent->get_length();
+	}
+        return get_extent_ertr::make_ready_future<>();
+      },
+      get_extent_ertr::pass_further{},
+      crimson::ct_error::assert_all{
+        "Cache::fill_dirty_extent: invalid error"
       }
     );
   }
