@@ -110,7 +110,7 @@ int main(int argc, const char* argv[])
     ("trace", "enable trace output on all loggers")
     ("osdspec-affinity", bpo::value<std::string>()->default_value(std::string{}),
      "set affinity to an osdspec")
-    ("prometheus_port", bpo::value<uint16_t>()->default_value(0),
+    ("prometheus_port", bpo::value<uint16_t>()->default_value(12300),
      "Prometheus port. Set to zero to disable")
     ("prometheus_address", bpo::value<std::string>()->default_value("0.0.0.0"),
      "Prometheus listening address")
@@ -162,11 +162,14 @@ int main(int argc, const char* argv[])
           // handled by S* must be blocked for alien threads (see AlienStore).
           seastar::engine().handle_signal(SIGHUP, [] {});
 
+          const int whoami = std::stoi(local_conf()->name.get_id());
+
           // start prometheus API server
           seastar::httpd::http_server_control prom_server;
           std::any stop_prometheus;
           if (uint16_t prom_port = config["prometheus_port"].as<uint16_t>();
               prom_port != 0) {
+            prom_port += whoami;
             prom_server.start("prometheus").get();
             stop_prometheus = seastar::make_shared(seastar::deferred_stop(prom_server));
 
@@ -182,7 +185,6 @@ int main(int argc, const char* argv[])
             }).get();
           }
 
-          const int whoami = std::stoi(local_conf()->name.get_id());
           const auto nonce = crimson::osd::get_nonce();
           crimson::net::MessengerRef cluster_msgr, client_msgr;
           crimson::net::MessengerRef hb_front_msgr, hb_back_msgr;
