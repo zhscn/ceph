@@ -1517,6 +1517,8 @@ private:
 
     version_stat_t committed_dirty_version;
     version_stat_t committed_reclaim_version;
+
+    counter_by_src_t<int64_t> dirty_bytes_by_src;
   } stats;
 
   template <typename CounterT>

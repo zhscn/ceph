@@ -668,6 +668,17 @@ void Cache::register_metrics()
         }
       );
     }
+
+    metrics.add_group(
+      "cache",
+      {
+	sm::make_gauge(
+	  "dirty_bytes_by_src",
+	  get_by_src(stats.dirty_bytes_by_src, src),
+	  sm::description(""),
+	  {src_label}
+	)
+      });
   }
   assert(srcs_index == NUM_SRC_COMB);
   srcs_index = 0;
@@ -1069,6 +1080,7 @@ record_t Cache::prepare_record(
 {
   LOG_PREFIX(Cache::prepare_record);
   SUBTRACET(seastore_t, "enter", t);
+  auto pre_dirty_bytes = stats.dirty_bytes;
 
   auto trans_src = t.get_src();
   assert(!t.is_weak());
@@ -1437,6 +1449,9 @@ record_t Cache::prepare_record(
   } else {
     assert(rewrite_version_stats.is_clear());
   }
+
+  auto &dirty_bytes_by_src = get_by_src(stats.dirty_bytes_by_src, t.get_src());
+  dirty_bytes_by_src += stats.dirty_bytes - pre_dirty_bytes;
 
   return record;
 }
