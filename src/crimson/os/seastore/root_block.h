@@ -50,6 +50,10 @@ struct RootBlock : CachedExtent {
       backref_root_node(nullptr)
   {}
 
+  ~RootBlock() {
+    erase_index_state(TYPE, get_length());
+  }
+
   CachedExtentRef duplicate_for_write(Transaction&) final {
     return CachedExtentRef(new RootBlock(*this));
   };

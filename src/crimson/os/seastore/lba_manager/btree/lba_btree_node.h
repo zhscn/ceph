@@ -86,6 +86,10 @@ struct LBAInternalNode
   LBAInternalNode(T&&... t) :
     FixedKVInternalNode(std::forward<T>(t)...) {}
 
+  ~LBAInternalNode() {
+    erase_index_state(TYPE, get_length());
+  }
+
   static constexpr extent_types_t TYPE = extent_types_t::LADDR_INTERNAL;
 
   extent_types_t get_type() const final {
@@ -160,6 +164,10 @@ struct LBALeafNode
   template <typename... T>
   LBALeafNode(T&&... t) :
     parent_type_t(std::forward<T>(t)...) {}
+
+  ~LBALeafNode() {
+    erase_index_state(TYPE, get_length());
+  }
 
   static constexpr extent_types_t TYPE = extent_types_t::LADDR_LEAF;
 

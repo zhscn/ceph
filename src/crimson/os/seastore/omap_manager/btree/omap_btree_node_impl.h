@@ -36,6 +36,10 @@ struct OMapInnerNode
     OMapNode(std::forward<T>(t)...),
     StringKVInnerNodeLayout(get_bptr().c_str()) {}
 
+  ~OMapInnerNode() {
+    erase_index_state(TYPE, get_length());
+  }
+
   omap_node_meta_t get_node_meta() const final { return get_meta(); }
   bool extent_will_overflow(size_t ksize, std::optional<size_t> vsize) const {
     return is_overflow(ksize);
@@ -152,6 +156,10 @@ struct OMapLeafNode
   OMapLeafNode(T&&... t) :
     OMapNode(std::forward<T>(t)...),
     StringKVLeafNodeLayout(get_bptr().c_str()) {}
+
+  ~OMapLeafNode() {
+    erase_index_state(TYPE, get_length());
+  }
 
   omap_node_meta_t get_node_meta() const final { return get_meta(); }
   bool extent_will_overflow(

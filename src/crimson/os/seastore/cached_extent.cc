@@ -77,9 +77,16 @@ CachedExtent::~CachedExtent()
 {
   if (parent_index) {
     assert(is_linked());
-    parent_index->erase(*this);
+    parent_index->erase(*this, true);
   }
 }
+
+void CachedExtent::erase_index_state(extent_types_t t, extent_len_t l) {
+  if (parent_index) {
+    parent_index->erase_state(t, l);
+  }
+}
+
 CachedExtent* CachedExtent::get_transactional_view(Transaction &t) {
   return get_transactional_view(t.get_trans_id());
 }

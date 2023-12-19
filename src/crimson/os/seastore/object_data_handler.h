@@ -42,6 +42,10 @@ struct ObjectDataBlock : crimson::os::seastore::LogicalCachedExtent {
   explicit ObjectDataBlock(extent_len_t length)
     : LogicalCachedExtent(length) {}
 
+  ~ObjectDataBlock() {
+    erase_index_state(TYPE, get_length());
+  }
+
   CachedExtentRef duplicate_for_write(Transaction&) final {
     return CachedExtentRef(new ObjectDataBlock(*this));
   };

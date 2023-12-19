@@ -62,6 +62,10 @@ public:
   BackrefInternalNode(T&&... t) :
     FixedKVInternalNode(std::forward<T>(t)...) {}
 
+  ~BackrefInternalNode() {
+    erase_index_state(TYPE, get_length());
+  }
+
   static constexpr extent_types_t TYPE = extent_types_t::BACKREF_INTERNAL;
 
   extent_types_t get_type() const final {
@@ -82,6 +86,10 @@ public:
   template <typename... T>
   BackrefLeafNode(T&&... t) :
     FixedKVLeafNode(std::forward<T>(t)...) {}
+
+  ~BackrefLeafNode() {
+    erase_index_state(TYPE, get_length());
+  }
 
   static constexpr extent_types_t TYPE = extent_types_t::BACKREF_LEAF;
 

@@ -194,6 +194,26 @@ void Cache::register_metrics()
     );
   }
 
+  for (auto &[ext, ext_label] : labels_by_ext) {
+    metrics.add_group(
+      "cache",
+      {
+        sm::make_counter(
+          "cached_extent_count_by_type",
+	  extents.extent_count[static_cast<int>(ext)],
+          sm::description("total count of cached extent by type"),
+          {ext_label}
+        ),
+        sm::make_counter(
+          "cached_extent_size_by_type",
+	  extents.extent_size[static_cast<int>(ext)],
+          sm::description("total size of cached extent by type"),
+          {ext_label}
+        ),
+      }
+    );
+  }
+
   {
     /*
      * efforts discarded/committed
