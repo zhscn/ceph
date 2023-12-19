@@ -48,6 +48,42 @@ namespace crimson::osd {
 
 class PGShardManager;
 
+struct tracer_t {
+  uint64_t count = 0;
+  uint64_t busy_time = 0;
+  std::unordered_map<void*, uint64_t> start_time;
+  void start(void *p) {
+    start_time[p] = now();
+  }
+  void stop(void *p) {
+    if (start_time.contains(p)) {
+      auto v = now() - start_time[p];
+      busy_time += v;
+      count++;
+      start_time.erase(p);
+    }
+  }
+  void reset(void *p) {
+    if (start_time.contains(p)) {
+      start_time.erase(p);
+    }
+  }
+  uint64_t now() {
+    auto t = seastar::lowres_system_clock::now();
+    return std::chrono::duration_cast<
+      std::chrono::microseconds>(t.time_since_epoch()).count();
+  }
+};
+
+enum class trace_stage_t : uint8_t {
+  TOTAL = 0,
+  RECOVER_MISSING = 1,
+  LOCK_OBC = 2,
+  SUBMITTED = 3,
+  ALL_COMPLETED = 4,
+  NUM = 5
+};
+
 /**
  * PerShardState
  *
@@ -377,6 +413,11 @@ class ShardServices : public OSDMapService {
 #define FORWARD_TO_OSD_SINGLETON(METHOD) \
   FORWARD_TO_OSD_SINGLETON_TARGET(METHOD, METHOD)
 
+  tracer_t tracers[static_cast<int>(trace_stage_t::NUM)];
+
+  seastar::metrics::metric_group metrics;
+  void register_metrics();
+
 public:
   template <typename... PSSArgs>
   ShardServices(
@@ -385,12 +426,30 @@ public:
     PSSArgs&&... args)
     : local_state(std::forward<PSSArgs>(args)...),
       osd_singleton_state(osd_singleton_state),
-      pg_to_shard_mapping(pg_to_shard_mapping) {}
+      pg_to_shard_mapping(pg_to_shard_mapping) {
+    register_metrics();
+  }
 
   FORWARD_TO_OSD_SINGLETON(send_to_osd)
 
   crimson::os::FuturizedStore::Shard &get_store() {
     return local_state.store;
+  }
+
+  tracer_t& get_tracer(trace_stage_t s) {
+    return tracers[static_cast<int>(s)];
+  }
+
+  void reset_tracer(void *p) {
+    for (int i = 0; i < static_cast<int>(trace_stage_t::NUM); i++) {
+      tracers[i].reset(p);
+    }
+  }
+
+  void stop_tracer(void *p) {
+    for (int i = 0; i < static_cast<int>(trace_stage_t::NUM); i++) {
+      tracers[i].stop(p);
+    }
   }
 
   auto remove_pg(spg_t pgid) {

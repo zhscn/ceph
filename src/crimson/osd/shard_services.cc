@@ -2,6 +2,7 @@
 // vim: ts=8 sw=2 smarttab
 
 #include <boost/smart_ptr/make_local_shared.hpp>
+#include <seastar/core/metrics.hh>
 
 #include "crimson/osd/shard_services.h"
 
@@ -53,6 +54,53 @@ PerShardState::PerShardState(
       (std::numeric_limits<ceph_tid_t>::digits - 8)),
     startup_time(startup_time)
 {}
+
+void ShardServices::register_metrics()
+{
+  namespace sm = seastar::metrics;
+  metrics.add_group("PG", {
+      sm::make_counter(
+        "latency_total_count",
+	[this] { return tracers[static_cast<int>(trace_stage_t::TOTAL)].count; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_total_busy_time",
+	[this] { return tracers[static_cast<int>(trace_stage_t::TOTAL)].busy_time; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_recover_missing_count",
+	[this] { return tracers[static_cast<int>(trace_stage_t::RECOVER_MISSING)].count; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_recover_missing_busy_time",
+	[this] { return tracers[static_cast<int>(trace_stage_t::RECOVER_MISSING)].busy_time; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_lock_obc_count",
+	[this] { return tracers[static_cast<int>(trace_stage_t::LOCK_OBC)].count; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_lock_obc_busy_time",
+	[this] { return tracers[static_cast<int>(trace_stage_t::LOCK_OBC)].busy_time; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_submitted_count",
+	[this] { return tracers[static_cast<int>(trace_stage_t::SUBMITTED)].count; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_submitted_busy_time",
+	[this] { return tracers[static_cast<int>(trace_stage_t::SUBMITTED)].busy_time; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_all_completed_count",
+	[this] { return tracers[static_cast<int>(trace_stage_t::ALL_COMPLETED)].count; },
+	sm::description("")),
+      sm::make_counter(
+        "latency_all_completed_busy_time",
+	[this] { return tracers[static_cast<int>(trace_stage_t::ALL_COMPLETED)].busy_time; },
+	sm::description("")),
+    });
+}
 
 seastar::future<> PerShardState::dump_ops_in_flight(Formatter *f) const
 {

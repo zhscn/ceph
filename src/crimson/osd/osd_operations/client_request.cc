@@ -191,6 +191,7 @@ seastar::future<> ClientRequest::with_pg(
   put_historic_shard_services = &shard_services;
   pgref->client_request_orderer.add_request(*this);
   auto ret = on_complete.get_future();
+  shard_services.get_tracer(trace_stage_t::TOTAL).start(this);
   std::ignore = with_pg_int(
     shard_services, std::move(pgref)
   );
@@ -229,8 +230,14 @@ ClientRequest::process_op(instance_handle_t &ihref, Ref<PG> &pg)
   return ihref.enter_stage<interruptor>(
     client_pp(*pg).recover_missing, *this
   ).then_interruptible([pg, this]() mutable {
+    if (put_historic_shard_services) {
+      put_historic_shard_services->get_tracer(trace_stage_t::RECOVER_MISSING).start(this);
+    }
     return recover_missings(pg, m->get_hobj(), snaps_need_to_recover());
   }).then_interruptible([this, pg, &ihref]() mutable {
+    if (put_historic_shard_services) {
+      put_historic_shard_services->get_tracer(trace_stage_t::RECOVER_MISSING).stop(this);
+    }
     return pg->already_complete(m->get_reqid()).then_interruptible(
       [this, pg, &ihref](auto completed) mutable
       -> PG::load_obc_iertr::future<> {
@@ -248,9 +255,15 @@ ClientRequest::process_op(instance_handle_t &ihref, Ref<PG> &pg)
           LOG_PREFIX(ClientRequest::process_op);
           DEBUGI("{}: in get_obc stage", *this);
           op_info.set_from_op(&*m, *pg->get_osdmap());
+          if (put_historic_shard_services) {
+            put_historic_shard_services->get_tracer(trace_stage_t::LOCK_OBC).start(this);
+          }
           return pg->with_locked_obc(
             m->get_hobj(), op_info,
             [this, pg, &ihref](auto head, auto obc) mutable {
+              if (put_historic_shard_services) {
+                put_historic_shard_services->get_tracer(trace_stage_t::LOCK_OBC).stop(this);
+              }
               LOG_PREFIX(ClientRequest::process_op);
               DEBUGI("{}: got obc {}", *this, obc->obs);
               return ihref.enter_stage<interruptor>(
