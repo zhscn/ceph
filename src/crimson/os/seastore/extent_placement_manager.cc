@@ -489,7 +489,8 @@ ExtentPlacementManager::BackgroundProcess::reserve_projected_usage(
     return seastar::now();
   } else {
     abort_io_usage(usage, res);
-    if (!res.reserve_inline_success) {
+    if (!res.reserve_inline_success ||
+        !res.reserve_memory) {
       ++stats.io_blocked_count_trim;
     }
     if (!res.cleaner_result.is_successful()) {
@@ -630,6 +631,7 @@ ExtentPlacementManager::BackgroundProcess::try_reserve_io(
 {
   return {
     trimmer->try_reserve_inline_usage(usage.inline_usage),
+    !should_block_trim_dirty(),
     try_reserve_cleaner(usage.cleaner_usage)
   };
 }
@@ -648,7 +650,8 @@ seastar::future<>
 ExtentPlacementManager::BackgroundProcess::do_background_cycle()
 {
   assert(is_ready());
-  bool should_trim = trimmer->should_trim();
+  bool should_trim_dirty = should_force_trim_dirty();
+  bool should_trim = trimmer->should_trim() || should_trim_dirty;
   bool proceed_trim = false;
   auto trim_size = trimmer->get_trim_size_per_cycle();
   cleaner_usage_t trim_usage{
@@ -674,7 +677,7 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
   }
 
   if (proceed_trim) {
-    return trimmer->trim(
+    return trimmer->trim(should_trim_dirty
     ).finally([this, trim_usage] {
       abort_cleaner_usage(trim_usage, {true, true});
     });

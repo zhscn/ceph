@@ -552,10 +552,10 @@ std::size_t JournalTrimmerImpl::get_alloc_journal_size() const
   return static_cast<std::size_t>(ret);
 }
 
-seastar::future<> JournalTrimmerImpl::trim() {
+seastar::future<> JournalTrimmerImpl::trim(bool force_trim_dirty) {
   return seastar::when_all(
-    [this] {
-      if (should_trim_alloc()) {
+    [this, force_trim_dirty] {
+      if (should_trim_alloc() && !force_trim_dirty) {
         return trim_alloc(
         ).handle_error(
           crimson::ct_error::assert_all{
@@ -566,8 +566,8 @@ seastar::future<> JournalTrimmerImpl::trim() {
         return seastar::now();
       }
     },
-    [this] {
-      if (should_trim_dirty()) {
+    [this, force_trim_dirty] {
+      if (should_trim_dirty() || force_trim_dirty) {
         return trim_dirty(
         ).handle_error(
           crimson::ct_error::assert_all{

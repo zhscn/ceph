@@ -1521,6 +1521,20 @@ private:
     counter_by_src_t<int64_t> dirty_bytes_by_src;
   } stats;
 
+  uint64_t dirty_bytes_capacity = 0;
+  bool should_force_trim_dirty() {
+    if (dirty_bytes_capacity == 0) {
+      return false;
+    }
+    return stats.dirty_bytes >= dirty_bytes_capacity * 0.75;
+  }
+  bool should_block_trim_dirty() {
+    if (dirty_bytes_capacity == 0) {
+      return false;
+    }
+    return stats.dirty_bytes >= dirty_bytes_capacity;
+  }
+
   template <typename CounterT>
   CounterT& get_by_src(
       counter_by_src_t<CounterT>& counters_by_src,

@@ -569,7 +569,7 @@ public:
     reserved_usage -= usage;
   }
 
-  seastar::future<> trim();
+  seastar::future<> trim(bool force_trim_dirty);
 
   static JournalTrimmerImplRef create(
       BackrefManager &backref_manager,

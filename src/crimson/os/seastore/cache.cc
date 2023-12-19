@@ -41,12 +41,17 @@ Cache::Cache(
   ExtentPlacementManager &epm)
   : epm(epm),
     lru(crimson::common::get_conf<Option::size_t>(
-	  "seastore_cache_lru_size"))
+	  "seastore_cache_lru_size")),
+    dirty_bytes_capacity(
+      crimson::common::get_conf<Option::size_t>(
+	"seastore_cache_dirty_size_capacity"))
 {
   LOG_PREFIX(Cache::Cache);
   INFO("created, lru_size={}", lru.get_capacity());
   register_metrics();
   segment_providers_by_device_id.resize(DEVICE_ID_MAX, nullptr);
+  epm.set_dirty_cb([this] { return should_force_trim_dirty(); });
+  epm.set_block_dirty_cb([this] { return should_block_trim_dirty(); });
 }
 
 Cache::~Cache()

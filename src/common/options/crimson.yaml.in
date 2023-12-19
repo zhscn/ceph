@@ -122,3 +122,8 @@ options:
   level: dev
   desc: overwrite the existing data block based on delta if the original size is smaller than the value, otherwise do overwrite based on remapping, set to 0 to enforce the remap-based overwrite.
   default: 0
+- name: seastore_cache_dirty_size_capacity
+  type: size
+  level: advanced
+  desc: Size in bytes of extents for promotion to the hot tier.
+  default: 2_G
