@@ -880,7 +880,7 @@ struct FixedKVInternalNode
     return bl;
   }
 
-  void apply_delta_and_adjust_crc(
+  void apply_delta_and_adjust_crc_impl(
     paddr_t base, const ceph::bufferlist &_bl) {
     assert(_bl.length());
     ceph::bufferlist bl = _bl;
@@ -1199,7 +1199,7 @@ struct FixedKVLeafNode
     return bl;
   }
 
-  void apply_delta_and_adjust_crc(
+  void apply_delta_and_adjust_crc_impl(
     paddr_t base, const ceph::bufferlist &_bl) {
     assert(_bl.length());
     ceph::bufferlist bl = _bl;

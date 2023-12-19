@@ -28,7 +28,7 @@ ceph::bufferlist TestBlockPhysical::get_delta() {
   return bl;
 }
 
-void TestBlockPhysical::apply_delta_and_adjust_crc(
+void TestBlockPhysical::apply_delta_and_adjust_crc_impl(
     paddr_t, const ceph::bufferlist &bl) {
   auto biter = bl.begin();
   decltype(delta) deltas;
