@@ -890,6 +890,9 @@ private:
 
     struct {
       uint64_t io_blocking_num = 0;
+      uint64_t io_blocking_num_trim = 0;
+      uint64_t io_blocking_num_trim_memory = 0;
+      uint64_t io_blocking_num_clean = 0;
       uint64_t io_count = 0;
       uint64_t io_blocked_count = 0;
       uint64_t io_blocked_count_trim = 0;
