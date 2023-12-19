@@ -85,6 +85,57 @@ void CachedExtent::erase_index_state(extent_types_t t, extent_len_t l) {
   if (parent_index) {
     parent_index->erase_state(t, l);
   }
+  get_extent_delta(t) -= deltas.size();
+  for (auto &d : deltas) {
+    get_extent_delta_size(t) -= d.delta.length();
+  }
+  get_extent_delta_details(t).adjust(deltas.size(), 0);
+}
+
+void CachedExtent::reset_buffer(const char* caller, int delta_size) {
+  if (!support_reset_buffer()) {
+    return;
+  }
+  assert(is_dirty());
+  assert(is_fully_loaded());
+  assert(!need_replay);
+  assert(!deltas.empty());
+  if (deltas.size() > delta_size) {
+    return;
+  }
+
+  logger().debug("{} {} {}", __FUNCTION__, caller, *this);
+
+  on_reset_buffer();
+  ptr.reset();
+  need_replay = true;
+  if (parent_index) {
+    parent_index->erase_state(get_type(), get_length(), true);
+  }
+}
+
+void CachedExtent::maybe_replay_delta() {
+  assert(support_reset_buffer());
+  assert(is_dirty());
+  assert(is_fully_loaded());
+  assert(need_replay);
+
+  logger().debug("{} {}", __FUNCTION__, *this);
+
+  auto committed_crc = last_committed_crc;
+  if (final_crc) {
+    committed_crc = *final_crc;
+  }
+  for (auto &d : deltas) {
+    apply_delta_and_adjust_crc_impl(d.record_base, d.delta);
+  }
+  ceph_assert(committed_crc == last_committed_crc);
+  need_replay = false;
+  final_crc.reset();
+  if (parent_index) {
+    parent_index->insert_state(get_type(), get_length());
+  }
+  on_maybe_replay_done();
 }
 
 CachedExtent* CachedExtent::get_transactional_view(Transaction &t) {
@@ -111,7 +162,9 @@ std::ostream &ChildableCachedExtent::print_detail(std::ostream &out) const {
   } else {
     out << ", parent_tracker=" << (void*)nullptr;
   }
-  _print_detail(out);
+  if (is_latest()) {
+    _print_detail(out);
+  }
   return out;
 }
 
@@ -137,10 +190,7 @@ LogicalCachedExtent::~LogicalCachedExtent() {
   if (has_parent_tracker() && is_valid() && !is_pending()) {
     assert(get_parent_node());
     auto parent = get_parent_node<FixedKVNode<laddr_t>>();
-    auto off = parent->lower_bound_offset(laddr);
-    assert(parent->get_key_from_idx(off) == laddr);
-    assert(parent->children[off] == this);
-    parent->children[off] = nullptr;
+    parent->replace_child(laddr, nullptr, this);
   }
 }
 
@@ -149,10 +199,7 @@ void LogicalCachedExtent::on_replace_prior(Transaction &t) {
   take_prior_parent_tracker();
   assert(get_parent_node());
   auto parent = get_parent_node<FixedKVNode<laddr_t>>();
-  //TODO: can this search be avoided?
-  auto off = parent->lower_bound_offset(laddr);
-  assert(parent->get_key_from_idx(off) == laddr);
-  parent->children[off] = this;
+  parent->replace_child(laddr, this);
 }
 
 parent_tracker_t::~parent_tracker_t() {

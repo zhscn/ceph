@@ -127,3 +127,8 @@ options:
   level: advanced
   desc: Size in bytes of extents for promotion to the hot tier.
   default: 2_G
+- name: seastore_cache_deltas_limit
+  type: uint
+  level: advanced
+  desc: drop bufferptr when the number of deltas is less than this value.
+  default: 8

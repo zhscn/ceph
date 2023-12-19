@@ -87,6 +87,41 @@ struct FixedKVNode : ChildableCachedExtent {
   parent_tracker_t* my_tracker = nullptr;
   RootBlockRef root_block;
 
+  struct child_op_t {
+    node_key_t key;
+    ChildableCachedExtent *ptr;
+    ChildableCachedExtent *prior;
+  };
+  std::vector<child_op_t> ops;
+  void replace_child(
+    node_key_t key,
+    ChildableCachedExtent *child,
+    ChildableCachedExtent *prior = nullptr) {
+    if (need_replay) {
+      ops.push_back(child_op_t{key, child, prior});
+    } else {
+      //TODO: can this search be avoided?
+      auto off = lower_bound_offset(key);
+      assert(get_key_from_idx(off) == key);
+      if (prior) {
+	assert(children[off] == prior);
+      }
+      children[off] = child;
+    }
+  }
+
+  void replay_child() {
+    for (auto &op : ops) {
+      auto off = lower_bound_offset(op.key);
+      assert(get_key_from_idx(off) == op.key);
+      if (op.prior) {
+	assert(children[off] == op.prior);
+      }
+      children[off] = op.ptr;
+    }
+    ops.clear();
+  }
+
   bool is_linked() {
     assert(!has_parent_tracker() || !(bool)root_block);
     return (bool)has_parent_tracker() || (bool)root_block;
@@ -233,10 +268,16 @@ struct FixedKVNode : ChildableCachedExtent {
 
   template <typename T, typename iter_t>
   get_child_ret_t<T> get_child(op_context_t<node_key_t> c, iter_t iter) {
+    LOG_PREFIX(get_child);
+    if (!is_latest() || !ops.empty()) {
+      SUBERRORT(seastore_fixedkv_tree, "{}", c.trans, *(CachedExtent*)this);
+      ceph_abort();
+    }
     auto pos = iter.get_offset();
     assert(children.capacity());
     auto child = children[pos];
     if (is_valid_child_ptr(child)) {
+      SUBTRACET(seastore_fixedkv_tree, "{} got child {}", c.trans, *(CachedExtent*)this, *(CachedExtent*)child);
       ceph_assert(child->get_type() == T::TYPE);
       return c.cache.template get_extent_viewable_by_trans<T>(c.trans, (T*)child);
     } else if (is_pending()) {
@@ -356,10 +397,7 @@ struct FixedKVNode : ChildableCachedExtent {
     take_prior_parent_tracker();
     assert(is_parent_valid());
     auto parent = get_parent_node<FixedKVNode>();
-    //TODO: can this search be avoided?
-    auto off = parent->lower_bound_offset(get_node_meta().begin);
-    assert(parent->get_key_from_idx(off) == get_node_meta().begin);
-    parent->children[off] = this;
+    parent->replace_child(get_node_meta().begin, this);
   }
 
   bool is_children_empty() const {
@@ -628,12 +666,23 @@ struct FixedKVInternalNode
       } else {
 	ceph_assert(this->is_parent_valid());
 	auto parent = this->template get_parent_node<FixedKVNode<NODE_KEY>>();
-	auto off = parent->lower_bound_offset(this->get_meta().begin);
-	assert(parent->get_key_from_idx(off) == this->get_meta().begin);
-	assert(parent->children[off] == this);
-	parent->children[off] = nullptr;
+	parent->replace_child(this->get_meta().begin, nullptr, this);
       }
     }
+  }
+
+  void on_reset_buffer() final {
+    this->reset_size();
+    this->reset_meta();
+    this->buf = nullptr;
+  }
+
+  void on_maybe_replay() final {
+    this->buf = this->get_bptr().c_str();
+  }
+
+  void on_maybe_replay_done() final {
+    this->replay_child();
   }
 
   uint16_t lower_bound_offset(NODE_KEY key) const final {
@@ -959,6 +1008,10 @@ struct FixedKVLeafNode
 
   static constexpr bool do_has_children = has_children;
 
+  bool support_reset_buffer() const final {
+    return true;
+  }
+
   bool is_leaf_and_has_children() const final {
     return has_children;
   }
@@ -1027,12 +1080,23 @@ struct FixedKVLeafNode
       } else {
 	ceph_assert(this->is_parent_valid());
 	auto parent = this->template get_parent_node<FixedKVNode<NODE_KEY>>();
-	auto off = parent->lower_bound_offset(this->get_meta().begin);
-	assert(parent->get_key_from_idx(off) == this->get_meta().begin);
-	assert(parent->children[off] == this);
-	parent->children[off] = nullptr;
+	parent->replace_child(this->get_meta().begin, nullptr, this);
       }
     }
+  }
+
+  void on_reset_buffer() final {
+    this->reset_size();
+    this->buf = nullptr;
+  }
+
+  void on_maybe_replay() final {
+    this->buf = this->get_bptr().c_str();
+    this->reset_size();
+  }
+
+  void on_maybe_replay_done() final {
+    this->replay_child();
   }
 
   void prepare_commit() final {

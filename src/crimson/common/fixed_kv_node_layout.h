@@ -50,7 +50,10 @@ template <
   typename VINT,
   bool VALIDATE_INVARIANTS=true>
 class FixedKVNodeLayout {
+protected:
   char *buf = nullptr;
+  Meta m;
+  uint16_t size = 0;
 
   using L = absl::container_internal::Layout<ceph_le32, MetaInt, KINT, VINT>;
   static constexpr L layout{1, 1, CAPACITY, CAPACITY};
@@ -347,7 +350,10 @@ public:
 
 
   FixedKVNodeLayout(char *buf) :
-    buf(buf) {}
+    buf(buf) {
+    reset_size();
+    reset_meta();
+  }
 
   virtual ~FixedKVNodeLayout() = default;
 
@@ -431,7 +437,10 @@ public:
   }
 
   uint16_t get_size() const {
-    return *layout.template Pointer<0>(buf);
+    if (buf) {
+      return *layout.template Pointer<0>(buf);
+    }
+    return size;
   }
 
   /**
@@ -439,8 +448,14 @@ public:
    *
    * Set size representation to match size
    */
-  void set_size(uint16_t size) {
-    *layout.template Pointer<0>(buf) = size;
+  void set_size(uint16_t s) {
+    auto &buf_size = *layout.template Pointer<0>(buf);
+    buf_size = s;
+    size = s;
+  }
+
+  void reset_size() {
+    size = *layout.template Pointer<0>(buf);
   }
 
   /**
@@ -451,11 +466,19 @@ public:
    * in delta_t
    */
   Meta get_meta() const {
-    MetaInt &metaint = *layout.template Pointer<1>(buf);
-    return Meta(metaint);
+    if (buf) {
+      MetaInt &metaint = *layout.template Pointer<1>(buf);
+      return Meta(metaint);
+    }
+    return m;
   }
   void set_meta(const Meta &meta) {
     *layout.template Pointer<1>(buf) = MetaInt(meta);
+    m = meta;
+  }
+  void reset_meta() {
+    assert(buf);
+    m = get_meta();
   }
 
   constexpr static size_t get_capacity() {

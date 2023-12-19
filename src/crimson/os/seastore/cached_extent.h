@@ -23,6 +23,7 @@ namespace crimson::os::seastore {
 class Transaction;
 class CachedExtent;
 using CachedExtentRef = boost::intrusive_ptr<CachedExtent>;
+class ChildableCachedExtent;
 class SegmentedAllocator;
 class TransactionManager;
 class ExtentPlacementManager;
@@ -329,6 +330,7 @@ public:
       ? fmt::format("{}", *prior_poffset)
       : "nullopt";
     out << "CachedExtent(addr=" << this
+	<< ", transaction_size=" << transactions.size()
 	<< ", type=" << get_type()
 	<< ", version=" << version
 	<< ", dirty_from_or_retired_at=" << dirty_from_or_retired_at
@@ -338,6 +340,9 @@ public:
 	<< ", length=" << get_length()
 	<< ", state=" << state
 	<< ", last_committed_crc=" << last_committed_crc
+	<< ", deltas_size=" << deltas.size()
+	<< ", pending_deltas_size=" << pending_deltas.size()
+	<< ", need_replay=" << need_replay
 	<< ", refcount=" << use_count()
 	<< ", user_hint=" << user_hint
 	<< ", fully_loaded=" << is_fully_loaded()
@@ -356,6 +361,23 @@ public:
    * if state == MUTATION_PENDING.
    */
   virtual ceph::bufferlist get_delta() = 0;
+
+  struct dirty_deltas_t {
+    dirty_deltas_t(paddr_t paddr, ceph::bufferlist list)
+      : record_base(paddr), delta(std::move(list)) {}
+
+    paddr_t record_base;
+    ceph::bufferlist delta;
+  };
+
+  std::list<dirty_deltas_t> deltas;
+  std::list<dirty_deltas_t> pending_deltas;
+  std::optional<uint32_t> final_crc = std::nullopt;
+  bool need_replay = false;
+
+  bool is_latest() const {
+    return !need_replay && is_fully_loaded();
+  }
 
   /**
    * apply_delta
@@ -376,6 +398,86 @@ public:
    */
   virtual void apply_delta_and_adjust_crc_impl(
     paddr_t base, const ceph::bufferlist &bl) = 0;
+
+  virtual bool support_reset_buffer() const {
+    return false;
+  }
+  virtual void on_reset_buffer() {}
+  virtual void on_maybe_replay() {}
+  virtual void on_maybe_replay_done() {}
+
+  void record_final_crc(uint32_t crc) {
+    final_crc.emplace(crc);
+  }
+
+  void apply_delta_and_adjust_crc(
+    paddr_t base, const ceph::bufferlist &bl) {
+    get_extent_delta(get_type())++;
+    get_extent_delta_size(get_type()) += bl.length();
+    if (!support_reset_buffer()) {
+      assert(!need_replay);
+      apply_delta_and_adjust_crc_impl(base, bl);
+      return;
+    }
+
+    ceph::bufferlist b;
+    {
+      ceph::bufferptr bp = ceph::buffer::create(bl.length(), 0);
+      auto iter = bl.begin();
+      iter.copy(bl.length(), bp.c_str());
+      b.append(std::move(bp));
+    }
+    deltas.emplace_back(base, std::move(b));
+    auto v = deltas.size();
+    get_extent_delta_details(get_type()).adjust(v - 1, v);
+
+    apply_delta_and_adjust_crc_impl(base, bl);
+    need_replay = false;
+// #ifndef NDEBUG
+//     apply_delta_and_adjust_crc_impl(base, bl);
+//     need_replay = false;
+// #else
+//     need_replay = true;
+// #endif
+  }
+
+  void reset_buffer(const char* caller, int delta_size = 10);
+
+  void maybe_replay_delta();
+
+  void submit_delta(const ceph::bufferlist &bl, paddr_t base = P_ADDR_NULL) {
+    if (!support_reset_buffer()) {
+      return;
+    }
+    assert(is_dirty());
+    assert(prior_instance);
+    assert(is_fully_loaded());
+    assert(deltas.empty());
+
+    std::swap(prior_instance->deltas, deltas);
+    ceph::bufferlist b;
+    {
+      ceph::bufferptr bp = ceph::buffer::create(bl.length(), 0);
+      auto iter = bl.begin();
+      iter.copy(bl.length(), bp.c_str());
+      b.append(std::move(bp));
+    }
+    pending_deltas.emplace_back(base, std::move(b));
+  }
+
+  void commit_pending_delta(paddr_t base) {
+    if (!support_reset_buffer()) {
+      return;
+    }
+    assert(!pending_deltas.empty());
+    deltas.emplace_back(std::move(pending_deltas.front()));
+    deltas.back().record_base = base;
+    pending_deltas.pop_front();
+    get_extent_delta(get_type()) += deltas.size();
+    get_extent_delta_size(get_type()) += deltas.back().delta.length();
+    auto v = deltas.size();
+    get_extent_delta_details(get_type()).adjust(v - 1, v);
+  }
 
   /**
    * Called on dirty CachedExtent implementation after replay.
@@ -677,19 +779,26 @@ private:
   /// used to wait while in-progress commit completes
   std::optional<seastar::shared_promise<>> io_wait_promise;
   void set_io_wait() {
+    LOG_PREFIX(ext:set_io_wait);
+    SUBDEBUG(seastore_cache, "{}", *this);
     ceph_assert(!io_wait_promise);
     io_wait_promise = seastar::shared_promise<>();
   }
   void complete_io() {
+    LOG_PREFIX(ext:complete_io);
+    SUBDEBUG(seastore_cache, "{}", *this);
     ceph_assert(io_wait_promise);
     io_wait_promise->set_value();
     io_wait_promise = std::nullopt;
   }
 
   seastar::future<> wait_io() {
+    LOG_PREFIX(ext:wait_io);
     if (!io_wait_promise) {
+      SUBDEBUG(seastore_cache, "no promise -- {}", *this);
       return seastar::now();
     } else {
+      SUBDEBUG(seastore_cache, "get future -- {}", *this);
       return io_wait_promise->get_shared_future();
     }
   }
@@ -884,6 +993,8 @@ public:
   constexpr static int extent_num = static_cast<int>(extent_types_t::NONE);
   std::array<uint64_t, extent_num> extent_count;
   std::array<uint64_t, extent_num> extent_size;
+  std::array<uint64_t, extent_num> drop_extent_count;
+  std::array<uint64_t, extent_num> drop_extent_size;
 
   auto get_overlap(paddr_t addr, extent_len_t len) {
     auto bottom = extent_index.upper_bound(addr, paddr_cmp());
@@ -945,9 +1056,18 @@ public:
     }
   }
 
-  void erase_state(extent_types_t t, extent_len_t l) {
+  void insert_state(extent_types_t t, extent_len_t l) {
+    extent_count[static_cast<int>(t)]++;
+    extent_size[static_cast<int>(t)] += l;
+  }
+
+  void erase_state(extent_types_t t, extent_len_t l, bool drop = false) {
     extent_count[static_cast<int>(t)]--;
     extent_size[static_cast<int>(t)] -= l;
+    if (drop) {
+      drop_extent_count[static_cast<int>(t)]++;
+      drop_extent_size[static_cast<int>(t)] += l;
+    }
   }
 
   void replace(CachedExtent &to, CachedExtent &from) {

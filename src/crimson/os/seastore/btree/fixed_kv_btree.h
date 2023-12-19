@@ -496,6 +496,7 @@ public:
     TCachedExtentRef<node_t> node)
   {
     assert(leaf_has_children);
+    ceph_assert(node->is_latest());
     for (auto i : *node) {
       CachedExtentRef child_node;
       Transaction::get_extent_ret ret;
@@ -1388,6 +1389,7 @@ private:
 
     auto on_found_internal =
       [this, visitor, &iter](InternalNodeRef &root_node) {
+      ceph_assert(root_node->is_latest());
       iter.get_internal(get_root().get_depth()).node = root_node;
       if (visitor) (*visitor)(
         root_node->get_paddr(),
@@ -1396,10 +1398,11 @@ private:
         get_root().get_depth(),
         internal_node_t::TYPE,
         iter);
-      return lookup_root_iertr::now();
+      return lookup_root_iertr::make_ready_future<>();
     };
     auto on_found_leaf =
       [visitor, &iter, this](LeafNodeRef root_node) {
+      ceph_assert(root_node->is_latest());
       iter.leaf.node = root_node;
       if (visitor) (*visitor)(
         root_node->get_paddr(),
@@ -1408,7 +1411,7 @@ private:
         get_root().get_depth(),
         leaf_node_t::TYPE,
         iter);
-      return lookup_root_iertr::now();
+      return lookup_root_iertr::make_ready_future<>();
     };
 
     if (found) {
@@ -1473,6 +1476,7 @@ private:
     auto node_iter = parent->iter_idx(parent_entry.pos);
 
     auto on_found = [depth, visitor, &iter, &f](InternalNodeRef node) {
+      ceph_assert(node->is_latest());
       auto &entry = iter.get_internal(depth);
       entry.node = node;
       auto node_iter = f(*node);
@@ -1543,6 +1547,7 @@ private:
     auto node_iter = parent->iter_idx(parent_entry.pos);
 
     auto on_found = [visitor, &iter, &f](LeafNodeRef node) {
+      ceph_assert(node->is_latest());
       iter.leaf.node = node;
       auto node_iter = f(*node);
       iter.leaf.pos = node_iter->get_offset();

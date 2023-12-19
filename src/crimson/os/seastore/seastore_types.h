@@ -11,6 +11,7 @@
 #include <boost/core/ignore_unused.hpp>
 
 #include <seastar/core/lowres_clock.hh>
+#include <seastar/core/metrics_types.hh>
 
 #include "include/byteorder.h"
 #include "include/denc.h"
@@ -1191,6 +1192,49 @@ constexpr auto EXTENT_TYPES_MAX = static_cast<uint8_t>(extent_types_t::NONE);
 constexpr size_t BACKREF_NODE_SIZE = 4096;
 
 std::ostream &operator<<(std::ostream &out, extent_types_t t);
+
+uint64_t& get_extent_delta(extent_types_t type);
+uint64_t& get_extent_delta_size(extent_types_t type);
+
+struct extent_deltas_distribution_t {
+  extent_deltas_distribution_t() {
+    int size = sizeof(arr) / sizeof(int);
+    histogram.buckets.resize(size);
+    for (int i = 0; i < size; i++) {
+      histogram.buckets[i].upper_bound = arr[i];
+      histogram.buckets[i].count = 0;
+      idx[arr[i]] = i;
+    }
+    histogram.buckets.back().upper_bound =
+      std::numeric_limits<double>::infinity();
+  }
+
+  void adjust(uint64_t from, uint64_t to) {
+    if (from != 0) {
+      auto i = idx.upper_bound(from);
+      if (i == idx.end()) {
+	i--;
+      }
+      histogram.buckets[i->second].count--;
+    }
+    if (to != 0) {
+      auto i = idx.upper_bound(to);
+      if (i == idx.end()) {
+	i--;
+      }
+      histogram.buckets[i->second].count++;
+    }
+  }
+
+  static constexpr int arr[] = {2, 4, 8, 16, 32, 64,
+				128, 256, 384, 512, 640,
+				768, 896, 1024, 1152, 1280,
+				100000};
+
+  seastar::metrics::histogram histogram;
+  std::map<int, int> idx;
+};
+extent_deltas_distribution_t& get_extent_delta_details(extent_types_t type);
 
 constexpr bool is_logical_type(extent_types_t type) {
   switch (type) {

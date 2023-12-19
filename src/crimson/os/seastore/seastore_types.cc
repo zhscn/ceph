@@ -13,6 +13,21 @@ seastar::logger& journal_logger() {
 }
 
 namespace crimson::os::seastore {
+uint64_t& get_extent_delta(extent_types_t type) {
+  static thread_local uint64_t arr[static_cast<int>(extent_types_t::NONE) + 1]{};
+  return arr[static_cast<int>(type)];
+}
+
+uint64_t& get_extent_delta_size(extent_types_t type) {
+  static thread_local uint64_t arr[static_cast<int>(extent_types_t::NONE) + 1]{};
+  return arr[static_cast<int>(type)];
+}
+
+extent_deltas_distribution_t& get_extent_delta_details(extent_types_t type) {
+  static thread_local extent_deltas_distribution_t
+    arr[static_cast<int>(extent_types_t::NONE) + 1]{};
+  return arr[static_cast<int>(type)];
+}
 
 bool is_aligned(uint64_t offset, uint64_t alignment)
 {

@@ -150,6 +150,7 @@ TransactionManager::mount_ertr::future<> TransactionManager::mount()
   }).safe_then([this] {
     return epm->open_for_write();
   }).safe_then([FNAME, this] {
+    cache->drop_dirty_extents();
     epm->start_background();
     INFO("completed");
   }).handle_error(
