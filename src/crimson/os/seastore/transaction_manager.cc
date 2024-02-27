@@ -452,6 +452,17 @@ TransactionManager::do_submit_transaction(
           tref,
           submit_result.record_block_base,
           start_seq);
+
+      if (nv_cache) {
+	for (auto &p : tref.get_obj_info()) {
+	  if (p.second.op == Transaction::obj_op_t::ADD) {
+	    nv_cache->move_to_top(p.first, p.second.type, /*create_if_absent=*/true);
+	  } else {
+	    nv_cache->remove(p.first, p.second.type);
+	  }
+	}
+      }
+
       journal->get_trimmer().update_journal_tails(
 	cache->get_oldest_dirty_from().value_or(start_seq),
 	cache->get_oldest_backref_dirty_from().value_or(start_seq));
