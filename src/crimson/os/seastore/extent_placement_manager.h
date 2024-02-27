@@ -1020,6 +1020,15 @@ private:
 
     void maybe_wake_blocked_io() final;
 
+    void maybe_wake_promote() final {
+      if (!is_ready()) {
+        return;
+      }
+      if (memory_cache && memory_cache->should_promote()) {
+        do_wake_promote();
+      }
+    }
+
   private:
     // reserve helpers
     bool try_reserve_cold(std::size_t usage);
@@ -1051,6 +1060,13 @@ private:
       if (blocking_background) {
 	blocking_background->set_value();
 	blocking_background = std::nullopt;
+      }
+    }
+
+    void do_wake_promote() {
+      if (blocking_promote) {
+        blocking_promote->set_value();
+        blocking_promote = std::nullopt;
       }
     }
 
@@ -1209,6 +1225,8 @@ private:
 
     seastar::future<> do_background_cycle();
 
+    seastar::future<> run_promote();
+
     void register_metrics();
 
     struct {
@@ -1235,6 +1253,10 @@ private:
     std::optional<seastar::future<>> process_join;
     std::optional<seastar::promise<>> blocking_background;
     std::optional<seastar::promise<>> blocking_io;
+
+    std::optional<seastar::future<>> promote_process_join;
+    std::optional<seastar::promise<>> blocking_promote;
+
     bool is_running_until_halt = false;
     state_t state = state_t::STOP;
     eviction_state_t eviction_state;
