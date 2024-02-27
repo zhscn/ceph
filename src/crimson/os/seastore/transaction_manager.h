@@ -89,6 +89,10 @@ public:
     epm->start_background();
   }
 
+  bool is_cold_device(device_id_t id) const {
+    return epm->is_cold_device(id);
+  }
+
   /**
    * get_pin
    *
@@ -819,6 +823,23 @@ public:
     auto croot = cache->get_root_fast(t);
     croot = cache->duplicate_for_write(t, croot)->cast<RootBlock>();
     croot->get_root().collection_root.update(cmroot);
+  }
+
+  void update_non_volatile_cache(
+    laddr_t laddr,
+    extent_types_t type,
+    bool check_cached) {
+    ceph_assert(nv_cache);
+    nv_cache->move_to_top(laddr, type, !check_cached);
+  }
+
+  void remove_non_volatile_cache(
+    laddr_t laddr,
+    extent_types_t type) {
+    if (!nv_cache) {
+      return;
+    }
+    nv_cache->remove(laddr, type);
   }
 
   extent_len_t get_block_size() const {
