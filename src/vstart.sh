@@ -904,12 +904,13 @@ EOF
     if [ "$objectstore" == "seastore" ]; then
       if [[ ${seastore_size+x} ]]; then
         SEASTORE_OPTS="
-        seastore device size = $seastore_size
+        seastore device size = $seastore_size"
+      fi
+      SEASTORE_OPTS+="
         seastore_main_device_type=$seastore_main_device_type
         seastore_main_backend_type=$seastore_main_backend_type
         seastore_secondary_device_type=$seastore_secondary_device_type
         seastore_secondary_backend_type=$seastore_secondary_backend_type"
-      fi
     fi
 
     wconf <<EOF
