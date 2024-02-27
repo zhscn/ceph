@@ -280,6 +280,11 @@ public:
     Transaction &trans,
     const ghobject_t &hoid) final;
 
+  contains_onode_ret contains_onode(
+    Transaction &trans,
+    const ghobject_t &start,
+    const ghobject_t &end) final;
+
   get_onode_ret get_onode(
     Transaction &trans,
     const ghobject_t &hoid) final;
