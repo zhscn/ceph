@@ -1316,6 +1316,11 @@ public:
     return stats.omap_tree_depth;
   }
 
+  void update_read_ratio(Transaction &t) {
+    stats.read_hit_hot += t.read_hit_hot;
+    stats.read_hit_cold += t.read_hit_cold;
+  }
+
 private:
   /// Update lru for access to ref
   void touch_extent(
@@ -1480,6 +1485,11 @@ private:
     version_stat_t committed_dirty_version;
     version_stat_t committed_reclaim_version;
     version_stat_t committed_promote_version;
+
+    uint64_t write_hit_hot;
+    uint64_t write_hit_cold;
+    uint64_t read_hit_hot;
+    uint64_t read_hit_cold;
   } stats;
 
   template <typename CounterT>

@@ -498,6 +498,9 @@ ObjectDataHandler::write_ret do_removals(
       DEBUGT("decreasing ref: {}",
 	     ctx.t,
 	     pin->get_key());
+      if (pin->get_val().is_absolute()) {
+	ctx.tm.update_hit_ratio(ctx.t, pin->get_val().get_device_id());
+      }
       return ctx.tm.remove(
 	ctx.t,
 	pin->get_key()
@@ -1550,6 +1553,9 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 			off,
 			current,
 			end);
+		      if (pin->get_val().is_absolute()) {
+			ctx.tm.update_read_ratio(ctx.t, pin->get_val().get_device_id());
+		      }
 		      return ctx.tm.read_pin<ObjectDataBlock>(
 			ctx.t,
 			std::move(pin)
@@ -1577,7 +1583,8 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 		  });
 	      });
 	  });
-	}).si_then([&ret] {
+	}).si_then([&ret, ctx] {
+	  ctx.tm.submit_read_ratio(ctx.t);
 	  return std::move(ret);
 	});
     });
