@@ -225,7 +225,7 @@ private:
     auto p = buckets_set.insert(*b);
     ceph_assert(p.second);
     if (should_demote()) {
-      // TODO: wake up listener
+      listener->maybe_wake_background();
     }
     return b;
   }
