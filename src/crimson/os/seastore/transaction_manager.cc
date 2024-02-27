@@ -458,6 +458,16 @@ TransactionManager::do_submit_transaction(
           submit_result.record_block_base,
           start_seq);
 
+      if (nv_cache) {
+	for (auto &p : tref.get_obj_info()) {
+	  if (p.second.op == Transaction::obj_op_t::ADD) {
+	    nv_cache->move_to_top(p.first, p.second.type, /*create_if_absent=*/true);
+	  } else {
+	    nv_cache->remove(p.first, p.second.type);
+	  }
+	}
+      }
+
       std::vector<CachedExtentRef> lba_to_clear;
       std::vector<CachedExtentRef> backref_to_clear;
       lba_to_clear.reserve(tref.get_retired_set().size());
