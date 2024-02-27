@@ -579,16 +579,21 @@ void ExtentPlacementManager::BackgroundProcess::start_background()
   ceph_assert(state == state_t::SCAN_SPACE);
   assert(!is_running());
   process_join = seastar::now();
+  promote_process_join = seastar::now();
   state = state_t::RUNNING;
   assert(is_running());
   process_join = run();
+  if (has_cold_tier()) {
+    promote_process_join = run_promote();
+  }
 }
 
 seastar::future<>
 ExtentPlacementManager::BackgroundProcess::stop_background()
 {
   LOG_PREFIX(BackgroundProcess::stop_background);
-  return seastar::futurize_invoke([this, FNAME] {
+  return seastar::do_with(std::vector<seastar::future<>>(),
+                          [this, FNAME](auto &futures) {
     if (!is_running()) {
       if (state != state_t::HALT) {
         INFO("isn't RUNNING or HALT, STOP");
@@ -599,12 +604,17 @@ ExtentPlacementManager::BackgroundProcess::stop_background()
       return seastar::now();
     }
     INFO("is RUNNING, going to HALT...");
-    auto ret = std::move(*process_join);
+    futures.emplace_back(std::move(*process_join));
     process_join.reset();
+    futures.emplace_back(std::move(*promote_process_join));
+    promote_process_join.reset();
     state = state_t::HALT;
     assert(!is_running());
     do_wake_background();
-    return ret;
+    do_wake_promote();
+    return seastar::when_all(
+      futures.begin(), futures.end()
+    ).discard_result();
   }).then([this, FNAME] {
     INFO("done, {}, {}",
          JournalTrimmerImpl::stat_printer_t{*trimmer, true},
@@ -915,7 +925,15 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
       proceed_clean_cold = true;
     }
 
-    if (!proceed_clean_main && !proceed_clean_cold) {
+    bool proceed_demote = false;
+    if (has_cold_tier() &&
+        nv_cache->could_demote() &&
+        (eviction_state.is_fast_mode() ||
+         nv_cache->should_demote())) {
+      proceed_demote = true;
+    }
+
+    if (!proceed_clean_main && !proceed_clean_cold && !proceed_demote) {
       ceph_abort("no background process will start");
     }
     return seastar::when_all(
@@ -957,9 +975,49 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
         ).finally([FNAME] {
           DEBUG("finished clean cold");
         });
+      },
+      [this, proceed_demote] {
+        if (!proceed_demote) {
+          return seastar::now();
+        }
+        return nv_cache->demote();
       }
     ).discard_result();
   }
+}
+
+seastar::future<> ExtentPlacementManager::BackgroundProcess::run_promote()
+{
+  assert(memory_cache);
+  assert(is_running());
+  return seastar::repeat([this] {
+    if (!is_running()) {
+      return seastar::make_ready_future<seastar::stop_iteration>(
+          seastar::stop_iteration::yes);
+    }
+
+    return seastar::futurize_invoke([this] {
+      if (memory_cache->should_promote()) {
+        auto usage = cleaner_usage_t{memory_cache->get_promotion_size(), 0};
+        auto res = try_reserve_cleaner(usage);
+        if (res.is_successful()) {
+          return memory_cache->promote(
+          ).finally([this, usage, res] {
+            abort_cleaner_usage(usage, res);
+          });
+        } else {
+          // reserve usage failed, block
+          abort_cleaner_usage(usage, res);
+        }
+      } // shouldn't promote, block
+
+      ceph_assert(!blocking_promote);
+      blocking_promote = seastar::promise<>();
+      return blocking_promote->get_future();
+    }).then([] {
+      return seastar::stop_iteration::no;
+    });
+  });
 }
 
 void ExtentPlacementManager::BackgroundProcess::register_metrics()
