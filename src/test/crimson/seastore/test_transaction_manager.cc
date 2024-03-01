@@ -1012,18 +1012,23 @@ struct transaction_manager_test_t :
 	  }
 
           for (auto i = INIT_GENERATION + 1; i < REWRITE_GENERATIONS; i++) {
-	    expected_generations[t][i] = i;
+	    auto &gen = expected_generations[t][i];
+	    gen = i;
+	    if (get_extent_category(t) == data_category_t::METADATA &&
+		gen >= MIN_COLD_GENERATION) {
+	      return MIN_COLD_GENERATION - 1;
+	    }
           }
         }
       }
 
-      auto update_data_gen_mapping = [&](std::function<rewrite_gen_t(rewrite_gen_t)> func) {
+      auto update_data_gen_mapping = [&](std::function<rewrite_gen_t(data_category_t category, rewrite_gen_t)> func) {
         for (auto t : all_extent_types) {
           if (!is_logical_type(t)) {
             continue;
           }
           for (auto i = INIT_GENERATION + 1; i < REWRITE_GENERATIONS; i++) {
-            expected_generations[t][i] = func(i);
+            expected_generations[t][i] = func(get_extent_category(t), i);
           }
         }
         // since background process didn't start in allocate_sequentially
@@ -1051,7 +1056,7 @@ struct transaction_manager_test_t :
       };
 
       // verify that no data should go to the cold tier
-      update_data_gen_mapping([](rewrite_gen_t gen) -> rewrite_gen_t {
+      update_data_gen_mapping([](data_category_t category, rewrite_gen_t gen) -> rewrite_gen_t {
         if (gen == MIN_COLD_GENERATION) {
           return MIN_COLD_GENERATION - 1;
         } else {
@@ -1072,14 +1077,24 @@ struct transaction_manager_test_t :
 
       // verify that data may go to the cold tier
       run_until(ratio_C_size).get();
-      update_data_gen_mapping([](rewrite_gen_t gen) { return gen; });
+      update_data_gen_mapping([](data_category_t category, rewrite_gen_t gen) -> rewrite_gen_t {
+	if (category == data_category_t::METADATA &&
+	    gen >= MIN_COLD_GENERATION) {
+	  return MIN_COLD_GENERATION - 1;
+	}
+	return gen;
+      });
       EXPECT_TRUE(epm->background_process.eviction_state.is_default_mode());
       test_gen("exceed ratio C");
       epm->run_background_work_until_halt().get();
 
       // verify that data must go to the cold tier
       run_until(ratio_D_size).get();
-      update_data_gen_mapping([](rewrite_gen_t gen) {
+      update_data_gen_mapping([](data_category_t category, rewrite_gen_t gen) -> rewrite_gen_t {
+	if (category == data_category_t::METADATA &&
+	    gen >= MIN_COLD_GENERATION) {
+	  return MIN_COLD_GENERATION - 1;
+	}
         if (gen >= MIN_REWRITE_GENERATION && gen < MIN_COLD_GENERATION) {
           return MIN_COLD_GENERATION;
         } else {
@@ -1098,7 +1113,13 @@ struct transaction_manager_test_t :
       EXPECT_GE(main_size, new_main_size);
       EXPECT_NE(new_cold_size, 0);
 
-      update_data_gen_mapping([](rewrite_gen_t gen) { return gen; });
+      update_data_gen_mapping([](data_category_t category, rewrite_gen_t gen) -> rewrite_gen_t {
+	if (category == data_category_t::METADATA &&
+	    gen >= MIN_COLD_GENERATION) {
+	  return MIN_COLD_GENERATION - 1;
+	}
+	return gen;
+      });
       EXPECT_TRUE(epm->background_process.eviction_state.is_default_mode());
       test_gen("finish evict");
     });

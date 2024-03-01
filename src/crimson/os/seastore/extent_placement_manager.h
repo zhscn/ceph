@@ -664,7 +664,8 @@ private:
       gen = dynamic_max_rewrite_generation;
     }
 
-    if (is_tracked && gen >= MIN_COLD_GENERATION) {
+    if ((is_tracked || category == data_category_t::METADATA)
+        && gen >= MIN_COLD_GENERATION) {
       gen = MIN_COLD_GENERATION - 1;
     }
 
