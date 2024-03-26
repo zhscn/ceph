@@ -6,6 +6,9 @@
 #include "segment_manager.h"
 #include "random_block_manager.h"
 #include "random_block_manager/rbm_device.h"
+#include "logging.h"
+
+SET_SUBSYS(seastore_device);
 
 namespace crimson::os::seastore {
 
@@ -50,6 +53,57 @@ Device::make_device(
       return ret;
     });
   }
+}
+
+Device::check_create_device_ret Device::check_create_device(
+  const std::string &path,
+  size_t size)
+{
+  LOG_PREFIX(block_check_create_device);
+  INFO("path={}, size={}", path, size);
+  return seastar::open_file_dma(
+    path,
+    seastar::open_flags::exclusive |
+    seastar::open_flags::rw |
+    seastar::open_flags::create
+  ).then([size, FNAME, &path](auto file) {
+    return seastar::do_with(
+      file,
+      [size, FNAME, &path](auto &f) -> seastar::future<>
+    {
+      DEBUG("path={} created, truncating to {}", path, size);
+      ceph_assert(f);
+      return f.truncate(
+        size
+      ).then([&f, size] {
+        return f.allocate(0, size);
+      }).finally([&f] {
+        return f.close();
+      });
+    });
+  }).then_wrapped([&path, FNAME](auto f) -> check_create_device_ret {
+    if (f.failed()) {
+      try {
+	f.get();
+	return seastar::now();
+      } catch (const std::system_error &e) {
+	if (e.code().value() == EEXIST) {
+          ERROR("path={} exists", path);
+	  return seastar::now();
+	} else {
+          ERROR("path={} creation error -- {}", path, e);
+	  return crimson::ct_error::input_output_error::make();
+	}
+      } catch (...) {
+        ERROR("path={} creation error", path);
+	return crimson::ct_error::input_output_error::make();
+      }
+    }
+
+    DEBUG("path={} complete", path);
+    std::ignore = f.discard_result();
+    return seastar::now();
+  });
 }
 
 }

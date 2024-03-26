@@ -126,6 +126,12 @@ public:
     device_type_t dtype,
     backend_type_t btype);
 
+  using check_create_device_ertr = access_ertr;
+  using check_create_device_ret = check_create_device_ertr::future<>;
+  static check_create_device_ret check_create_device(
+    const std::string &path,
+    size_t size);
+
 // interfaces used by each device shard
 public:
   virtual device_id_t get_device_id() const = 0;

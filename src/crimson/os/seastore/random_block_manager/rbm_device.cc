@@ -13,20 +13,28 @@
 #include "rbm_device.h"
 #include "nvme_block_device.h"
 #include "block_rb_manager.h"
-
-namespace crimson::os::seastore::random_block_device {
 #include "crimson/os/seastore/logging.h"
+
 SET_SUBSYS(seastore_device);
 
+namespace crimson::os::seastore::random_block_device {
+
 RBMDevice::mkfs_ret RBMDevice::do_primary_mkfs(device_config_t config,
-  int shard_num, size_t journal_size) {
+  int shard_num, size_t journal_size, bool create_device) {
   LOG_PREFIX(RBMDevice::do_primary_mkfs);
-  return stat_device(
-  ).handle_error(
-    mkfs_ertr::pass_further{},
-    crimson::ct_error::assert_all{
-    "Invalid error stat_device in RBMDevice::do_primary_mkfs"}
-  ).safe_then(
+  check_create_device_ret maybe_create = check_create_device_ertr::now();
+  using crimson::common::get_conf;
+  if (create_device && get_conf<bool>("seastore_block_create")) {
+    auto size = get_conf<Option::size_t>("seastore_device_size");
+    maybe_create = check_create_device(get_device_path(), size);
+  }
+  return maybe_create.safe_then([this] {
+    return stat_device(
+    ).handle_error(
+      mkfs_ertr::pass_further{},
+      crimson::ct_error::assert_all{
+      "Invalid error stat_device in RBMDevice::do_primary_mkfs"});
+  }).safe_then(
     [this, FNAME, config=std::move(config), shard_num, journal_size](auto st) mutable {
     config.spec.id |= 0x80;
     super.block_size = st.block_size;
@@ -265,7 +273,7 @@ EphemeralRBMDevice::mount_ret EphemeralRBMDevice::mount() {
 }
 
 EphemeralRBMDevice::mkfs_ret EphemeralRBMDevice::mkfs(device_config_t config) {
-  return do_primary_mkfs(config, 1, DEFAULT_TEST_CBJOURNAL_SIZE);
+  return do_primary_mkfs(config, 1, DEFAULT_TEST_CBJOURNAL_SIZE, false);
 }
 
 }

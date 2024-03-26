@@ -154,7 +154,7 @@ public:
   mkfs_ret do_mkfs(device_config_t);
 
   // shard 0 mkfs
-  mkfs_ret do_primary_mkfs(device_config_t, int shard_num, size_t journal_size);
+  mkfs_ret do_primary_mkfs(device_config_t, int shard_num, size_t journal_size, bool create_device = true);
 
   mount_ret do_mount();
 
@@ -168,7 +168,7 @@ public:
     read_ertr::future<seastar::stat_data>;
   virtual stat_device_ret stat_device() = 0;
 
-  virtual std::string get_device_path() const = 0;
+  virtual const std::string &get_device_path() const = 0;
 
   uint64_t get_journal_size() const {
     return super.journal_size;
@@ -247,11 +247,12 @@ public:
     );
   }
 
-  std::string get_device_path() const final {
-    return "";
+  const std::string &get_device_path() const final {
+    return device_path;
   }
 
   char *buf;
+  std::string device_path{};
 };
 using EphemeralRBMDeviceRef = std::unique_ptr<EphemeralRBMDevice>;
 EphemeralRBMDeviceRef create_test_ephemeral(

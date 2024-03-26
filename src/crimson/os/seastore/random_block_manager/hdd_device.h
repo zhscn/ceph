@@ -80,7 +80,7 @@ public:
     });
   }
 
-  std::string get_device_path() const final {
+  const std::string &get_device_path() const final {
     return device_path;
   }
 
