@@ -881,6 +881,13 @@ constexpr auto PLACEMENT_HINT_NULL = placement_hint_t::NUM_HINTS;
 
 std::ostream& operator<<(std::ostream& out, placement_hint_t h);
 
+enum class write_policy_t {
+  WRITE_BACK,
+  WRITE_THROUGH
+};
+
+std::ostream& operator<<(std::ostream& out, write_policy_t w);
+
 enum class device_type_t : uint8_t {
   NONE = 0,
   HDD,

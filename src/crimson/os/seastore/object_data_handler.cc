@@ -1561,6 +1561,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 			std::move(pin)
 		      ).si_then([&ret, &current, end, key, off,
 				is_indirect](auto extent) {
+			extent->reset_write_policy();
 			ceph_assert(
 			  is_indirect
 			    ? (key - off + extent->get_length()) >= end
