@@ -236,7 +236,8 @@ public:
   alloc_extent_ret reserve_region(
     Transaction &t,
     laddr_t hint,
-    extent_len_t len) final
+    extent_len_t len,
+    bool determinsitic) final
   {
     std::vector<alloc_mapping_info_t> alloc_infos = {
       alloc_mapping_info_t{
@@ -250,11 +251,12 @@ public:
     };
     return seastar::do_with(
       std::move(alloc_infos),
-      [&t, hint, this](auto &alloc_infos) {
+      [&t, hint, this, determinsitic](auto &alloc_infos) {
       return _alloc_extents(
 	t,
 	hint,
-	alloc_infos
+	alloc_infos,
+	determinsitic
       ).si_then([](auto mappings) {
 	assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -298,7 +300,8 @@ public:
     Transaction &t,
     laddr_t hint,
     LogicalCachedExtent &ext,
-    extent_ref_count_t refcount = EXTENT_DEFAULT_REF_COUNT) final
+    extent_ref_count_t refcount,
+    bool determinsitic) final
   {
     // The real checksum will be updated upon transaction commit
     assert(ext.get_last_committed_crc() == 0);
@@ -311,11 +314,12 @@ public:
       &ext}};
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint](auto &alloc_infos) {
+      [this, &t, hint, determinsitic](auto &alloc_infos) {
       return _alloc_extents(
 	t,
 	hint,
-	alloc_infos
+	alloc_infos,
+	determinsitic
       ).si_then([](auto mappings) {
 	assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -328,7 +332,8 @@ public:
     Transaction &t,
     laddr_t hint,
     std::vector<LogicalCachedExtentRef> extents,
-    extent_ref_count_t refcount) final
+    extent_ref_count_t refcount,
+    bool determinsitic) final
   {
     std::vector<alloc_mapping_info_t> alloc_infos;
     for (auto &extent : extents) {
@@ -342,8 +347,8 @@ public:
     }
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint](auto &alloc_infos) {
-      return _alloc_extents(t, hint, alloc_infos);
+      [this, &t, hint, determinsitic](auto &alloc_infos) {
+      return _alloc_extents(t, hint, alloc_infos, determinsitic);
     });
   }
 
@@ -450,7 +455,7 @@ public:
 		std::move(mapping));
 	    });
 	  } else {
-	    fut = alloc_extent(t, remap_laddr, *extents[i]);
+	    fut = alloc_extent(t, remap_laddr, *extents[i], EXTENT_DEFAULT_REF_COUNT, true);
 	  }
 	  return fut.si_then([remap_laddr, remap_len, &ret,
 			      remap_paddr](auto &&ref) {
@@ -575,7 +580,8 @@ private:
   alloc_extents_ret _alloc_extents(
     Transaction &t,
     laddr_t hint,
-    std::vector<alloc_mapping_info_t> &alloc_infos);
+    std::vector<alloc_mapping_info_t> &alloc_infos,
+    bool determinsitic);
 
   ref_ret _incref_extent(
     Transaction &t,
@@ -610,7 +616,8 @@ private:
       return _alloc_extents(
 	t,
 	laddr,
-	alloc_infos
+	alloc_infos,
+	true
       ).si_then([laddr](auto mappings) {
 	ceph_assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -637,6 +644,20 @@ private:
     Transaction &t,
     laddr_t addr,
     extent_len_t len);
+
+  struct insert_pos_t {
+    insert_pos_t(LBABtree::iterator iter, laddr_t laddr)
+      : iter(iter), laddr(laddr) {}
+    LBABtree::iterator iter;
+    laddr_t laddr;
+  };
+  using search_insert_pos_ret = alloc_extent_iertr::future<insert_pos_t>;
+  search_insert_pos_ret search_insert_pos(
+    Transaction &t,
+    LBABtree &btree,
+    laddr_t laddr,
+    extent_len_t length,
+    bool determinsitic);
 };
 using BtreeLBAManagerRef = std::unique_ptr<BtreeLBAManager>;
 
