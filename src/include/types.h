@@ -670,4 +670,9 @@ using md5_digest_t = sha_digest_t<16>;
 WRITE_CLASS_ENCODER(md5_digest_t)
 
 
+using local_snap_t = uint32_t;
+using local_snap_le_t = ceph_le32;
+constexpr local_snap_t LOCAL_SNAP_ID_NULL =
+  std::numeric_limits<local_snap_t>::max();
+
 #endif
