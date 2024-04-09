@@ -75,7 +75,7 @@ public:
 	meta),
       key(meta.begin),
       indirect(val.pladdr.is_laddr()),
-      intermediate_key(indirect ? val.pladdr.get_laddr() : L_ADDR_NULL),
+      intermediate_key(indirect ? val.pladdr.build_laddr(key) : L_ADDR_NULL),
       intermediate_length(indirect ? val.len : 0),
       raw_val(val.pladdr),
       map_val(val)
@@ -148,7 +148,7 @@ public:
     laddr_t interkey = L_ADDR_NULL)
   {
     assert(indirect);
-    assert(value.is_paddr());
+    assert(value_is_paddr());
     intermediate_key = (interkey == L_ADDR_NULL ? key : interkey);
     key = new_key;
     len = length;
@@ -242,7 +242,7 @@ public:
       alloc_mapping_info_t{
         L_ADDR_NULL,
 	len,
-	P_ADDR_ZERO,
+	pladdr_t{P_ADDR_ZERO},
 	0,
 	EXTENT_DEFAULT_REF_COUNT,
 	nullptr
@@ -305,7 +305,7 @@ public:
     std::vector<alloc_mapping_info_t> alloc_infos = {{
       L_ADDR_NULL,
       ext.get_length(),
-      ext.get_paddr(),
+      pladdr_t{ext.get_paddr()},
       ext.get_last_committed_crc(),
       refcount,
       &ext}};
@@ -599,7 +599,7 @@ private:
       alloc_mapping_info_t{
 	L_ADDR_NULL,
 	len,
-	intermediate_key,
+	pladdr_t{intermediate_key},
 	0,	// crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
 	EXTENT_DEFAULT_REF_COUNT,
