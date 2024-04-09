@@ -529,7 +529,9 @@ ObjectDataHandler::write_ret do_insertions(
 	return ctx.tm.alloc_data_extents<ObjectDataBlock>(
 	  ctx.t,
 	  region.addr,
-	  region.len
+	  region.len,
+	  placement_hint_t::HOT,
+	  true
         ).si_then([&region](auto extents) {
           auto off = region.addr;
           auto left = region.len;
@@ -560,7 +562,8 @@ ObjectDataHandler::write_ret do_insertions(
 	return ctx.tm.reserve_region(
 	  ctx.t,
 	  region.addr,
-	  region.len
+	  region.len,
+	  true
 	).si_then([FNAME, ctx, &region](auto pin) {
 	  ceph_assert(pin->get_length() == region.len);
 	  if (pin->get_key() != region.addr) {
@@ -1037,6 +1040,7 @@ auto with_objects_data(
 ObjectDataHandler::write_ret ObjectDataHandler::prepare_data_reservation(
   context_t ctx,
   object_data_t &object_data,
+  laddr_t hint,
   extent_len_t size)
 {
   LOG_PREFIX(ObjectDataHandler::prepare_data_reservation);
@@ -1049,15 +1053,18 @@ ObjectDataHandler::write_ret ObjectDataHandler::prepare_data_reservation(
            object_data.get_reserved_data_len());
     return write_iertr::now();
   } else {
+    ceph_assert(hint != L_ADDR_NULL);
     DEBUGT("reserving: {}~{}",
            ctx.t,
-           ctx.onode.get_data_hint(),
+	   hint,
            max_object_size);
     return ctx.tm.reserve_region(
       ctx.t,
-      ctx.onode.get_data_hint(),
-      max_object_size
-    ).si_then([max_object_size=max_object_size, &object_data](auto pin) {
+      hint,
+      max_object_size,
+      ctx.determinsitic
+    ).si_then([ctx, max_object_size=max_object_size, &object_data, FNAME](auto pin) {
+      DEBUGT("reserve result: {}~{}", ctx.t, pin->get_key(), pin->get_length());
       ceph_assert(pin->get_length() == max_object_size);
       object_data.update_reserved(
 	pin->get_key(),
@@ -1393,6 +1400,7 @@ ObjectDataHandler::zero_ret ObjectDataHandler::zero(
       return prepare_data_reservation(
 	ctx,
 	object_data,
+	ctx.hint,
 	p2roundup(offset + len, ctx.tm.get_block_size())
       ).si_then([this, ctx, offset, len, &object_data] {
 	auto [logical_offset, length] = laddr_t::get_aligned_range(
@@ -1429,6 +1437,7 @@ ObjectDataHandler::write_ret ObjectDataHandler::write(
       return prepare_data_reservation(
 	ctx,
 	object_data,
+	ctx.hint,
 	p2roundup(offset + bl.length(), ctx.tm.get_block_size())
       ).si_then([this, ctx, offset, &object_data, &bl] {
 	auto base = object_data.get_reserved_data_base();
@@ -1655,6 +1664,7 @@ ObjectDataHandler::truncate_ret ObjectDataHandler::truncate(
 	return prepare_data_reservation(
 	  ctx,
 	  object_data,
+	  ctx.hint,
 	  p2roundup(offset, ctx.tm.get_block_size()));
       } else {
 	return truncate_iertr::now();
@@ -1709,7 +1719,7 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone_extents(
 	    ::make_ready_future<LBAMappingRef>();
 	  auto addr = object_data.get_reserved_data_base() + offset;
 	  if (pin->get_val().is_zero()) {
-	    fut = ctx.tm.reserve_region(ctx.t, addr, pin->get_length());
+	    fut = ctx.tm.reserve_region(ctx.t, addr, pin->get_length(), true);
 	  } else {
 	    fut = ctx.tm.clone_pin(ctx.t, addr, *pin);
 	  }
@@ -1726,7 +1736,8 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone_extents(
 	    return ctx.tm.reserve_region(
 	      ctx.t,
 	      object_data.get_reserved_data_base() + last_pos,
-	      object_data.get_reserved_data_len() - last_pos
+	      object_data.get_reserved_data_len() - last_pos,
+	      true
 	    ).si_then([](auto) {
 	      return seastar::now();
 	    });
