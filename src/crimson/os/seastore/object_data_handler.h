@@ -174,7 +174,12 @@ public:
     TransactionManager &tm;
     Transaction &t;
     Onode &onode;
-    Onode *d_onode = nullptr; // The desination node in case of clone
+    // The desination node in case of clone, its hint is always determinsitic
+    Onode *d_onode = nullptr;
+    // The hint of onode
+    laddr_t hint = L_ADDR_NULL;
+    // Indicates whether conflict would occur during resering region
+    bool determinsitic = true;
   };
 
   /// Writes bl to [offset, offset + bl.length())
@@ -240,6 +245,7 @@ private:
   write_ret prepare_data_reservation(
     context_t ctx,
     object_data_t &object_data,
+    laddr_t hint,
     extent_len_t size);
 
   /// Trims data past size
