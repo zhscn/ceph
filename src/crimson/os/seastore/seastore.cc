@@ -1885,11 +1885,22 @@ SeaStore::Shard::_write(
     std::move(_bl),
     ObjectDataHandler(max_object_size),
     [=, this, &ctx, &onode](auto &bl, auto &objhandler) {
+      auto laddr = L_ADDR_NULL;
+      auto determinsitic = true;
+      auto &layout = onode->get_layout();
+      if (layout.object_data.get().is_null()) {
+	ceph_assert(layout.local_clone_id == 0);
+	laddr = onode->get_data_hint();
+	determinsitic = false;
+      }
       return objhandler.write(
         ObjectDataHandler::context_t{
           *transaction_manager,
           *ctx.transaction,
           *onode,
+	  nullptr,
+	  laddr,
+	  determinsitic
         },
         offset,
         bl);
