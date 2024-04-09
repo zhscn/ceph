@@ -593,7 +593,8 @@ TransactionManager::rewrite_logical_extent(
             t,
             lextent->get_laddr() + off,
             *nlextent,
-	    refcount
+	    refcount,
+	    /* determinsitic= */true
           ).si_then([lextent, nlextent, off](auto mapping) {
             ceph_assert(mapping->get_key() == lextent->get_laddr() + off);
             ceph_assert(mapping->get_val() == nlextent->get_paddr());
