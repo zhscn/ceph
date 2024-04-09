@@ -350,7 +350,12 @@ public:
     return lba_manager->alloc_extent(
       t,
       laddr_hint,
-      *ext
+      *ext,
+      EXTENT_DEFAULT_REF_COUNT,
+      // NOTE: setting determinsitic to false is safe here, based on the fact that
+      // all of determinsitic operations are issued from ObjectDataHandler, which
+      // always invoking reserve region before doing alloc_extent.
+      /* determinsitic= */ false
     ).si_then([ext=std::move(ext), laddr_hint, &t](auto &&) mutable {
       LOG_PREFIX(TransactionManager::alloc_non_data_extent);
       SUBDEBUGT(seastore_tm, "new extent: {}, laddr_hint: {}", t, *ext, laddr_hint);
@@ -374,7 +379,8 @@ public:
     Transaction &t,
     laddr_t laddr_hint,
     extent_len_t len,
-    placement_hint_t placement_hint = placement_hint_t::HOT) {
+    placement_hint_t placement_hint = placement_hint_t::HOT,
+    bool determinsitic = false) {
     LOG_PREFIX(TransactionManager::alloc_data_extents);
     SUBTRACET(seastore_tm, "{} len={}, placement_hint={}, laddr_hint={}",
               t, T::TYPE, len, placement_hint, laddr_hint);
@@ -391,7 +397,8 @@ public:
       laddr_hint,
       std::vector<LogicalCachedExtentRef>(
 	exts.begin(), exts.end()),
-      EXTENT_DEFAULT_REF_COUNT
+      EXTENT_DEFAULT_REF_COUNT,
+      determinsitic
     ).si_then([exts=std::move(exts), &t, FNAME](auto &&) mutable {
       for (auto &ext : exts) {
 	SUBDEBUGT(seastore_tm, "new extent: {}", t, *ext);
@@ -564,13 +571,15 @@ public:
   reserve_extent_ret reserve_region(
     Transaction &t,
     laddr_t hint,
-    extent_len_t len) {
+    extent_len_t len,
+    bool determinsitic) {
     LOG_PREFIX(TransactionManager::reserve_region);
-    SUBDEBUGT(seastore_tm, "len={}, laddr_hint={}", t, len, hint);
+    SUBDEBUGT(seastore_tm, "len={}, laddr_hint={:d}", t, len, hint);
     return lba_manager->reserve_region(
       t,
       hint,
-      len);
+      len,
+      determinsitic);
   }
 
   /*
