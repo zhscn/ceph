@@ -19,6 +19,10 @@
 #include "include/interval_set.h"
 #include "include/uuid.h"
 
+#if !defined (__GNUC__) && !defined (__clang__)
+#include <boost/multiprecision/cpp_int.hpp>
+#endif
+
 namespace crimson::os::seastore {
 
 /* using a special xattr key "omap_header" to store omap header */
@@ -1005,13 +1009,450 @@ constexpr journal_seq_t JOURNAL_SEQ_MAX{
 // JOURNAL_SEQ_NULL == JOURNAL_SEQ_MAX == journal_seq_t{}
 constexpr journal_seq_t JOURNAL_SEQ_NULL = JOURNAL_SEQ_MAX;
 
+// logical offset, see LBAManager, TransactionManager
+using extent_len_t = uint32_t;
+constexpr extent_len_t EXTENT_LEN_MAX =
+  std::numeric_limits<extent_len_t>::max();
+
+using extent_len_le_t = ceph_le32;
+inline extent_len_le_t init_extent_len_le(extent_len_t len) {
+  return ceph_le32(len);
+}
+
+template <typename L, typename R = L>
+concept has_three_way = requires(const L &l, const R &r) {
+  l <=> r;
+};
+
+template <typename T>
+concept convertible_to_stream = std::is_convertible_v<T, std::ostream &>;
+
+template <typename T>
+concept is_streamable = requires(std::ostream &os, T value) {
+  { os << value } -> convertible_to_stream;
+};
+
 // logical addr, see LBAManager, TransactionManager
-using laddr_t = uint64_t;
-constexpr laddr_t L_ADDR_MIN = std::numeric_limits<laddr_t>::min();
-constexpr laddr_t L_ADDR_MAX = std::numeric_limits<laddr_t>::max();
-constexpr laddr_t L_ADDR_NULL = L_ADDR_MAX;
-constexpr laddr_t L_ADDR_ROOT = L_ADDR_MAX - 1;
-constexpr laddr_t L_ADDR_LBAT = L_ADDR_MAX - 2;
+struct laddr_t {
+  static laddr_t get_data_hint(uint8_t pool, uint8_t shard, uint32_t crush);
+  static laddr_t get_metadata_hint(uint8_t pool, uint8_t shard, uint32_t crush) {
+    auto ret = get_data_hint(pool, shard, crush);
+    ret.value |= METADATA_MASK;
+    return ret;
+  }
+  static laddr_t get_metadata_hint(laddr_t laddr) {
+    laddr.value |= METADATA_MASK;
+    laddr.value &= ~LOCAL_SNAP_ID_MASK;
+    laddr.value &= ~SNAP_MASK;
+    return laddr;
+  }
+  static laddr_t get_next_hint(laddr_t laddr);
+  static std::pair<laddr_t, laddr_t> clone(laddr_t laddr, uint32_t local_snap_id) {
+    auto head = laddr.with_local_snap_id(local_snap_id + 1);
+    head.value &= ~SNAP_MASK;
+    auto snap = laddr.with_local_snap_id(local_snap_id);
+    snap.value |= SNAP_MASK;
+    return std::make_pair(head, snap);
+  }
+  // return aligned offset~length
+  static std::pair<laddr_t, extent_len_t> get_aligned_range(
+    laddr_t base,
+    extent_len_t offset,
+    extent_len_t length);
+
+  // only used in test and tm_driver
+  static laddr_t get_hint_from_offset(uint64_t offset);
+  uint64_t get_original_offset() const;
+
+  bool has_valid_prefix() const {
+    // The size of an onode's total metadata is not fixed and might cause
+    // reserved space overflow, it's not meaningful to get the prefix of
+    // a metadata extent.
+    return !is_metadata() &&
+      // Avoid conflicting with L_ADDR_MIN and L_ADDR_NULL
+      ((value & PREFIX_MASK) != (min().value & PREFIX_MASK)) &&
+      ((value & PREFIX_MASK) != (max().value & PREFIX_MASK));
+  }
+
+  // all onodes share the same object prefix
+  laddr_t get_object_prefix() const {
+    auto ret = *this;
+    ret.value &= PREFIX_MASK;
+    return ret;
+  }
+
+  // all mappings share the same onode prefix
+  laddr_t get_onode_prefix() const {
+    auto ret = *this;
+    ret.value &= ~OFFSET_MASK;
+    return ret;
+  }
+
+  bool is_snap() const {
+    return (value & SNAP_MASK) != 0;
+  }
+
+  void clear_snap() {
+    value &= ~SNAP_MASK;
+  }
+
+  uint32_t get_local_snap_id() const {
+    return static_cast<uint32_t>((value & LOCAL_SNAP_ID_MASK) >> 12);
+  }
+
+  void set_local_snap_id(uint32_t local_snap_id) {
+    value &= ~LOCAL_SNAP_ID_MASK;
+    value |= static_cast<uint64_t>(local_snap_id) << 12;
+  }
+
+  laddr_t with_local_snap_id(uint32_t local_snap_id) const {
+    auto ret = *this;
+    ret.clear_snap();
+    ret.set_local_snap_id(local_snap_id);
+    return ret;
+  }
+
+  extent_len_t get_offset() const {
+    return static_cast<extent_len_t>(value & OFFSET_MASK) << UNIT_SHIFT;
+  }
+
+  void set_offset(extent_len_t offset) {
+    assert(p2align((uint64_t)offset, UNIT_SIZE) == offset);
+    offset >>= UNIT_SHIFT;
+    assert((offset & ~OFFSET_MASK) == 0);
+    value &= ~OFFSET_MASK;
+    value |= offset;
+  }
+
+  laddr_t with_offset(extent_len_t offset) const {
+    laddr_t ret = *this;
+    ret.set_offset(offset);
+    return ret;
+  }
+
+  // laddr is 4K aligned
+  static constexpr int UNIT_SHIFT = 12;
+  static constexpr uint64_t UNIT_SIZE = 1 << UNIT_SHIFT;
+  static constexpr uint64_t U64MAX = std::numeric_limits<uint64_t>::max();
+  static constexpr laddr_t min() { return laddr_t(0, 0); }
+  static constexpr laddr_t max() { return laddr_t(U64MAX, U64MAX); }
+  static constexpr laddr_t null() { return max(); }
+  static constexpr laddr_t root() { return laddr_t(U64MAX - 1, U64MAX); }
+  static constexpr laddr_t lbat() { return laddr_t(U64MAX - 2, U64MAX); }
+
+  friend auto operator==(const laddr_t &l, const laddr_t &r) {
+    return l.value == r.value;
+  }
+
+private:
+  template<typename T>
+  class laddr_compare_helper_t {
+    struct helper_t {
+      helper_t(const T &t)
+	: high(static_cast<uint64_t>(t >> 64)),
+	  low(static_cast<uint64_t>(t))
+      {}
+
+      constexpr auto operator<=>(const helper_t&) const = default;
+
+      uint64_t high;
+      uint64_t low;
+    };
+  public:
+    static constexpr auto value(const T &l, const T &r) {
+      return helper_t(l) <=> helper_t(r);
+    }
+  };
+
+  template <has_three_way T>
+  struct laddr_compare_helper_t<T> {
+    static constexpr auto value(const T &l, const T &r) {
+      return l <=> r;
+    }
+  };
+
+  template<typename T>
+  struct uint_128_formatter_t {
+    static std::string format(const T &value) {
+      auto low = static_cast<uint64_t>(value);
+      auto high = static_cast<uint64_t>(value >> 64);
+      return fmt::format("{:x}{:x}", high, low);
+    };
+  };
+
+  template<is_streamable T>
+  struct uint_128_formatter_t<T> {
+    static std::string format(const T &value) {
+      std::ostringstream os;
+      os << std::hex << value << std::dec;
+      return os.str();
+    }
+  };
+
+public:
+  friend auto operator<=>(const laddr_t &l, const laddr_t &r) {
+    return laddr_compare_helper_t<internal128_t>::value(l.value, r.value);
+  }
+
+  // assume the difference is not greater than 64 bits, and l should always
+  // be greater than r.
+  friend uint64_t operator-(const laddr_t &l, const laddr_t &r) {
+    assert(l.value >= r.value);
+    auto ret = static_cast<uint64_t>(l.value - r.value);
+    assert(ret <= (U64MAX >> UNIT_SHIFT));
+    return ret << UNIT_SHIFT;
+  }
+
+  friend std::ostream &operator<<(std::ostream &out, const laddr_t &l);
+
+  fmt::format_context::iterator
+  format(fmt::format_context &ctx, bool detailed) const {
+    using Formatter = uint_128_formatter_t<internal128_t>;
+    fmt::format_context::iterator it =
+      fmt::format_to(ctx.out(), "0x{}", Formatter::format(value));
+
+    if (detailed) {
+      return fmt::format_to(
+        ctx.out(),
+	"(pool={}, shard={}, crush_random={:#x}_0x{}, is_metadata={}, "
+	"is_snap={}, local_snap_id={}, offset={})",
+	get_pool(), get_shard(), get_crush(), Formatter::format(get_random()), is_metadata(),
+	is_snap(), get_local_snap_id(), get_offset());
+    } else {
+      return it;
+    }
+  }
+
+  void encode(::ceph::buffer::list::contiguous_appender& p) const {
+    uint64_t low = static_cast<uint64_t>(value);
+    uint64_t high = static_cast<uint64_t>(value >> 64);
+    p.append(reinterpret_cast<const char *>(&low), sizeof(low));
+    p.append(reinterpret_cast<const char *>(&high), sizeof(high));
+  }
+
+  void bound_encode(size_t& p) const {
+    p += sizeof(uint64_t) * 2;
+  }
+
+  void decode(::ceph::buffer::ptr::const_iterator& p) {
+    assert(static_cast<uint64_t>(p.get_end() - p.get_pos()) >= sizeof(uint64_t) * 2);
+    uint64_t low = 0, high = 0;
+    memcpy((char *)&low, p.get_pos_add(sizeof(uint64_t)), sizeof(uint64_t));
+    memcpy((char *)&high, p.get_pos_add(sizeof(uint64_t)), sizeof(uint64_t));
+    value = build_128_int(low, high);
+  }
+
+  friend struct loffset_t;
+  friend struct laddr_le_t;
+
+private:
+#if defined (__GNUC__) || defined (__clang__)
+  using internal128_t = unsigned __int128;
+#else
+  using internal128_t = boost::multiprecision::uint128_t;
+#endif
+
+  static constexpr internal128_t build_128_int(uint64_t low, uint64_t high) {
+    internal128_t ret = high;
+    ret <<= 64;
+    ret |= low;
+    return ret;
+  }
+
+  constexpr laddr_t(uint64_t low, uint64_t high)
+    : value(build_128_int(low, high)) {}
+
+  constexpr explicit laddr_t(internal128_t value)
+    : value(value) {}
+
+  static constexpr internal128_t U128MAX = std::numeric_limits<internal128_t>::max();
+  static constexpr internal128_t POOL_MASK = internal128_t{0xFF} << 120;
+  static constexpr internal128_t SHARD_MASK = internal128_t{0xFF} << 112;
+  static constexpr internal128_t CRUSH_MASK = internal128_t{0xFFFFFFFFULL} << 80;
+  static constexpr internal128_t RANDOM_MASK = ((internal128_t{1} << 34) - 1) << 46;
+  static constexpr internal128_t METADATA_MASK = 1ULL << 45;
+  static constexpr internal128_t SNAP_MASK = 1ULL << 44;
+  static constexpr internal128_t LOCAL_SNAP_ID_MASK = 0xFFFFFFFFULL << 12;
+  static constexpr internal128_t OFFSET_MASK = (1ULL << 12) - 1;
+  static constexpr internal128_t PREFIX_MASK = POOL_MASK | SHARD_MASK | CRUSH_MASK | RANDOM_MASK;
+
+  uint8_t get_pool() const {
+    return static_cast<uint8_t>((value & POOL_MASK) >> 120);
+  }
+
+  void set_pool(uint8_t pool) {
+    value &= ~POOL_MASK;
+    value |= internal128_t(pool) << 120;
+  }
+
+  uint8_t get_shard() const {
+    return static_cast<uint8_t>((value & SHARD_MASK) >> 112);
+  }
+
+  void set_shard(uint8_t shard) {
+    value &= ~SHARD_MASK;
+    value |= internal128_t(shard) << 112;
+  }
+
+  uint32_t get_crush() const {
+    return static_cast<uint32_t>((value & CRUSH_MASK) >> 80);
+  }
+
+  void set_crush(uint32_t crush) {
+    value &= ~CRUSH_MASK;
+    value |= internal128_t(crush) << 80;
+  }
+
+  internal128_t get_random() const {
+    return (value & RANDOM_MASK) >> 46;
+  }
+
+  void set_random(internal128_t r) {
+    value &= ~RANDOM_MASK;
+    value |= (r << 46) & RANDOM_MASK;
+  }
+
+  bool is_metadata() const {
+    return (value & METADATA_MASK) != 0;
+  }
+
+  // [pool:8][shard:8][crush:32][random:34][metadata:1][snap:1][local_snap_id:32][offset:12]
+  internal128_t value = 0;
+
+  struct random_generator_t {
+    // random field uses 34 bits
+    constexpr static uint64_t MAX = (1ULL << 34) - 1;
+
+    random_generator_t() : rd(), eng(rd()), dist(0, MAX) {}
+    uint64_t operator()() {
+      return dist(eng);
+    }
+    std::random_device rd;
+    std::default_random_engine eng;
+    std::uniform_int_distribution<uint64_t> dist;
+  };
+};
+
+constexpr laddr_t L_ADDR_MIN = laddr_t::min();
+constexpr laddr_t L_ADDR_MAX = laddr_t::max();
+constexpr laddr_t L_ADDR_NULL = laddr_t::null();
+constexpr laddr_t L_ADDR_ROOT = laddr_t::root();
+constexpr laddr_t L_ADDR_LBAT = laddr_t::lbat();
+constexpr std::size_t L_ADDR_USIZE= laddr_t::UNIT_SIZE;
+
+struct loffset_t {
+  loffset_t(laddr_t base, extent_len_t offset)
+    : base(base), offset(offset) {
+    assert(offset < laddr_t::UNIT_SIZE);
+  }
+
+  laddr_t get_roundup_laddr() const {
+    if (offset == 0) {
+      return base;
+    } else {
+      auto ret = base;
+      ret.value++;
+      return ret;
+    }
+  }
+
+  operator laddr_t() const {
+    assert(offset == 0);
+    return base;
+  }
+
+  laddr_t get_base() const {
+    return base;
+  }
+
+  extent_len_t get_offset() const {
+    return offset;
+  }
+
+  friend auto operator<=>(const loffset_t &, const loffset_t &) = default;
+
+  static loffset_t plus(const laddr_t &laddr, extent_len_t offset) {
+    auto l = laddr;
+    l.value += offset >> laddr_t::UNIT_SHIFT;
+    offset &= (1 << laddr_t::UNIT_SHIFT) - 1;
+    return loffset_t(l, offset);
+  }
+
+  static loffset_t minus(const laddr_t &laddr, extent_len_t offset) {
+    auto l = laddr;
+    auto u = (offset + laddr_t::UNIT_SIZE - 1) >> laddr_t::UNIT_SHIFT;
+    l.value -= u;
+    offset = (u << laddr_t::UNIT_SHIFT) - offset;
+    return loffset_t(l, offset);
+  }
+
+private:
+  laddr_t base;
+  extent_len_t offset;
+};
+std::ostream &operator<<(std::ostream&, const loffset_t&);
+inline bool operator==(const laddr_t &laddr, const loffset_t &loffset) {
+  return laddr == loffset.get_base() && loffset.get_offset() == 0;
+}
+inline bool operator==(const loffset_t &loffset, const laddr_t &laddr) {
+  return laddr == loffset.get_base() && loffset.get_offset() == 0;
+}
+inline auto operator<=>(const laddr_t &laddr, const loffset_t &loffset) {
+  if (laddr == loffset.get_base()) {
+    return 0 <=> loffset.get_offset();
+  } else {
+    return laddr <=> loffset.get_base();
+  }
+}
+inline auto operator<=>(const loffset_t &loffset, const laddr_t &laddr) {
+  if (loffset.get_base() == laddr) {
+    return loffset.get_offset() <=> 0;
+  } else {
+    return loffset.get_base() <=> laddr;
+  }
+}
+inline loffset_t operator+(const laddr_t &laddr, const extent_len_t &off) {
+  return loffset_t::plus(laddr, off);
+}
+inline loffset_t operator+(const loffset_t &loffset, const extent_len_t &length) {
+  return loffset_t::plus(loffset.get_base(), loffset.get_offset() + length);
+}
+inline loffset_t operator+(const extent_len_t &offset, const laddr_t &laddr) {
+  return laddr + offset;
+}
+inline loffset_t operator+(const extent_len_t &length, const loffset_t &loffset) {
+  return loffset + length;
+}
+inline laddr_t &operator+=(laddr_t &laddr, extent_len_t len) {
+  auto loff = laddr + len;
+  laddr = laddr_t{loff};
+  return laddr;
+}
+inline loffset_t &operator+=(loffset_t &loffset, extent_len_t len) {
+  loffset = loffset + len;
+  return loffset;
+}
+inline loffset_t operator-(const laddr_t &laddr, const extent_len_t &off) {
+  return loffset_t::minus(laddr, off);
+}
+inline loffset_t operator-(const loffset_t &loffset, const extent_len_t &length) {
+  if (loffset.get_offset() >= length) {
+    return loffset_t(loffset.get_base(), loffset.get_offset() - length);
+  } else {
+    return loffset_t::minus(loffset.get_base(), length - loffset.get_offset());
+  }
+}
+inline uint64_t operator-(const laddr_t &laddr, const loffset_t &loffset) {
+  assert(laddr >= loffset.get_base());
+  return laddr - loffset.get_base() - loffset.get_offset();
+}
+inline uint64_t operator-(const loffset_t &loffset, const laddr_t &laddr) {
+  return loffset.get_base() - laddr + loffset.get_offset();
+}
+inline uint64_t operator-(const loffset_t &lhs, const loffset_t &rhs) {
+  assert(lhs >= rhs);
+  return lhs.get_base() - rhs.get_base() + lhs.get_offset() - rhs.get_offset();
+}
 
 struct __attribute((packed)) laddr_le_t {
   ceph_le64 laddr = ceph_le64(L_ADDR_NULL);
@@ -1130,16 +1571,6 @@ struct min_max_t<paddr_t> {
   static constexpr paddr_t min = P_ADDR_MIN;
   static constexpr paddr_t null = P_ADDR_NULL;
 };
-
-// logical offset, see LBAManager, TransactionManager
-using extent_len_t = uint32_t;
-constexpr extent_len_t EXTENT_LEN_MAX =
-  std::numeric_limits<extent_len_t>::max();
-
-using extent_len_le_t = ceph_le32;
-inline extent_len_le_t init_extent_len_le(extent_len_t len) {
-  return ceph_le32(len);
-}
 
 using extent_ref_count_t = uint32_t;
 constexpr extent_ref_count_t EXTENT_DEFAULT_REF_COUNT = 1;
@@ -2371,6 +2802,7 @@ std::ostream& operator<<(std::ostream&, const writer_stats_printer_t&);
 
 WRITE_CLASS_DENC_BOUNDED(crimson::os::seastore::seastore_meta_t)
 WRITE_CLASS_DENC_BOUNDED(crimson::os::seastore::segment_id_t)
+WRITE_CLASS_DENC_BOUNDED(crimson::os::seastore::laddr_t)
 WRITE_CLASS_DENC_BOUNDED(crimson::os::seastore::paddr_t)
 WRITE_CLASS_DENC_BOUNDED(crimson::os::seastore::journal_seq_t)
 WRITE_CLASS_DENC_BOUNDED(crimson::os::seastore::delta_info_t)
@@ -2392,6 +2824,7 @@ template <> struct fmt::formatter<crimson::os::seastore::journal_seq_t> : fmt::o
 template <> struct fmt::formatter<crimson::os::seastore::journal_tail_delta_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::laddr_list_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::omap_root_t> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<crimson::os::seastore::loffset_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::paddr_list_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::paddr_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<crimson::os::seastore::pladdr_t> : fmt::ostream_formatter {};
@@ -2414,3 +2847,35 @@ template <> struct fmt::formatter<crimson::os::seastore::transaction_type_t> : f
 template <> struct fmt::formatter<crimson::os::seastore::write_result_t> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<ceph::buffer::list> : fmt::ostream_formatter {};
 #endif
+
+template <> struct fmt::formatter<crimson::os::seastore::laddr_t> {
+  bool detailed = false;
+
+  auto parse(auto &ctx) {
+    auto it = ctx.begin();
+    if (it != ctx.end() && *it == 'd') {
+      detailed = true;
+      it++;
+    }
+    if (it != ctx.end() && *it != '}') {
+      throw fmt::format_error("format spec of laddr_t is invalid");
+    }
+    return it;
+  }
+
+  auto format(const crimson::os::seastore::laddr_t& l, fmt::format_context& ctx) const {
+    if (l == crimson::os::seastore::L_ADDR_MIN) {
+      return fmt::format_to(ctx.out(), "L_ADDR_MIN");
+    } else if (l == crimson::os::seastore::L_ADDR_MAX) {
+      return fmt::format_to(ctx.out(), "L_ADDR_MAX");
+    } else if (l == crimson::os::seastore::L_ADDR_NULL) {
+      return fmt::format_to(ctx.out(), "L_ADDR_NULL");
+    } else if (l == crimson::os::seastore::L_ADDR_ROOT) {
+      return fmt::format_to(ctx.out(), "L_ADDR_ROOT");
+    } else if (l == crimson::os::seastore::L_ADDR_LBAT) {
+      return fmt::format_to(ctx.out(), "L_ADDR_LBAT");
+    } else {
+      return l.format(ctx, detailed);
+    }
+  }
+};
