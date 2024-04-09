@@ -75,7 +75,7 @@ public:
 	meta),
       key(meta.begin),
       indirect(val.pladdr.is_laddr()),
-      intermediate_key(indirect ? val.pladdr.get_laddr() : L_ADDR_NULL),
+      intermediate_key(indirect ? val.pladdr.get_non_snap_laddr(key) : L_ADDR_NULL),
       intermediate_length(indirect ? val.len : 0),
       raw_val(val.pladdr),
       map_val(val)
@@ -125,7 +125,11 @@ public:
     assert(intermediate_key >= intermediate_base);
     assert((intermediate_key == L_ADDR_NULL)
       == (intermediate_base == L_ADDR_NULL));
-    return intermediate_key - intermediate_base;
+    if (intermediate_key == L_ADDR_NULL) {
+      return 0;
+    } else {
+      return intermediate_key - intermediate_base;
+    }
   }
 
   extent_len_t get_intermediate_length() const final {
@@ -148,7 +152,7 @@ public:
     laddr_t interkey = L_ADDR_NULL)
   {
     assert(indirect);
-    assert(value.is_paddr());
+    assert(value_is_paddr());
     intermediate_key = (interkey == L_ADDR_NULL ? key : interkey);
     key = new_key;
     len = length;
@@ -233,7 +237,7 @@ public:
     LogicalCachedExtent* extent = nullptr;
 
     static alloc_mapping_info_t create_zero(extent_len_t len) {
-      return {L_ADDR_NULL, len, P_ADDR_ZERO, 0, nullptr};
+      return {L_ADDR_NULL, len, pladdr_t{P_ADDR_ZERO}, 0, nullptr};
     }
     static alloc_mapping_info_t create_indirect(
       laddr_t laddr,
@@ -242,7 +246,7 @@ public:
       return {
 	laddr,
 	len,
-	intermediate_key,
+	pladdr_t{intermediate_key},
 	0,	// crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
 	nullptr};
@@ -253,7 +257,7 @@ public:
       paddr_t paddr,
       uint32_t checksum,
       LogicalCachedExtent *extent) {
-      return {laddr, len, paddr, checksum, extent};
+      return {laddr, len, pladdr_t{paddr}, checksum, extent};
     }
   };
 
@@ -622,7 +626,7 @@ private:
   {
 #ifndef NDEBUG
     for (auto &alloc_info : alloc_infos) {
-      assert(alloc_info.val.get_laddr() != L_ADDR_NULL);
+      assert(alloc_info.val.get_non_snap_laddr(L_ADDR_NULL) != L_ADDR_NULL);
     }
 #endif
     return seastar::do_with(
@@ -642,8 +646,8 @@ private:
 	  auto mapping = static_cast<BtreeLBAMapping*>(mit->release());
 	  auto &alloc_info = *ait;
 	  assert(mapping->get_key() == alloc_info.key);
-	  assert(mapping->get_raw_val().get_laddr() ==
-	    alloc_info.val.get_laddr());
+	  assert(mapping->get_raw_val().get_local_snap_id() ==
+	    alloc_info.val.get_local_snap_id());
 	  assert(mapping->get_length() == alloc_info.len);
 	  rets.emplace_back(mapping);
 	}
