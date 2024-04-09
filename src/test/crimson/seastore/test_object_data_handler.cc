@@ -237,7 +237,7 @@ struct object_data_handler_test_t:
   std::list<LBAMappingRef> get_mappings(objaddr_t offset, extent_len_t length) {
     auto t = create_mutate_transaction();
     auto ret = with_trans_intr(*t, [&](auto &t) {
-      return tm->get_pins(t, offset, length);
+      return tm->get_pins(t, laddr_t::get_hint_from_offset(offset), length);
     }).unsafe_get0();
     return ret;
   }
@@ -308,9 +308,8 @@ struct object_data_handler_test_t:
       "seastore_max_data_allocation_size", "8192").get();
   }
 
-  laddr_t get_random_laddr(size_t block_size, laddr_t limit) {
-    return block_size *
-      std::uniform_int_distribution<>(0, (limit / block_size) - 1)(gen);
+  size_t get_random_laddr(size_t block_size, size_t limit) {
+    return block_size * std::uniform_int_distribution<>(0, (limit / block_size) - 1)(gen);
   }
 
   void test_multi_write() {
