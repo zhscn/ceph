@@ -26,7 +26,10 @@ class TestOnode final : public Onode {
   bool dirty = false;
 
 public:
-  TestOnode(uint32_t ddr, uint32_t dmr) : Onode(ddr, dmr) {}
+  TestOnode(uint32_t ddr, uint32_t dmr) : Onode(ddr, dmr) {
+    layout.local_snap_id = 0;
+  }
+
   const onode_layout_t &get_layout() const final {
     return layout;
   }
@@ -44,6 +47,12 @@ public:
   void update_onode_size(Transaction &t, uint32_t size) final {
     with_mutable_layout(t, [size](onode_layout_t &mlayout) {
       mlayout.size = size;
+    });
+  }
+
+  void update_local_snap_id(Transaction &t, local_snap_t id) final {
+    with_mutable_layout(t, [id](onode_layout_t &mlayout) {
+      mlayout.local_snap_id = id;
     });
   }
 

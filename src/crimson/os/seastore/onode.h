@@ -30,6 +30,7 @@ struct onode_layout_t {
   ceph_le32 size{0};
   ceph_le32 oi_size{0};
   ceph_le32 ss_size{0};
+  local_snap_le_t local_snap_id{LOCAL_SNAP_ID_NULL};
   omap_root_le_t omap_root;
   omap_root_le_t xattr_root;
 
@@ -67,6 +68,7 @@ public:
   virtual ~Onode() = default;
 
   virtual void update_onode_size(Transaction&, uint32_t) = 0;
+  virtual void update_local_snap_id(Transaction&, local_snap_t) = 0;
   virtual void update_omap_root(Transaction&, omap_root_t&) = 0;
   virtual void update_xattr_root(Transaction&, omap_root_t&) = 0;
   virtual void update_object_data(Transaction&, object_data_t&) = 0;
