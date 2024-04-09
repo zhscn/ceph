@@ -306,7 +306,8 @@ BtreeLBAManager::_alloc_extents(
   Transaction &t,
   laddr_t hint,
   std::vector<alloc_mapping_info_t> &alloc_infos,
-  extent_ref_count_t refcount)
+  extent_ref_count_t refcount,
+  bool determinsitic)
 {
   extent_len_t total_len = 0;
   for (auto &info : alloc_infos) {
@@ -327,55 +328,21 @@ BtreeLBAManager::_alloc_extents(
 
   auto c = get_context(t);
   stats.num_alloc_extents += alloc_infos.size();
-  auto lookup_attempts = stats.num_alloc_extents_iter_nexts;
   return seastar::do_with(
     std::vector<LBAMappingRef>(),
     [this, FNAME, &alloc_infos, hint, &t, total_len, c,
-    lookup_attempts, refcount](auto &rets) {
+    refcount, determinsitic](auto &rets) {
     return crimson::os::seastore::with_btree_state<LBABtree, state_t>(
       cache,
       c,
       hint,
       [this, c, hint, total_len, addr=alloc_infos.front().val, &rets, refcount,
-      lookup_attempts, &t, &alloc_infos, FNAME](auto &btree, auto &state) {
-      return LBABtree::iterate_repeat(
-	c,
-	btree.upper_bound_right(c, hint),
-	[this, &state, total_len, addr, &t, hint,
-	lookup_attempts, FNAME](auto &pos) {
-	++stats.num_alloc_extents_iter_nexts;
-	if (pos.is_end()) {
-	  DEBUGT("{}~{}, hint={}, state: end, done with {} attempts, insert at {}",
-		 t, addr, total_len, hint,
-		 stats.num_alloc_extents_iter_nexts - lookup_attempts,
-		 state.last_end);
-	  state.insert_iter = pos;
-	  return typename LBABtree::iterate_repeat_ret_inner(
-	    interruptible::ready_future_marker{},
-	    seastar::stop_iteration::yes);
-	} else if (pos.get_key() >= (state.last_end + total_len)) {
-	  DEBUGT("{}~{}, hint={}, state: {}~{}, done with {} attempts, insert at {} -- {}",
-		 t, addr, total_len, hint,
-		 pos.get_key(), pos.get_val().len,
-		 stats.num_alloc_extents_iter_nexts - lookup_attempts,
-		 state.last_end,
-		 pos.get_val());
-	  state.insert_iter = pos;
-	  return typename LBABtree::iterate_repeat_ret_inner(
-	    interruptible::ready_future_marker{},
-	    seastar::stop_iteration::yes);
-	} else {
-	  state.last_end = pos.get_key() + pos.get_val().len;
-	  TRACET("{}~{}, hint={}, state: {}~{}, repeat ... -- {}",
-		 t, addr, total_len, hint,
-		 pos.get_key(), pos.get_val().len,
-		 pos.get_val());
-	  return typename LBABtree::iterate_repeat_ret_inner(
-	    interruptible::ready_future_marker{},
-	    seastar::stop_iteration::no);
-	}
-      }).si_then([c, addr, hint, &btree, &state, &alloc_infos,
-		  total_len, &rets, refcount, FNAME] {
+      determinsitic, &t, &alloc_infos, FNAME](auto &btree, auto &state) {
+	return search_insert_pos(t, btree, hint, total_len, determinsitic
+	).si_then([c, addr, hint, &btree, &state, &alloc_infos,
+		   total_len, &rets, refcount, FNAME](auto pos) {
+	state.last_end = pos.laddr;
+	state.insert_iter = pos.iter;
 	return trans_intr::do_for_each(
 	  alloc_infos,
 	  [c, addr, hint, &btree, &state, FNAME,
@@ -801,6 +768,96 @@ BtreeLBAManager::_update_mapping(
 	}
       });
     });
+}
+
+BtreeLBAManager::search_insert_pos_ret
+BtreeLBAManager::search_insert_pos(
+  Transaction &t,
+  LBABtree &btree,
+  laddr_t laddr,
+  extent_len_t length,
+  bool determinsitic)
+{
+  auto c = get_context(t);
+  if (determinsitic) {
+    return btree.lower_bound(c, laddr
+    ).si_then([c, laddr, length](LBABtree::iterator pos) {
+      LOG_PREFIX(BtreeLBAManager::search_insert_pos);
+      if (!pos.is_end()) {
+	ceph_assert(pos.get_key() != laddr);
+	ceph_assert(laddr + length <= pos.get_key());
+	DEBUGT("insert {}~{} at {} -- {}", c.trans, laddr, length, pos.get_key(), pos.get_val());
+      } else {
+	DEBUGT("insert {}~{} at begin", c.trans, laddr, length);
+      }
+
+#ifndef NDEBUG
+      if (!pos.is_begin()) {
+	return pos.prev(c).si_then([laddr, pos](LBABtree::iterator prev) {
+	  auto prev_laddr = prev.get_key();
+	  auto prev_length = prev.get_val().len;
+	  ceph_assert(prev_laddr + prev_length <= laddr);
+	  return alloc_extent_iertr::make_ready_future<
+	    insert_pos_t>(std::move(pos), laddr);
+	});
+      } else
+#endif
+	return alloc_extent_iertr::make_ready_future<
+	  insert_pos_t>(std::move(pos), laddr);
+    });
+  } else {
+    struct state_t {
+      state_t(laddr_t laddr) : last_end(laddr), iter(std::nullopt) {}
+      laddr_t last_end;
+      std::optional<LBABtree::iterator> iter;
+    };
+    auto lookup_attempts = stats.num_alloc_extents;
+    return seastar::do_with(
+      state_t(laddr),
+      [this, c, &btree, laddr, length, lookup_attempts](state_t &state) {
+	return trans_intr::repeat([this, c, &btree, &state,
+				   laddr, length, lookup_attempts] {
+	  return btree.upper_bound_right(c, state.last_end
+	  ).si_then([this, &state, c, laddr, length, lookup_attempts](LBABtree::iterator pos) {
+	    LOG_PREFIX(BtreeLBAManager::search_insert_pos);
+	    ++stats.num_alloc_extents_iter_nexts;
+	    if (pos.is_end()) {
+	      DEBUGT("{}~{} state end, done with {} attempts, insert at {}",
+		     c.trans, laddr, length,
+		     stats.num_alloc_extents_iter_nexts - lookup_attempts,
+		     state.last_end);
+	      state.iter = pos;
+	      return typename LBABtree::iterate_repeat_ret_inner(
+	        interruptible::ready_future_marker{},
+	        seastar::stop_iteration::yes);
+	    } else if (pos.get_key() >= (state.last_end + length) &&
+		       (!laddr.has_valid_prefix() ||
+			pos.get_key().get_object_prefix() !=
+			state.last_end.get_object_prefix())) {
+	      DEBUGT("{}~{} state {}~{}, done with {} attempts, insert at {}",
+		     c.trans, laddr, length, pos.get_key(), pos.get_val().len,
+		     stats.num_alloc_extents_iter_nexts - lookup_attempts,
+		     state.last_end);
+	      state.iter = pos;
+	      return typename LBABtree::iterate_repeat_ret_inner(
+	        interruptible::ready_future_marker{},
+	        seastar::stop_iteration::yes);
+	    } else {
+	      state.last_end = laddr_t::get_next_hint(state.last_end);
+	      DEBUGT("{}~{} state {}~{}, retry with {}",
+		     c.trans, laddr, length, pos.get_key(),
+		     pos.get_val().len, state.last_end);
+	      return typename LBABtree::iterate_repeat_ret_inner(
+	        interruptible::ready_future_marker{},
+	        seastar::stop_iteration::no);
+	    }
+	  });
+	}).si_then([&state] {
+	  return alloc_extent_iertr::make_ready_future<
+	    insert_pos_t>(*state.iter, state.last_end);
+	});
+      });
+  }
 }
 
 }
