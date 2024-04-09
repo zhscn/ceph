@@ -75,7 +75,7 @@ public:
 	meta),
       key(meta.begin),
       indirect(val.pladdr.is_laddr()),
-      intermediate_key(indirect ? val.pladdr.get_laddr() : L_ADDR_NULL),
+      intermediate_key(indirect ? val.pladdr.get_non_snap_laddr(key) : L_ADDR_NULL),
       intermediate_length(indirect ? val.len : 0),
       raw_val(val.pladdr),
       map_val(val)
@@ -125,7 +125,11 @@ public:
     assert(intermediate_key >= intermediate_base);
     assert((intermediate_key == L_ADDR_NULL)
       == (intermediate_base == L_ADDR_NULL));
-    return intermediate_key - intermediate_base;
+    if (intermediate_key == L_ADDR_NULL) {
+      return 0;
+    } else {
+      return intermediate_key - intermediate_base;
+    }
   }
 
   extent_len_t get_intermediate_length() const final {
@@ -148,7 +152,7 @@ public:
     laddr_t interkey = L_ADDR_NULL)
   {
     assert(indirect);
-    assert(value.is_paddr());
+    assert(value_is_paddr());
     intermediate_key = (interkey == L_ADDR_NULL ? key : interkey);
     key = new_key;
     len = length;
@@ -237,7 +241,7 @@ public:
     extent_len_t len) final
   {
     std::vector<alloc_mapping_info_t> alloc_infos = {
-      alloc_mapping_info_t{len, P_ADDR_ZERO, 0, nullptr}};
+      alloc_mapping_info_t{len, pladdr_t{P_ADDR_ZERO}, 0, nullptr}};
     return seastar::do_with(
       std::move(alloc_infos),
       [&t, hint, this](auto &alloc_infos) {
@@ -294,7 +298,7 @@ public:
     // The real checksum will be updated upon transaction commit
     assert(ext.get_last_committed_crc() == 0);
     std::vector<alloc_mapping_info_t> alloc_infos = {{
-      ext.get_length(), ext.get_paddr(), ext.get_last_committed_crc(), &ext}};
+      ext.get_length(), pladdr_t{ext.get_paddr()}, ext.get_last_committed_crc(), &ext}};
     return seastar::do_with(
       std::move(alloc_infos),
       [this, &t, hint, refcount](auto &alloc_infos) {
@@ -575,7 +579,7 @@ private:
     std::vector<alloc_mapping_info_t> alloc_infos = {
       alloc_mapping_info_t{
 	len,
-	intermediate_key,
+	pladdr_t(intermediate_key),
 	0,	// crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
 	nullptr}};
