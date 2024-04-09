@@ -1474,7 +1474,8 @@ SeaStore::Shard::_do_transaction_step(
 	  r = iter->second;
 	}
 	auto &ghobj = i.get_oid(op->oid);
-	if (r == L_ADDR_NULL && ghobj.hobj.is_head()) {
+	if (r == L_ADDR_NULL && ghobj.hobj.is_head() &&
+	    onodes[op->oid]->get_layout().object_data.get().is_null()) {
 	  return onode_manager->get_latest_snap(*ctx.transaction, ghobj
 	  ).si_then([this, &ctx, &onodes, op](auto &&onode) {
 	    if (onode) {
@@ -1759,10 +1760,32 @@ SeaStore::Shard::_touch(
 {
   LOG_PREFIX(SeaStore::_touch);
   DEBUGT("onode={}", *ctx.transaction, *onode);
-  if (hint != L_ADDR_NULL) {
-    onode->update_local_snap_id(*ctx.transaction, hint.get_local_snap_id());
+  if (!onode->get_layout().object_data.get().is_null()) {
+    return tm_iertr::make_ready_future();
   }
-  return tm_iertr::now();
+  bool determinsitic;
+  if (hint != L_ADDR_NULL) {
+    determinsitic = true;
+    onode->update_local_snap_id(*ctx.transaction, hint.get_local_snap_id());
+  } else {
+    determinsitic = false;
+    ceph_assert(onode->get_layout().local_snap_id == 0);
+    hint = onode->get_data_hint();
+  }
+  return seastar::do_with(
+    ObjectDataHandler(max_object_size),
+    [this, &ctx, &onode, hint, determinsitic](auto &objhandler) {
+      return objhandler.touch(
+	ObjectDataHandler::context_t{
+	  *transaction_manager,
+	  *ctx.transaction,
+	  *onode,
+	  nullptr,
+	  hint,
+	  L_ADDR_NULL,
+	  determinsitic
+	});
+    });
 }
 
 SeaStore::Shard::tm_ret
@@ -1785,11 +1808,23 @@ SeaStore::Shard::_write(
     std::move(_bl),
     ObjectDataHandler(max_object_size),
     [=, this, &ctx, &onode](auto &bl, auto &objhandler) {
+      auto laddr = L_ADDR_NULL;
+      auto determinsitic = true;
+      auto &layout = onode->get_layout();
+      if (layout.object_data.get().is_null()) {
+	ceph_assert(layout.local_snap_id == 0);
+	laddr = onode->get_data_hint();
+	determinsitic = false;
+      }
       return objhandler.write(
         ObjectDataHandler::context_t{
           *transaction_manager,
           *ctx.transaction,
           *onode,
+	  nullptr,
+	  laddr,
+	  L_ADDR_NULL,
+	  determinsitic
         },
         offset,
         bl);
@@ -1869,16 +1904,28 @@ SeaStore::Shard::_clone(
   LOG_PREFIX(SeaStore::_clone);
   DEBUGT("onode={} d_onode={}", *ctx.transaction, *onode, *d_onode);
 
+  auto src_laddr = onode->get_layout().object_data.get().get_reserved_data_base();
+  auto dst_laddr = L_ADDR_NULL;
+  DEBUGT("src_onode_base={:d}, src_onode_local_snap_id={}, removed_laddr={}",
+	 *ctx.transaction, src_laddr, onode->get_layout().local_snap_id, removed_laddr);
+
   if (removed_laddr == L_ADDR_NULL) {
-    auto snap_id = onode->get_layout().local_snap_id + 1;
+    // take snap shot, src is head
+    uint32_t snap_id = onode->get_layout().local_snap_id;
     d_onode->update_local_snap_id(*ctx.transaction, snap_id);
+    onode->update_local_snap_id(*ctx.transaction, snap_id + 1);
+    auto [new_head_laddr, snap_laddr] = laddr_t::clone(src_laddr, snap_id);
+    src_laddr = new_head_laddr;
+    dst_laddr = snap_laddr;
   } else {
+    // rollback, dst is head
     d_onode->update_local_snap_id(*ctx.transaction, removed_laddr.get_local_snap_id());
+    dst_laddr = removed_laddr;
   }
 
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
-    [this, &ctx, &onode, &d_onode](auto &objHandler) {
+    [this, &ctx, &onode, &d_onode, src_laddr, dst_laddr](auto &objHandler) {
     auto &object_size = onode->get_layout().size;
     d_onode->update_onode_size(*ctx.transaction, object_size);
     return objHandler.clone(
@@ -1886,7 +1933,10 @@ SeaStore::Shard::_clone(
 	*transaction_manager,
 	*ctx.transaction,
 	*onode,
-	d_onode.get()});
+	d_onode.get(),
+	src_laddr,
+	dst_laddr,
+      });
   }).si_then([&ctx, &onode, &d_onode, this] {
     return _clone_omaps(ctx, onode, d_onode, omap_type_t::XATTR);
   }).si_then([&ctx, &onode, &d_onode, this] {
@@ -2124,7 +2174,9 @@ SeaStore::Shard::_truncate(
       ObjectDataHandler::context_t{
         *transaction_manager,
         *ctx.transaction,
-        *onode
+        *onode,
+	nullptr,
+	onode->get_data_hint()
       },
       size);
   });
