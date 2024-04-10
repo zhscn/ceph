@@ -230,19 +230,19 @@ public:
     Transaction &t,
     laddr_t hint,
     extent_len_t len,
-    bool determinsitic) final
+    alloc_opt_t alloc_opt) final
   {
     std::vector<alloc_mapping_info_t> alloc_infos = {
-      alloc_mapping_info_t{len, pladdr_t{P_ADDR_ZERO}, 0, nullptr}};
+      alloc_mapping_info_t{len, pladdr_t{P_ADDR_ZERO, alloc_opt.has_shadow}, 0, nullptr}};
     return seastar::do_with(
       std::move(alloc_infos),
-      [&t, hint, this, determinsitic](auto &alloc_infos) {
+      [&t, hint, this, alloc_opt](auto &alloc_infos) {
       return _alloc_extents(
 	t,
 	hint,
 	alloc_infos,
 	EXTENT_DEFAULT_REF_COUNT,
-	determinsitic
+	alloc_opt.determinsitic
       ).si_then([](auto mappings) {
 	assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -263,7 +263,7 @@ public:
     std::vector<alloc_mapping_info_t> alloc_infos = {
       alloc_mapping_info_t{
 	len,
-	pladdr_t{intermediate_key},
+	pladdr_t(intermediate_key),
 	0,	// crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
 	nullptr}};
@@ -303,21 +303,21 @@ public:
     laddr_t hint,
     LogicalCachedExtent &ext,
     extent_ref_count_t refcount,
-    bool determinsitic) final
+    alloc_opt_t alloc_opt) final
   {
     // The real checksum will be updated upon transaction commit
     assert(ext.get_last_committed_crc() == 0);
     std::vector<alloc_mapping_info_t> alloc_infos = {{
-      ext.get_length(), pladdr_t{ext.get_paddr()}, ext.get_last_committed_crc(), &ext}};
+      ext.get_length(), pladdr_t{ext.get_paddr(), alloc_opt.has_shadow}, ext.get_last_committed_crc(), &ext}};
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint, refcount, determinsitic](auto &alloc_infos) {
+      [this, &t, hint, refcount, alloc_opt](auto &alloc_infos) {
       return _alloc_extents(
 	t,
 	hint,
 	alloc_infos,
 	refcount,
-	determinsitic
+	alloc_opt.determinsitic
       ).si_then([](auto mappings) {
 	assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -331,20 +331,20 @@ public:
     laddr_t hint,
     std::vector<LogicalCachedExtentRef> extents,
     extent_ref_count_t refcount,
-    bool determinsitic) final
+    alloc_opt_t alloc_opt) final
   {
     std::vector<alloc_mapping_info_t> alloc_infos;
     for (auto &extent : extents) {
       alloc_infos.emplace_back(alloc_mapping_info_t{
 	extent->get_length(),
-	pladdr_t(extent->get_paddr()),
+	pladdr_t(extent->get_paddr(), alloc_opt.has_shadow),
 	extent->get_last_committed_crc(),
 	extent.get()});
     }
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint, refcount, determinsitic](auto &alloc_infos) {
-      return _alloc_extents(t, hint, alloc_infos, refcount, determinsitic);
+      [this, &t, hint, refcount, alloc_opt](auto &alloc_infos) {
+      return _alloc_extents(t, hint, alloc_infos, refcount, alloc_opt.determinsitic);
     });
   }
 

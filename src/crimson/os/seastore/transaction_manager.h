@@ -314,7 +314,7 @@ public:
       // NOTE: setting determinsitic to false is safe here, based on the fact that
       // all of determinsitic operations are issued from ObjectDataHandler, which
       // always invoking reserve region before doing alloc_extent.
-      /* determinsitic= */ false
+      {.determinsitic=false}
     ).si_then([ext=std::move(ext), laddr_hint, &t](auto &&) mutable {
       LOG_PREFIX(TransactionManager::alloc_non_data_extent);
       SUBDEBUGT(seastore_tm, "new extent: {}, laddr_hint: {}", t, *ext, laddr_hint);
@@ -357,7 +357,7 @@ public:
       std::vector<LogicalCachedExtentRef>(
 	exts.begin(), exts.end()),
       EXTENT_DEFAULT_REF_COUNT,
-      determinsitic
+      {.determinsitic=determinsitic}
     ).si_then([exts=std::move(exts), &t, FNAME](auto &&) mutable {
       for (auto &ext : exts) {
 	SUBDEBUGT(seastore_tm, "new extent: {}", t, *ext);
@@ -565,7 +565,7 @@ public:
       t,
       hint,
       len,
-      determinsitic);
+      {.determinsitic=determinsitic});
   }
 
   /*
@@ -1038,7 +1038,8 @@ private:
       // it's safe to set determinsitic to true
       fut = lba_manager->alloc_extent(
         t, remap_laddr, *ext,
-	EXTENT_DEFAULT_REF_COUNT, /* determinsitic= */ true);
+	EXTENT_DEFAULT_REF_COUNT,
+	{.determinsitic=true});
     } else {
       fut = lba_manager->clone_mapping(
 	t,
