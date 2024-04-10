@@ -1483,6 +1483,7 @@ private:
 
     version_stat_t committed_dirty_version;
     version_stat_t committed_reclaim_version;
+    version_stat_t committed_promote_version;
   } stats;
 
   template <typename CounterT>

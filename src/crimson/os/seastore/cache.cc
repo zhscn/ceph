@@ -720,6 +720,16 @@ void Cache::register_metrics()
         stats.committed_reclaim_version.version,
         sm::description("sum of the version from rewrite-reclaim extents")
       ),
+      sm::make_counter(
+        "version_count_promote",
+        stats.committed_promote_version.num,
+        sm::description("total number of promote extents")
+      ),
+      sm::make_counter(
+        "version_sum_promote",
+        stats.committed_promote_version.version,
+        sm::description("sum of the version from promote extents")
+      ),
     }
   );
 }
@@ -1552,6 +1562,8 @@ record_t Cache::prepare_record(
   } else if (trans_src == Transaction::src_t::CLEANER_MAIN ||
              trans_src == Transaction::src_t::CLEANER_COLD) {
     stats.committed_reclaim_version.increment_stat(rewrite_version_stats);
+  } else if (trans_src == Transaction::src_t::PROMOTE) {
+    stats.committed_promote_version.increment_stat(rewrite_version_stats);
   } else {
     assert(rewrite_version_stats.is_clear());
   }
