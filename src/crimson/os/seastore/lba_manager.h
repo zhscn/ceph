@@ -118,6 +118,7 @@ public:
   struct ref_update_result_t {
     extent_ref_count_t refcount = 0;
     pladdr_t addr;
+    paddr_t shadow_paddr = P_ADDR_NULL;
     extent_len_t length = 0;
   };
   using ref_iertr = base_iertr::extend<
