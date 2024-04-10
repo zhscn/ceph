@@ -331,6 +331,10 @@ public:
     }
   };
 
+  base_iertr::future<bool> prefix_contains_shadow_mapping(
+    Transaction &t,
+    laddr_t prefix) final;
+
   alloc_extent_ret reserve_region(
     Transaction &t,
     laddr_t hint,
