@@ -210,7 +210,8 @@ public:
     extent_len_t len,
     paddr_t paddr,
     uint32_t checksum,
-    LogicalCachedExtent *nextent) = 0;
+    LogicalCachedExtent *nextent,
+    std::optional<bool> has_shadow = std::nullopt) = 0;
 
   /**
    * update_mappings
