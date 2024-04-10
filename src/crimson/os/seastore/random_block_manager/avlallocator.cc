@@ -270,4 +270,14 @@ bool AvlAllocator::is_free_extent(rbm_abs_addr start, size_t size)
   }
   return false;
 }
+
+void AvlAllocator::register_metrics() {
+  namespace sm = seastar::metrics;
+
+  metrics.add_group("avl_allocator", {
+      sm::make_gauge("avl_tree_leaf_node_count",
+		     [this] { return extent_tree.size(); },
+		     sm::description(""))
+    });
+}
 }

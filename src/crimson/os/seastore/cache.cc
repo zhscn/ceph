@@ -159,6 +159,41 @@ void Cache::register_metrics()
     {extent_types_t::BACKREF_LEAF,        sm::label_instance("ext", "BACKREF_LEAF")}
   };
   assert(labels_by_ext.size() == (std::size_t)extent_types_t::NONE);
+  metrics.add_group(
+      "cache",
+      {
+        sm::make_counter(
+          "clean_write_delayed_count",
+	  [this] { return stats.write_delayed.count; },
+          sm::description("total number of transaction created")
+        ),
+        sm::make_counter(
+          "clean_write_delayed_busy_time",
+	  [this] { return stats.write_delayed.busy_time; },
+          sm::description("total number of transaction created")
+        ),
+        sm::make_counter(
+          "clean_write_alloced_count",
+	  [this] { return stats.write_alloced.count; },
+          sm::description("total number of transaction created")
+        ),
+        sm::make_counter(
+          "clean_write_alloced_busy_time",
+	  [this] { return stats.write_alloced.busy_time; },
+          sm::description("total number of transaction created")
+        ),
+        sm::make_counter(
+          "clean_submit_record_count",
+	  [this] { return stats.submit_record.count; },
+          sm::description("total number of transaction created")
+        ),
+        sm::make_counter(
+          "clean_submit_record_busy_time",
+	  [this] { return stats.submit_record.busy_time; },
+          sm::description("total number of transaction created")
+        )
+      }
+    );
 
   /*
    * trans_created
