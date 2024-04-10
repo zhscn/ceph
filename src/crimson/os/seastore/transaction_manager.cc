@@ -245,7 +245,7 @@ TransactionManager::ref_ret TransactionManager::remove(
   });
 }
 
-TransactionManager::ref_ret TransactionManager::_dec_ref(
+TransactionManager::dec_ref_ret TransactionManager::_dec_ref(
   Transaction &t,
   laddr_t offset,
   bool cascade_remove)
@@ -253,7 +253,7 @@ TransactionManager::ref_ret TransactionManager::_dec_ref(
   LOG_PREFIX(TransactionManager::_dec_ref);
   TRACET("{}", t, offset);
   return lba_manager->decref_extent(t, offset, cascade_remove
-  ).si_then([this, FNAME, offset, &t](auto result) -> ref_ret {
+  ).si_then([this, FNAME, offset, &t](auto result) -> dec_ref_ret {
     DEBUGT("extent refcount is decremented to {} -- {}~{}, {}",
            t, result.refcount, offset, result.length, result.addr);
     auto fut = ref_iertr::now();
@@ -274,7 +274,8 @@ TransactionManager::ref_ret TransactionManager::_dec_ref(
     }
 
     return fut.si_then([result=std::move(result)] {
-      return result.refcount;
+      return ref_iertr::make_ready_future<
+	dec_ref_res_t>(result.refcount, result.shadow_paddr);
     });
   });
 }

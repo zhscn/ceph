@@ -283,7 +283,10 @@ public:
   ref_ret remove(
     Transaction &t,
     laddr_t offset) {
-    return _dec_ref(t, offset, true);
+    return _dec_ref(t, offset, true
+    ).si_then([](auto res) {
+      return res.refcount;
+    });
   }
 
   /// remove refcount for list of offset
@@ -496,17 +499,18 @@ public:
         std::vector<remap_entry>(remaps.begin(), remaps.end()),
         [this, &t, original_laddr, original_paddr,
 	original_len, intermediate_base, intermediate_key]
-        (auto &ret, auto &count, auto &original_bptr, auto &remaps) {
+        (auto &ret, auto &count, auto &original_bptr, auto &remaps) mutable {
         return _dec_ref(t, original_laddr, false
         ).si_then([this, &t, &original_bptr, &ret, &count,
 		   &remaps, intermediate_base, intermediate_key,
-                   original_laddr, original_paddr, original_len](auto) {
+                   original_laddr, original_paddr, original_len](auto dec_res) mutable {
           return trans_intr::do_for_each(
             remaps.begin(),
             remaps.end(),
             [this, &t, &original_bptr, &ret,
 	    &count, intermediate_base, intermediate_key,
-	    original_laddr, original_paddr, original_len](auto &remap) {
+	    original_laddr, original_paddr, original_len,
+	    dec_res](auto &remap) {
             LOG_PREFIX(TransactionManager::remap_pin);
             auto remap_offset = remap.offset;
             auto remap_len = remap.len;
@@ -528,6 +532,10 @@ public:
 	      assert(intermediate_base != L_ADDR_NULL);
 	      remapped_intermediate_key += remap_offset;
 	    }
+	    auto shadow_paddr = dec_res.shadow_paddr;
+	    if (shadow_paddr != P_ADDR_NULL) {
+	      shadow_paddr = shadow_paddr.add_offset(remap_offset);
+	    }
             return alloc_remapped_extent<T>(
               t,
               remap_laddr,
@@ -536,7 +544,8 @@ public:
               original_laddr,
 	      intermediate_base,
 	      remapped_intermediate_key,
-              std::move(original_bptr)
+              std::move(original_bptr),
+	      shadow_paddr
             ).si_then([&ret, &count, remap_laddr](auto &&npin) {
               ceph_assert(npin->get_key() == remap_laddr);
               ret[count++] = std::move(npin);
@@ -890,8 +899,15 @@ private:
     ExtentPlacementManager::dispatch_result_t dispatch_result,
     std::optional<journal_seq_t> seq_to_trim = std::nullopt);
 
+  struct dec_ref_res_t {
+    unsigned refcount = 0;
+    paddr_t shadow_paddr = P_ADDR_NULL;
+    dec_ref_res_t(unsigned r, paddr_t p)
+      : refcount(r), shadow_paddr(p) {}
+  };
+  using dec_ref_ret = ref_iertr::future<dec_ref_res_t>;
   /// Remove refcount for offset
-  ref_ret _dec_ref(
+  dec_ref_ret _dec_ref(
     Transaction &t,
     laddr_t offset,
     bool cascade_remove);
@@ -1056,13 +1072,15 @@ private:
     laddr_t original_laddr,
     laddr_t intermediate_base,
     laddr_t intermediate_key,
-    std::optional<ceph::bufferptr> &&original_bptr) {
+    std::optional<ceph::bufferptr> &&original_bptr,
+    paddr_t shadow_paddr) {
     LOG_PREFIX(TransactionManager::alloc_remapped_extent);
     SUBDEBUG(seastore_tm, "alloc remapped extent: remap_laddr: {}, "
       "remap_paddr: {}, remap_length: {}, has data in cache: {} ",
       remap_laddr, remap_paddr, remap_length,
       original_bptr.has_value() ? "true":"false");
     TCachedExtentRef<T> ext;
+    TCachedExtentRef<T> cold_ext;
     auto fut = LBAManager::alloc_extent_iertr::make_ready_future<
       LBAMappingRef>();
     assert((intermediate_key == L_ADDR_NULL)
@@ -1076,12 +1094,21 @@ private:
 	remap_length,
 	original_laddr,
 	std::move(original_bptr));
+      if (shadow_paddr != P_ADDR_NULL) {
+	cold_ext = cache->alloc_remapped_extent<T>(
+	  t,
+	  remap_laddr,
+	  shadow_paddr,
+	  remap_length,
+	  original_laddr,
+	  std::nullopt);
+      }
       // NOTE: remapped extents are always split from an existing extent,
       // it's safe to set determinsitic to true
       fut = lba_manager->alloc_extent(
         t, remap_laddr, *ext,
 	EXTENT_DEFAULT_REF_COUNT,
-	{.determinsitic=true});
+	{.determinsitic=true, .has_shadow=(shadow_paddr != P_ADDR_NULL)});
     } else {
       fut = lba_manager->clone_mapping(
 	t,
@@ -1090,10 +1117,27 @@ private:
 	intermediate_key,
 	intermediate_base);
     }
-    return fut.si_then([remap_laddr, remap_length, remap_paddr](auto &&ref) {
+    return fut.si_then([remap_laddr, remap_length, remap_paddr,
+			this, cold_ext, shadow_paddr, &t](auto &&ref) mutable {
       assert(ref->get_key() == remap_laddr);
       assert(ref->get_val() == remap_paddr);
       assert(ref->get_length() == remap_length);
+      if (cold_ext) {
+	assert(shadow_paddr == cold_ext->get_paddr());
+	return lba_manager->alloc_extent(
+	  t,
+	  remap_laddr.with_shadow(),
+	  *cold_ext,
+	  EXTENT_DEFAULT_REF_COUNT,
+	  {.determinsitic=true, .has_shadow=false}
+	).si_then([ref=std::move(ref), remap_laddr, cold_ext](auto sref) mutable {
+	  auto key = sref->get_key();
+	  ceph_assert(key.without_shadow() == remap_laddr);
+	  cold_ext->set_laddr(key);
+	  return alloc_remapped_extent_iertr::make_ready_future
+	    <LBAMappingRef>(std::move(ref));
+	});
+      }
       return alloc_remapped_extent_iertr::make_ready_future
         <LBAMappingRef>(std::move(ref));
     });
