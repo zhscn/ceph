@@ -162,7 +162,17 @@ class LRUMemoryCache : public MemoryCache {
           "promoted_bytes",
           [this] { return promoted_size; },
           sm::description("total bytes promoted to the faster device")
-        )
+        ),
+        sm::make_counter(
+          "memory_cache_pending_promote_bytes",
+          [this] { return promote_contents; },
+          sm::description("total pending bytes in the memory cache")
+        ),
+        sm::make_counter(
+          "memory_cache_pending_promote_extents",
+          [this] { return promotion_list.size(); },
+          sm::description("total pending extents in the memory cache")
+        ),
       }
     );
   }
