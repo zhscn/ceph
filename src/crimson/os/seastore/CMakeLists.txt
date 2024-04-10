@@ -8,6 +8,7 @@ set(crimson_seastore_srcs
   transaction.cc
   cache.cc
   cache/memory_cache.cc
+  cache/non_volatile_cache.cc
   root_block.cc
   lba_manager.cc
   async_cleaner.cc
