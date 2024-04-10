@@ -686,6 +686,13 @@ public:
     Transaction &t,
     CachedExtentRef extent);
 
+  using ExtentCallbackInterface::demote_region_res_t;
+  using ExtentCallbackInterface::demote_region_ret;
+  demote_region_ret demote_region(
+    Transaction &t,
+    laddr_t prefix,
+    extent_len_t max_demote_size) final;
+
   using ExtentCallbackInterface::get_extents_if_live_ret;
   get_extents_if_live_ret get_extents_if_live(
     Transaction &t,
