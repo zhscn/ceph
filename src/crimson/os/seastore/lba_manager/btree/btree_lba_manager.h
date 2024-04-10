@@ -422,6 +422,12 @@ public:
 private:
   Cache &cache;
 
+  demote_region_ret demote_region(
+    Transaction &t,
+    laddr_t prefix,
+    extent_len_t max_discard_size,
+    retire_promotion_func_t retire_func,
+    update_nextent_func_t update_func) final;
 
   struct {
     uint64_t num_alloc_extents = 0;
