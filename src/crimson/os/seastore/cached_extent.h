@@ -1088,6 +1088,10 @@ public:
     return std::numeric_limits<extent_len_t>::max();
   }
 
+  virtual bool has_shadow_mapping() const {
+    ceph_abort("not supported");
+  }
+
   virtual get_child_ret_t<LogicalCachedExtent>
   get_logical_extent(Transaction &t) = 0;
 
