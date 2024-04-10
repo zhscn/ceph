@@ -553,6 +553,11 @@ std::size_t JournalTrimmerImpl::get_alloc_journal_size() const
 }
 
 seastar::future<> JournalTrimmerImpl::trim() {
+  auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+  if (stats.trim_point != 0) {
+    stats.trim_wait_time += point - stats.trim_point;
+  }
+  stats.trim_point = point;
   return seastar::when_all(
     [this] {
       if (should_trim_alloc()) {
@@ -578,7 +583,13 @@ seastar::future<> JournalTrimmerImpl::trim() {
         return seastar::now();
       }
     }
-  ).discard_result();
+  ).discard_result().then([this] {
+    auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+    if (stats.trim_point != 0) {
+      stats.trim_busy_time += point - stats.trim_point;
+    }
+    stats.trim_point = point;
+  });
 }
 
 JournalTrimmerImpl::trim_ertr::future<>
@@ -659,6 +670,12 @@ void JournalTrimmerImpl::register_metrics()
 {
   namespace sm = seastar::metrics;
   metrics.add_group("journal_trimmer", {
+    sm::make_counter("trim_wait_time",
+                     [this] { return stats.trim_wait_time; },
+                     sm::description("the size of the journal for dirty extents")),
+    sm::make_counter("trim_busy_time",
+                     [this] { return stats.trim_busy_time; },
+                     sm::description("the size of the journal for dirty extents")),
     sm::make_counter("dirty_journal_bytes",
                      [this] { return get_dirty_journal_size(); },
                      sm::description("the size of the journal for dirty extents")),
@@ -863,6 +880,12 @@ void SegmentCleaner::register_metrics()
   prefix.append("segment_cleaner");
 
   metrics.add_group(prefix, {
+    sm::make_counter("clean_wait_time",
+		     [this] { return stats.clean_wait_time; },
+		     sm::description("the number of segments")),
+    sm::make_counter("clean_busy_time",
+		     [this] { return stats.clean_busy_time; },
+		     sm::description("the number of segments")),
     sm::make_counter("segments_number",
 		     [this] { return segments.get_num_segments(); },
 		     sm::description("the number of segments")),
@@ -949,6 +972,27 @@ void SegmentCleaner::register_metrics()
     sm::make_gauge("reclaim_ratio",
                    [this] { return get_reclaim_ratio(); },
                    sm::description("ratio of reclaimable space to unavailable space")),
+
+    sm::make_counter("clean_retrieve_backref_count",
+		     [this] { return stats.retrieve_backref.count; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+    sm::make_counter("clean_retrieve_backref_busy_time",
+		     [this] { return stats.retrieve_backref.busy_time; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+
+    sm::make_counter("clean_get_extents_count",
+		     [this] { return stats.get_extents.count; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+    sm::make_counter("clean_get_extents_busy_time",
+		     [this] { return stats.get_extents.busy_time; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+
+    sm::make_counter("clean_rewrite_count",
+		     [this] { return stats.rewrite.count; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
+    sm::make_counter("clean_rewrite_busy_time",
+		     [this] { return stats.rewrite.busy_time; },
+		     sm::description("ratio of reclaimable space to unavailable space")),
 
     sm::make_histogram("segment_utilization_distribution",
 		       [this]() -> seastar::metrics::histogram& {
@@ -1109,6 +1153,7 @@ SegmentCleaner::do_reclaim_space(
         // retrieve live extents
         DEBUGT("start, backref_entries={}, backref_extents={}",
                t, backref_entries.size(), extents.size());
+	stats.get_extents.start();
 	return seastar::do_with(
 	  std::move(backref_entries),
 	  [this, &extents, &t](auto &backref_entries) {
@@ -1135,6 +1180,8 @@ SegmentCleaner::do_reclaim_space(
 	    });
 	  });
 	}).si_then([FNAME, &extents, this, &reclaimed, &t] {
+	  stats.get_extents.stop();
+	  stats.rewrite.start();
           DEBUGT("reclaim {} extents", t, extents.size());
           // rewrite live extents
           auto modify_time = segments[reclaim_state->get_segment_id()].modify_time;
@@ -1148,6 +1195,7 @@ SegmentCleaner::do_reclaim_space(
           });
         });
       }).si_then([this, &t] {
+	stats.rewrite.stop();
         return extent_callback->submit_transaction_direct(t);
       });
     });
@@ -1156,6 +1204,13 @@ SegmentCleaner::do_reclaim_space(
 
 SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
 {
+  {
+    auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+    if (stats.clean_point != 0) {
+      stats.clean_wait_time += point - stats.clean_point;
+    }
+    stats.clean_point = point;
+  }
   LOG_PREFIX(SegmentCleaner::clean_space);
   assert(background_callback->is_ready());
   ceph_assert(can_clean_space());
@@ -1185,6 +1240,7 @@ SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
   return seastar::do_with(
     std::pair<std::vector<CachedExtentRef>, backref_pin_list_t>(),
     [this](auto &weak_read_ret) {
+      stats.retrieve_backref.start();
     return repeat_eagain([this, &weak_read_ret] {
       return extent_callback->with_transaction_intr(
 	  Transaction::src_t::READ,
@@ -1215,7 +1271,8 @@ SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
 	  });
 	});
       });
-    }).safe_then([&weak_read_ret] {
+    }).safe_then([this, &weak_read_ret] {
+      stats.retrieve_backref.stop();
       return std::move(weak_read_ret);
     });
   }).safe_then([this, FNAME, pavail_ratio, start](auto weak_read_ret) {
@@ -1233,7 +1290,14 @@ SegmentCleaner::clean_space_ret SegmentCleaner::clean_space()
           reclaimed,
           runs
       ).safe_then([this, FNAME, pavail_ratio, start, &reclaimed, &runs] {
-        stats.reclaiming_bytes += reclaimed;
+	{
+	  auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
+	  if (stats.clean_point != 0) {
+	    stats.clean_busy_time += point - stats.clean_point;
+	  }
+	  stats.clean_point = point;
+	}
+	stats.reclaiming_bytes += reclaimed;
         auto d = seastar::lowres_system_clock::now() - start;
         DEBUG("duration: {}, pavail_ratio before: {}, repeats: {}",
               d, pavail_ratio, runs);
