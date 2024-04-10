@@ -80,6 +80,10 @@ public:
    * This mapping will block from transaction submission until set_paddr
    * is called on the LBAMapping.
    */
+  struct alloc_opt_t {
+    bool determinsitic = false;
+    bool has_shadow = false;
+  };
   using alloc_extent_iertr = base_iertr;
   using alloc_extent_ret = alloc_extent_iertr::future<LBAMappingRef>;
   virtual alloc_extent_ret alloc_extent(
@@ -87,7 +91,7 @@ public:
     laddr_t hint,
     LogicalCachedExtent &nextent,
     extent_ref_count_t refcount,
-    bool determinsitic) = 0;
+    alloc_opt_t alloc_opt) = 0;
 
   using alloc_extents_ret = alloc_extent_iertr::future<
     std::vector<LBAMappingRef>>;
@@ -96,7 +100,7 @@ public:
     laddr_t hint,
     std::vector<LogicalCachedExtentRef> extents,
     extent_ref_count_t refcount,
-    bool determinsitic) = 0;
+    alloc_opt_t alloc_opt) = 0;
 
   virtual alloc_extent_ret clone_mapping(
     Transaction &t,
@@ -109,7 +113,7 @@ public:
     Transaction &t,
     laddr_t hint,
     extent_len_t len,
-    bool determinsitic) = 0;
+    alloc_opt_t alloc_opt) = 0;
 
   struct ref_update_result_t {
     extent_ref_count_t refcount = 0;
