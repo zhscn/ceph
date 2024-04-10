@@ -150,7 +150,8 @@ std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr)
   if (pladdr.is_laddr()) {
     out << "local_snap_id=" << pladdr.get_local_snap_id();
   } else {
-    out << "paddr=" << pladdr.get_paddr();
+    out << "paddr=" << pladdr.get_paddr()
+	<< ", has_shadow_mapping=" << pladdr.has_shadow_mapping();
   }
   return out << ")";
 }
