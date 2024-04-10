@@ -240,6 +240,26 @@ BtreeLBAManager::get_mappings(
     });
 }
 
+BtreeLBAManager::base_iertr::future<bool>
+BtreeLBAManager::prefix_contains_shadow_mapping(
+  Transaction &t,
+  laddr_t laddr)
+{
+  auto c = get_context(t);
+  return with_btree_state<LBABtree, bool>(
+    cache,
+    c,
+    false,
+    [c, laddr](LBABtree &btree, bool &res) {
+      return btree.lower_bound(
+        c, laddr.with_shadow()
+      ).si_then([laddr, &res](LBABtree::iterator iter) {
+	res = !iter.is_end() &&
+	  laddr.get_object_prefix() == iter.get_key().get_object_prefix();
+      });
+    });
+}
+
 BtreeLBAManager::get_mapping_ret
 BtreeLBAManager::get_mapping(
   Transaction &t,
