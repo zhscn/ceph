@@ -149,6 +149,10 @@ public:
     return get_map_val().checksum;
   }
 
+  bool has_shadow_mapping() const final {
+    return raw_val.has_shadow_mapping();
+  }
+
 protected:
   std::unique_ptr<BtreeNodeMapping<laddr_t, paddr_t>> _duplicate(
     op_context_t<laddr_t> ctx) const final {
