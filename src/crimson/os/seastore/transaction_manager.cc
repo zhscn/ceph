@@ -10,6 +10,7 @@
 #include "crimson/os/seastore/journal/circular_bounded_journal.h"
 #include "crimson/os/seastore/lba_manager/btree/lba_btree_node.h"
 #include "crimson/os/seastore/random_block_manager/rbm_device.h"
+#include "crimson/os/seastore/object_data_handler.h"
 
 /*
  * TransactionManager logs
@@ -799,9 +800,51 @@ TransactionManager::demote_region(
   laddr_t prefix,
   extent_len_t max_demote_size)
 {
-  // TODO
-  return demote_region_iertr::make_ready_future<demote_region_res_t>(
-    demote_region_res_t{0, false});
+  return lba_manager->demote_region(
+    t,
+    prefix,
+    max_demote_size,
+    [this, &t](paddr_t paddr, extent_len_t length) {
+      assert(!epm->is_cold_device(paddr.get_device_id()));
+      return cache->retire_extent_addr(t, paddr, length);
+    },
+    [this, &t](LogicalCachedExtent *extent,
+	       paddr_t paddr,
+	       extent_len_t length)
+    -> base_iertr::future<LogicalCachedExtent*> {
+      assert(epm->is_cold_device(paddr.get_device_id()));
+      if (!extent) {
+	return cache->retire_extent_addr(t, paddr, length
+	).si_then([&t, paddr, length, this] {
+	  auto nextent = cache->alloc_remapped_extent<ObjectDataBlock>(
+	    t,
+	    L_ADDR_NULL,
+	    paddr,
+	    length,
+	    L_ADDR_NULL,
+	    std::nullopt)->cast<LogicalCachedExtent>();
+	  return base_iertr::make_ready_future<
+	    LogicalCachedExtent*>(nextent.get());
+	});
+      }
+      cache->retire_extent(t, extent);
+      auto nextent = cache->alloc_remapped_extent_by_type(
+	  t,
+	  extent->get_type(),
+	  extent->get_laddr(),
+	  extent->get_paddr(),
+	  extent->get_length(),
+	  extent->get_laddr(),
+	  extent->get_bptr())->cast<LogicalCachedExtent>();
+      return base_iertr::make_ready_future<
+	LogicalCachedExtent*>(nextent.get());
+    }
+  ).si_then([](auto &&res) {
+    return demote_region_res_t{
+      res.demoted_size,
+      res.completed
+    };
+  });
 }
 
 TransactionManager::get_extents_if_live_ret

@@ -115,6 +115,28 @@ public:
     extent_len_t len,
     alloc_opt_t alloc_opt) = 0;
 
+  struct demote_region_result_t {
+    extent_len_t demoted_size = 0;
+    extent_len_t proceed_size = 0;
+    bool completed = false;
+  };
+
+  using demote_region_iertr = base_iertr;
+  using demote_region_ret = demote_region_iertr::future<
+    demote_region_result_t>;
+  using retire_promotion_func_t = std::function<
+    base_iertr::future<>(paddr_t, extent_len_t)>;
+  using update_nextent_func_t = std::function<
+    base_iertr::future<LogicalCachedExtent*>(
+      LogicalCachedExtent*, paddr_t, extent_len_t)>;
+
+  virtual demote_region_ret demote_region(
+    Transaction &t,
+    laddr_t prefix,
+    extent_len_t max_demote_size,
+    retire_promotion_func_t retire_func,
+    update_nextent_func_t update_func) = 0;
+
   struct ref_update_result_t {
     extent_ref_count_t refcount = 0;
     pladdr_t addr;
