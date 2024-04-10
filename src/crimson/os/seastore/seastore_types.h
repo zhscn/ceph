@@ -1096,6 +1096,22 @@ struct laddr_t {
     value &= ~SNAP_MASK;
   }
 
+  bool is_shadow() const {
+    return (value & SHADOW_MASK) != 0;
+  }
+
+  laddr_t with_shadow() const {
+    auto ret = *this;
+    ret.value |= SHADOW_MASK;
+    return ret;
+  }
+
+  laddr_t without_shadow() const {
+    auto ret = *this;
+    ret.value &= ~SHADOW_MASK;
+    return ret;
+  }
+
   uint32_t get_local_snap_id() const {
     return static_cast<uint32_t>((value & LOCAL_SNAP_ID_MASK) >> 12);
   }
@@ -1215,9 +1231,9 @@ public:
       return fmt::format_to(
         ctx.out(),
 	"(pool={}, shard={}, crush_random={:#x}_0x{}, is_metadata={}, "
-	"is_snap={}, local_snap_id={}, offset={})",
+	"is_shadow={}, is_snap={}, local_snap_id={}, offset={})",
 	get_pool(), get_shard(), get_crush(), Formatter::format(get_random()), is_metadata(),
-	is_snap(), get_local_snap_id(), get_offset());
+	is_shadow(), is_snap(), get_local_snap_id(), get_offset());
     } else {
       return it;
     }
@@ -1269,7 +1285,8 @@ private:
   static constexpr internal128_t POOL_MASK = internal128_t{0xFF} << 120;
   static constexpr internal128_t SHARD_MASK = internal128_t{0xFF} << 112;
   static constexpr internal128_t CRUSH_MASK = internal128_t{0xFFFFFFFFULL} << 80;
-  static constexpr internal128_t RANDOM_MASK = ((internal128_t{1} << 34) - 1) << 46;
+  static constexpr internal128_t RANDOM_MASK = ((internal128_t{1} << 33) - 1) << 47;
+  static constexpr internal128_t SHADOW_MASK = 1ULL << 46;
   static constexpr internal128_t METADATA_MASK = 1ULL << 45;
   static constexpr internal128_t SNAP_MASK = 1ULL << 44;
   static constexpr internal128_t LOCAL_SNAP_ID_MASK = 0xFFFFFFFFULL << 12;
@@ -1304,24 +1321,24 @@ private:
   }
 
   internal128_t get_random() const {
-    return (value & RANDOM_MASK) >> 46;
+    return (value & RANDOM_MASK) >> 47;
   }
 
   void set_random(internal128_t r) {
     value &= ~RANDOM_MASK;
-    value |= (r << 46) & RANDOM_MASK;
+    value |= (r << 47) & RANDOM_MASK;
   }
 
   bool is_metadata() const {
     return (value & METADATA_MASK) != 0;
   }
 
-  // [pool:8][shard:8][crush:32][random:34][metadata:1][snap:1][local_snap_id:32][offset:12]
+  // [pool:8][shard:8][crush:32][random:33][shadow:1][metadata:1][snap:1][local_snap_id:32][offset:12]
   internal128_t value = 0;
 
   struct random_generator_t {
-    // random field uses 34 bits
-    constexpr static uint64_t MAX = (1ULL << 34) - 1;
+    // random field uses 33 bits
+    constexpr static uint64_t MAX = (1ULL << 33) - 1;
 
     random_generator_t() : rd(), eng(rd()), dist(0, MAX) {}
     uint64_t operator()() {
