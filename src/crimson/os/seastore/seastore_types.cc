@@ -201,13 +201,13 @@ std::pair<laddr_t, extent_len_t> laddr_t::get_aligned_range(
 laddr_t laddr_t::get_hint_from_offset(uint64_t offset) {
   ceph_assert(p2align(offset, UNIT_SIZE) == offset);
   internal128_t value = offset >> UNIT_SHIFT;
-  value |= internal128_t{offset >> 24} << 46;
+  value |= internal128_t{offset >> 24} << 47;
   return laddr_t{value};
 }
 
 uint64_t laddr_t::get_original_offset() const {
   uint64_t offset = get_offset();
-  offset |= static_cast<uint64_t>(value >> 46) << 24;
+  offset |= static_cast<uint64_t>(value >> 47) << 24;
   return offset;
 }
 
