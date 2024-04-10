@@ -93,6 +93,10 @@ public:
     return epm->is_cold_device(id);
   }
 
+  bool hash_multiple_tiers() const {
+    return epm->has_cold_tier();
+  }
+
   /**
    * get_pin
    *
@@ -841,6 +845,13 @@ public:
     }
     nv_cache->remove(laddr, type);
   }
+
+  using maybe_load_onode_iertr = base_iertr;
+  using maybe_load_onode_ret = maybe_load_onode_iertr::future<>;
+  maybe_load_onode_ret maybe_load_onode(
+    Transaction&,
+    laddr_t,
+    extent_types_t);
 
   extent_len_t get_block_size() const {
     return epm->get_block_size();
