@@ -410,7 +410,8 @@ public:
     extent_len_t len,
     paddr_t paddr,
     uint32_t checksum,
-    LogicalCachedExtent*) final;
+    LogicalCachedExtent*,
+    std::optional<bool> has_shadow = std::nullopt) final;
 
   get_physical_extent_if_live_ret get_physical_extent_if_live(
     Transaction &t,
