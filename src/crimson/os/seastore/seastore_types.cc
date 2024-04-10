@@ -35,6 +35,7 @@ struct laddr_helper_t {
 		"the mask of laddr_t::high is not valid");
   static_assert(validate_mask(
 		laddr_t::LOW_RANDOM_MASK,
+		laddr_t::LOW_SHADOW_MASK,
 		laddr_t::LOW_METADATA_MASK,
 		laddr_t::LOW_SNAP_MASK,
 		laddr_t::LOW_LOCAL_SNAP_ID_MASK,
@@ -201,7 +202,7 @@ laddr_t laddr_t::get_data_hint(uint8_t pool, uint8_t shard, uint32_t crush)
     high &= ~HIGH_RANDOM_MASK;
     high |= v & HIGH_RANDOM_MASK;
     low &= ~LOW_RANDOM_MASK;
-    low |= (v << /* 64 - 34(random field bits) = */ 30) & LOW_RANDOM_MASK;
+    low |= (v << /* 64 - 33(random field bits) = */ 31) & LOW_RANDOM_MASK;
     ret = laddr_t(low, high);
   } while (!ret.has_valid_prefix());
 
@@ -291,16 +292,16 @@ laddr_t laddr_t::get_hint_from_offset(uint64_t offset) {
   uint64_t high = 0;
 
   low |= offset & LOW_OFFSET_MASK;
-  low |= (offset << 34) & LOW_RANDOM_MASK;
-  high |= offset >> 30;
+  low |= (offset << /* 64 - 12(offset) - 17(low random) */ 35) & LOW_RANDOM_MASK;
+  high |= offset >> /* 12 + 17 */ 29;
 
   return laddr_t(low, high);
 }
 
 uint64_t laddr_t::get_original_offset() const {
   uint64_t offset = low & LOW_OFFSET_MASK;
-  offset |= (low & LOW_RANDOM_MASK) >> 34;
-  offset |= (high & HIGH_RANDOM_MASK) << 30;
+  offset |= (low & LOW_RANDOM_MASK) >> 35;
+  offset |= (high & HIGH_RANDOM_MASK) << 29;
   offset *= UNIT_SIZE;
   return offset;
 }

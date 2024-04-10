@@ -1132,9 +1132,9 @@ struct laddr_t {
       return fmt::format_to(
         ctx.out(),
 	"(pool={}, shard={}, crush_random={:#x}_{:x}, is_metadata={}, "
-	"is_snap={}, local_snap_id={}, offset={})",
+	"is_shadow={} is_snap={}, local_snap_id={}, offset={})",
 	get_pool(), get_shard(), get_crush(), get_random(), is_metadata(),
-	is_snap(), get_local_snap_id(), get_offset());
+	is_shadow(), is_snap(), get_local_snap_id(), get_offset());
     } else {
       return it;
     }
@@ -1155,6 +1155,22 @@ struct laddr_t {
     return (low & LOW_SNAP_MASK) != 0;
   }
 
+  bool is_shadow() const {
+    return (low & LOW_SHADOW_MASK) != 0;
+  }
+
+  laddr_t with_shadow() const {
+    auto ret = *this;
+    ret.low |= LOW_SHADOW_MASK;
+    return ret;
+  }
+
+  laddr_t without_shadow() const {
+    auto ret = *this;
+    ret.low &= ~LOW_SHADOW_MASK;
+    return ret;
+  }
+
 private:
   constexpr laddr_t(uint64_t low, uint64_t high)
     : low(low), high(high) {}
@@ -1163,7 +1179,8 @@ private:
   static constexpr uint64_t HIGH_SHARD_MASK = 0xFFULL << 48;
   static constexpr uint64_t HIGH_CRUSH_MASK = 0xFFFFFFFFULL << 16;
   static constexpr uint64_t HIGH_RANDOM_MASK = 0xFFFF;
-  static constexpr uint64_t LOW_RANDOM_MASK = U64MAX << 46;
+  static constexpr uint64_t LOW_RANDOM_MASK = U64MAX << 47;
+  static constexpr uint64_t LOW_SHADOW_MASK = 1ULL << 46;
   static constexpr uint64_t LOW_METADATA_MASK = 1ULL << 45;
   static constexpr uint64_t LOW_SNAP_MASK = 1ULL << 44;
   static constexpr uint64_t LOW_LOCAL_SNAP_ID_MASK = 0xFFFFFFFFULL << 12;
@@ -1184,7 +1201,7 @@ private:
   uint64_t get_random() const {
     uint64_t ret = 0;
     ret |= (high & HIGH_RANDOM_MASK) << 18;
-    ret |= (low & LOW_RANDOM_MASK) >> 46;
+    ret |= (low & LOW_RANDOM_MASK) >> 47;
     return ret;
   }
 
@@ -1192,14 +1209,14 @@ private:
     return (low & LOW_METADATA_MASK) != 0;
   }
 
-  // [random:18][metadata:1][snap:1][local_snap_id:32][offset:12]
+  // [random:17][shadow:1][metadata:1][snap:1][local_snap_id:32][offset:12]
   uint64_t low = 0;
   // [pool:8][shard:8][crush:32][random:16]
   uint64_t high = 0;
 
   struct random_generator_t {
-    // random field uses 34 bits totally
-    constexpr static uint64_t MAX = (1ULL << 34) - 1;
+    // random field uses 33 bits totally
+    constexpr static uint64_t MAX = (1ULL << 33) - 1;
 
     random_generator_t() : rd(), eng(rd()), dist(0, MAX) {}
     uint64_t operator()() {
