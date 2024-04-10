@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <string.h>
+#include <stdint.h>
 
 #include "include/inline_memory.h"
 #include "include/utime.h"
