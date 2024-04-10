@@ -719,6 +719,16 @@ void Cache::register_metrics()
         stats.committed_reclaim_version.version,
         sm::description("sum of the version from rewrite-reclaim extents")
       ),
+      sm::make_counter(
+        "version_count_promote",
+        stats.committed_promote_version.num,
+        sm::description("total number of promote extents")
+      ),
+      sm::make_counter(
+        "version_sum_promote",
+        stats.committed_promote_version.version,
+        sm::description("sum of the version from promote extents")
+      ),
     }
   );
 }
@@ -1054,6 +1064,46 @@ std::vector<CachedExtentRef> Cache::alloc_new_data_extents_by_type(
   default:
     ceph_assert(0 == "impossible");
     return res;
+  }
+}
+
+CachedExtentRef Cache::alloc_remapped_extent_by_type(
+    Transaction &t,
+    extent_types_t type,
+    laddr_t remap_laddr,
+    paddr_t remap_paddr,
+    extent_len_t remap_offset,
+    extent_len_t remap_length,
+    const std::optional<ceph::bufferptr> &original_bptr)
+{
+  switch (type) {
+  case extent_types_t::ONODE_BLOCK_STAGED:
+    return alloc_remapped_extent<onode::SeastoreNodeExtent>(
+      t, remap_laddr, remap_paddr, remap_offset, remap_length,
+      original_bptr);
+  case extent_types_t::OMAP_INNER:
+    return alloc_remapped_extent<omap_manager::OMapInnerNode>(
+      t, remap_laddr, remap_paddr, remap_offset, remap_length,
+      original_bptr);
+  case extent_types_t::OMAP_LEAF:
+    return alloc_remapped_extent<omap_manager::OMapLeafNode>(
+      t, remap_laddr, remap_paddr, remap_offset, remap_length,
+      original_bptr);
+  case extent_types_t::COLL_BLOCK:
+    return alloc_remapped_extent<collection_manager::CollectionNode>(
+      t, remap_laddr, remap_paddr, remap_offset, remap_length,
+      original_bptr);
+  case extent_types_t::OBJECT_DATA_BLOCK:
+    return alloc_remapped_extent<ObjectDataBlock>(
+      t, remap_laddr, remap_paddr, remap_offset, remap_length,
+      original_bptr);
+  case extent_types_t::TEST_BLOCK:
+    return alloc_remapped_extent<TestBlock>(
+      t, remap_laddr, remap_paddr, remap_offset, remap_length,
+      original_bptr);
+  default:
+    ceph_assert(0 == "impossible");
+    return CachedExtentRef();
   }
 }
 
@@ -1507,6 +1557,8 @@ record_t Cache::prepare_record(
   } else if (trans_src == Transaction::src_t::CLEANER_MAIN ||
              trans_src == Transaction::src_t::CLEANER_COLD) {
     stats.committed_reclaim_version.increment_stat(rewrite_version_stats);
+  } else if (trans_src == Transaction::src_t::PROMOTE) {
+    stats.committed_promote_version.increment_stat(rewrite_version_stats);
   } else {
     assert(rewrite_version_stats.is_clear());
   }

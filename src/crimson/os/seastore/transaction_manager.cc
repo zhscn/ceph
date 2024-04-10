@@ -654,8 +654,111 @@ TransactionManager::promote_extent(
   Transaction &t,
   CachedExtentRef extent)
 {
-  // TODO
-  return rewrite_extent_iertr::make_ready_future();
+  LOG_PREFIX(TransactionManager::promote_extent);
+  assert(epm->get_main_backend_type() == backend_type_t::SEGMENTED);
+  assert(epm->is_cold_device(extent->get_paddr().get_device_id()));
+
+  DEBUGT("promote extent: {}", t, *extent);
+
+  if (!support_shadow_extent(extent->get_type())) {
+    auto mtime = extent->get_modify_time();
+    if (mtime == NULL_TIME) {
+      // XXX: is it appropriate?
+      mtime = seastar::lowres_system_clock::now();
+    }
+    return rewrite_extent(
+      t,
+      extent,
+      INIT_GENERATION,
+      mtime);
+  }
+  assert(extent->is_logical());
+
+  t.get_rewrite_version_stats().increment(extent->get_version());
+  cache->retire_extent(t, extent);
+
+  auto retired_lextent = extent->cast<LogicalCachedExtent>();
+  // t.update_obj_info(
+  //   retired_lextent->get_laddr().get_object_prefix(),
+  //   retired_lextent->get_type());
+
+  auto promoted_extents = cache->alloc_new_data_extents_by_type(
+    t,
+    retired_lextent->get_type(),
+    retired_lextent->get_length(),
+    placement_hint_t::HOT,
+    INIT_GENERATION);
+
+  return seastar::do_with(
+    std::move(promoted_extents),
+    retired_lextent,
+    extent_len_t(0),
+    extent_ref_count_t(0),
+    [&t, this, FNAME](std::vector<CachedExtentRef> &promoted_extents,
+		      LogicalCachedExtentRef &retired_lextent,
+		      extent_len_t &offset,
+		      extent_ref_count_t &refcount) {
+      return trans_intr::do_for_each(promoted_extents, [&t, &retired_lextent, &offset, &refcount, this, FNAME](CachedExtentRef &extent) {
+	auto lextent = extent->cast<LogicalCachedExtent>();
+	lextent->set_modify_time(retired_lextent->get_modify_time());
+	retired_lextent->get_bptr().copy_out(offset, lextent->get_length(), lextent->get_bptr().c_str());
+	lextent->set_laddr(retired_lextent->get_laddr() + offset);
+
+	auto cold_extent = cache->alloc_remapped_extent_by_type(
+	  t,
+	  lextent->get_type(),
+	  lextent->get_laddr(),
+	  retired_lextent->get_paddr().add_offset(offset),
+	  0,
+	  lextent->get_length(),
+	  std::nullopt)->cast<LogicalCachedExtent>();
+	cold_extent->set_modify_time(retired_lextent->get_modify_time());
+	cold_extent->set_laddr(lextent->get_laddr().with_shadow());
+
+	DEBUGT("remap cold extent: {}", t, *cold_extent);
+	return lba_manager->alloc_extent(
+	  t,
+	  cold_extent->get_laddr(),
+	  *cold_extent,
+	  EXTENT_DEFAULT_REF_COUNT,
+	  {.determinsitic=true}
+	).si_then([&t, &retired_lextent, &offset, &refcount, lextent, cold_extent, this, FNAME](auto mapping) {
+	  assert(cold_extent->get_laddr() == mapping->get_key());
+	  assert(mapping->get_key().is_shadow());
+	  assert(mapping->get_key().without_shadow() == lextent->get_laddr());
+	  auto fut = promote_extent_iertr::now();
+	  if (offset == 0) {
+	    DEBUGT("update first extent: {}", t, *lextent);
+	    fut = lba_manager->update_mapping(
+	      t,
+	      retired_lextent->get_laddr(),
+	      retired_lextent->get_length(),
+	      retired_lextent->get_paddr(),
+	      lextent->get_length(),
+	      lextent->get_paddr(),
+	      lextent->get_last_committed_crc(),
+	      lextent.get(),
+	      /*has_shadow=*/true
+	    ).si_then([&refcount](auto c) {
+	      refcount = c;
+	    });
+	  } else {
+	    DEBUGT("alloc promoted extent: {}", t, *lextent);
+	    ceph_assert(refcount != 0);
+	    fut = lba_manager->alloc_extent(
+	      t,
+	      lextent->get_laddr(),
+	      *lextent,
+	      refcount,
+	      {.determinsitic=true, .has_shadow=true}
+	    ).discard_result();
+	  }
+	  return fut.si_then([&offset, lextent] {
+	    offset += lextent->get_length();
+	  });
+	});
+      });
+    });
 }
 
 TransactionManager::demote_region_ret
