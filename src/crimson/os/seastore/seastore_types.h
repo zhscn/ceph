@@ -2330,6 +2330,8 @@ enum class transaction_type_t : uint8_t {
   TRIM_ALLOC,
   CLEANER_MAIN,
   CLEANER_COLD,
+  PROMOTE,
+  DEMOTE,
   MAX
 };
 
