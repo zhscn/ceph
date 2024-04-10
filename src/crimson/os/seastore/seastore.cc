@@ -187,6 +187,20 @@ void SeaStore::Shard::register_metrics()
 	},
 	sm::description("transactions waiting to get "
 		        "through seastore's throttler")
+      ),
+      sm::make_gauge(
+	"inflight_io_count",
+	[this] {
+	  return stats.inflight_io_count;
+	},
+	sm::description("transactions that are running inside seastore")
+      ),
+      sm::make_gauge(
+	"inflight_read_count",
+	[this] {
+	  return stats.inflight_read_count;
+	},
+	sm::description("transactions that are running inside seastore")
       )
     }
   );
