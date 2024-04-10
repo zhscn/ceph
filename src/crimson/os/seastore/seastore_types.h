@@ -1552,6 +1552,10 @@ constexpr bool is_lba_backref_node(extent_types_t type)
   return is_lba_node(type) || is_backref_node(type);
 }
 
+constexpr bool support_shadow_extent(extent_types_t type) {
+  return type == extent_types_t::OBJECT_DATA_BLOCK;
+}
+
 std::ostream &operator<<(std::ostream &out, extent_types_t t);
 
 /**

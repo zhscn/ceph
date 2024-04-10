@@ -526,14 +526,15 @@ BtreeLBAManager::update_mapping(
   extent_len_t len,
   paddr_t addr,
   uint32_t checksum,
-  LogicalCachedExtent *nextent)
+  LogicalCachedExtent *nextent,
+  std::optional<bool> has_shadow)
 {
   LOG_PREFIX(BtreeLBAManager::update_mapping);
   TRACET("laddr={}, paddr {} => {}", t, laddr, prev_addr, addr);
   return _update_mapping(
     t,
     laddr,
-    [prev_addr, addr, prev_len, len, checksum](
+    [prev_addr, addr, prev_len, len, checksum, has_shadow](
       const lba_map_val_t &in) {
       assert(!addr.is_null());
       lba_map_val_t ret = in;
@@ -543,6 +544,9 @@ BtreeLBAManager::update_mapping(
       ret.pladdr = addr;
       ret.len = len;
       ret.checksum = checksum;
+      if (has_shadow) {
+	ret.pladdr.has_shadow = *has_shadow;
+      }
       return ret;
     },
     nextent
