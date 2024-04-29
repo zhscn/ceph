@@ -61,6 +61,11 @@ public:
     waiting(0)
   {}
 
+  void reset() {
+    ceph_assert(!waiting);
+    contents.clear();
+  }
+
   bool empty() {
     std::lock_guard l(lock);
     return contents.empty();
