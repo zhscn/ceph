@@ -312,6 +312,8 @@ TransactionManager::submit_transaction(
       SUBTRACET(seastore_t, "releasing projected_usage: {}", t, projected_usage);
       epm->release_projected_usage(projected_usage);
     });
+  }).finally([&t]() {
+    t.get_handle().exit();
   });
 }
 
