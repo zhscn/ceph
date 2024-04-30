@@ -524,6 +524,7 @@ public:
         if (child_node->is_stable_written()) {
           assert(child_node->is_valid());
           auto cnode = child_node->template cast<child_node_t>();
+          boost::ignore_unused(cnode);
           assert(cnode->has_parent_tracker());
           if (node->is_pending()) {
             auto &n = node->get_stable_for_key(i->get_key());
@@ -552,6 +553,7 @@ public:
             }
           } else {
             auto cnode = child_node->template cast<child_node_t>();
+            boost::ignore_unused(cnode);
             auto pos = node->find(i->get_key()).get_offset();
             auto child = node->children[pos];
             assert(child);
@@ -1525,6 +1527,7 @@ private:
           parent_entry.pos,
           *child);
         auto &cnode = (typename internal_node_t::base_t &)*child;
+        boost::ignore_unused(cnode);
         assert(cnode.get_node_meta().begin == node_iter.get_key());
         assert(cnode.get_node_meta().end > node_iter.get_key());
         return on_found(child->template cast<internal_node_t>());
@@ -1595,6 +1598,7 @@ private:
           parent_entry.pos,
           *child);
         auto &cnode = (typename internal_node_t::base_t &)*child;
+        boost::ignore_unused(cnode);
         assert(cnode.get_node_meta().begin == node_iter.get_key());
         assert(cnode.get_node_meta().end > node_iter.get_key());
         return on_found(child->template cast<leaf_node_t>());
@@ -2150,6 +2154,7 @@ private:
           donor_iter.get_offset(),
           *child);
         auto &node = (typename internal_node_t::base_t&)*child;
+        boost::ignore_unused(node);
         assert(donor_is_left ?
           node.get_node_meta().end == pos.node->get_node_meta().begin :
           node.get_node_meta().begin == pos.node->get_node_meta().end);
