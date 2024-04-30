@@ -1193,6 +1193,10 @@ record_t Cache::prepare_record(
   SUBTRACET(seastore_t, "enter, journal_head={}, dirty_tail={}",
             t, journal_head, journal_dirty_tail);
 
+  for (auto &op : t.debug_ops) {
+    INFOT("asdf lba {}", t, op);
+  }
+
   auto trans_src = t.get_src();
   assert(!t.is_weak());
   assert(trans_src != Transaction::src_t::READ);

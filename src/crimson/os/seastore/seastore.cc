@@ -1310,7 +1310,6 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
         LOG_PREFIX(SeaStore::Shard::do_transaction_no_callbacks);
         SUBDEBUGT(seastore_t, "start with {} objects",
                   t, ctx.iter.objects.size());
-#ifndef NDEBUG
 	TRACET(" transaction dump:\n", t);
 	JSONFormatter f(true);
 	f.open_object_section("transaction");
@@ -1319,7 +1318,6 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
 	std::stringstream str;
 	f.flush(str);
 	TRACET("{}", t, str.str());
-#endif
         return seastar::do_with(
 	  std::vector<OnodeRef>(ctx.iter.objects.size()),
           std::vector<OnodeRef>(ctx.iter.objects.size()),
