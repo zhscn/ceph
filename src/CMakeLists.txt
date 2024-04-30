@@ -308,7 +308,7 @@ if (WITH_BLKIN)
 endif(WITH_BLKIN)
 
 if(WITH_JAEGER)
-  find_package(thrift 0.13.0 REQUIRED)
+  find_package(thrift 0.14.0 REQUIRED)
 
   if(EXISTS "/etc/redhat-release" OR EXISTS "/etc/fedora-release")
     # absl is installed as grpc build dependency on RPM based systems
@@ -379,7 +379,7 @@ set_target_properties(Boost::MPL PROPERTIES
     "BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS;BOOST_MPL_LIMIT_LIST_SIZE=30")
 
 if(WITH_SEASTAR)
-  find_package(c-ares 1.13.0 QUIET)
+  find_package(c-ares 15.2.1 QUIET)
   if(NOT c-ares_FOUND)
     message(STATUS "Could not find c-ares, will build it")
     include(Buildc-ares)

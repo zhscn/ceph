@@ -1,4 +1,4 @@
-pylint==2.6.0
+pylint==2.6.1
 flake8==3.9.0
 flake8-colors==0.1.6
 #TODO: Fix docstring issues: https://tracker.ceph.com/issues/41224
