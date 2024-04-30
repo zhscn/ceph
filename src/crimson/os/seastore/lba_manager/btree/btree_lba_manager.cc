@@ -522,6 +522,13 @@ BtreeLBAManager::_alloc_extents(
 	    state.last_end = laddr + alloc_info.len;
 	  }
 	  ceph_assert(alloc_info.refcount != 0);
+	  c.trans.put_debug(
+	    debug_op_type_t::INSERT,
+	    laddr,
+	    alloc_info.len,
+	    pladdr_t(alloc_info.val),
+	    alloc_info.refcount,
+	    alloc_info.checksum);
 	  return btree.insert(
 	    c,
 	    *state.insert_iter,
@@ -814,9 +821,17 @@ BtreeLBAManager::demote_region(
 	        state.iter->get_val().len
 	      ).si_then([c, &btree, &state](LogicalCachedExtent *nextent) {
 		auto key = state.iter->get_key();
-		auto paddr = state.iter->get_val().pladdr.get_paddr();
+		lba_map_val_t map_val = state.iter->get_val();
+		auto paddr = map_val.pladdr.get_paddr();
 		nextent->set_laddr(key.without_shadow());
 		state.shadow_mappings.push_back(mapping_t{key, paddr, nextent});
+		c.trans.put_debug(
+		  debug_op_type_t::REMOVE,
+		  key,
+		  map_val.len,
+		  map_val.pladdr,
+		  map_val.refcount,
+		  map_val.checksum);
 		return btree.remove(
 	          c, *state.iter
 	        ).si_then([&state](LBABtree::iterator iter) {
@@ -889,8 +904,22 @@ BtreeLBAManager::demote_region(
 	      val.pladdr.get_paddr(),
 	      val.len
 	    ).si_then([c, &btree, &state, &mapping, val]() mutable {
+	      c.trans.put_debug(
+	        debug_op_type_t::UPDATE_FROM,
+		state.iter->get_key(),
+		val.len,
+		val.pladdr,
+		val.refcount,
+		val.checksum);
 	      val.pladdr.has_shadow = false;
 	      val.pladdr.pladdr = mapping.paddr;
+	      c.trans.put_debug(
+	        debug_op_type_t::UPDATE_TO,
+		state.iter->get_key(),
+		val.len,
+		val.pladdr,
+		val.refcount,
+		val.checksum);
 	      return btree.update(
 	        c,
 		*state.iter,
@@ -1000,6 +1029,13 @@ BtreeLBAManager::_decref_intermediate(
 	laddr_t laddr = iter.get_key();
 	bool has_shadow = val.pladdr.has_shadow_mapping();
 	if (!val.refcount) {
+	  c.trans.put_debug(
+	    debug_op_type_t::REMOVE_FROM_REFCOUNT,
+	    laddr,
+	    val.len,
+	    val.pladdr,
+	    val.refcount,
+	    val.checksum);
 	  return btree.remove(c, iter
 	  ).si_then([val, laddr, has_shadow, &t, this, FNAME](auto) {
 	    if (has_shadow) {
@@ -1033,6 +1069,13 @@ BtreeLBAManager::_decref_intermediate(
 	    }
 	  });
 	} else {
+	  c.trans.put_debug(
+	    debug_op_type_t::UPDATE_REFCOUNT,
+	    laddr,
+	    val.len,
+	    val.pladdr,
+	    val.refcount,
+	    val.checksum);
 	  return btree.update(c, iter, val, nullptr
 	  ).si_then([](auto) {
 	    return ref_iertr::make_ready_future<
@@ -1156,8 +1199,16 @@ BtreeLBAManager::_update_mapping(
 	  return crimson::ct_error::enoent::make();
 	}
 
-	auto ret = f(iter.get_val());
+	lba_map_val_t old_val = iter.get_val();
+	auto ret = f(old_val);
 	if (ret.refcount == 0) {
+	  c.trans.put_debug(
+	    debug_op_type_t::REMOVE_FROM_REFCOUNT,
+	    addr,
+	    old_val.len,
+	    old_val.pladdr,
+	    0,
+	    old_val.checksum);
 	  return btree.remove(
 	    c,
 	    iter
@@ -1168,6 +1219,20 @@ BtreeLBAManager::_update_mapping(
 	    };
 	  });
 	} else {
+	  c.trans.put_debug(
+	    debug_op_type_t::UPDATE_FROM,
+	    addr,
+	    old_val.len,
+	    old_val.pladdr,
+	    old_val.refcount,
+	    old_val.checksum);
+	  c.trans.put_debug(
+	    debug_op_type_t::UPDATE_TO,
+	    addr,
+	    ret.len,
+	    ret.pladdr,
+	    ret.refcount,
+	    ret.checksum);
 	  return btree.update(
 	    c,
 	    iter,
@@ -1198,14 +1263,13 @@ BtreeLBAManager::search_insert_pos(
     ).si_then([c, laddr, length](LBABtree::iterator pos) {
       LOG_PREFIX(BtreeLBAManager::search_insert_pos);
       if (!pos.is_end()) {
+	DEBUGT("insert {}~{} at {} -- {}", c.trans, laddr, length, pos.get_key(), pos.get_val());
 	ceph_assert(pos.get_key() != laddr);
 	ceph_assert(laddr + length <= pos.get_key());
-	DEBUGT("insert {}~{} at {} -- {}", c.trans, laddr, length, pos.get_key(), pos.get_val());
       } else {
 	DEBUGT("insert {}~{} at begin", c.trans, laddr, length);
       }
 
-#ifndef NDEBUG
       if (!pos.is_begin()) {
 	return pos.prev(c).si_then([laddr, pos](LBABtree::iterator prev) {
 	  auto prev_laddr = prev.get_key();
@@ -1215,7 +1279,6 @@ BtreeLBAManager::search_insert_pos(
 	    insert_pos_t>(std::move(pos), laddr);
 	});
       } else
-#endif
 	return alloc_extent_iertr::make_ready_future<
 	  insert_pos_t>(std::move(pos), laddr);
     });

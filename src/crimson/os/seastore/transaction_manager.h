@@ -357,6 +357,7 @@ public:
       placement_hint,
       INIT_GENERATION);
     if (!ext) {
+      SUBERRORT(seastore_tm, "no space left for non data extent", t);
       return crimson::ct_error::enospc::make();
     }
     return lba_manager->alloc_extent(
@@ -402,6 +403,7 @@ public:
       placement_hint,
       INIT_GENERATION);
     if (exts.empty()) {
+      SUBERRORT(seastore_tm, "no space left for data extents", t);
       return crimson::ct_error::enospc::make();
     }
     return lba_manager->alloc_extents(

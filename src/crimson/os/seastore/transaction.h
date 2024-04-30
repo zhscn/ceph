@@ -19,6 +19,69 @@ namespace crimson::os::seastore {
 class SeaStore;
 class Transaction;
 
+enum class debug_op_type_t {
+  INSERT,
+  UPDATE_FROM,
+  UPDATE_TO,
+  UPDATE_REFCOUNT,
+  REMOVE,
+  REMOVE_FROM_REFCOUNT,
+};
+
+inline std::ostream& operator<<(std::ostream& out, const debug_op_type_t& op_type) {
+  switch (op_type) {
+  case debug_op_type_t::INSERT:
+    return out << "INSERT";
+  case debug_op_type_t::UPDATE_FROM:
+    return out << "UPDATE_FROM";
+  case debug_op_type_t::UPDATE_TO:
+    return out << "UPDATE_TO";
+  case debug_op_type_t::UPDATE_REFCOUNT:
+    return out << "UPDATE_REFCOUNT";
+  case debug_op_type_t::REMOVE:
+    return out << "REMOVE";
+  case debug_op_type_t::REMOVE_FROM_REFCOUNT:
+    return out << "REMOVE_FROM_REFCOUNT";
+  };
+  return out;
+}
+
+struct debug_mapping_t {
+  laddr_t laddr;
+  extent_len_t len = 0;
+  pladdr_t pladdr;
+  extent_ref_count_t refcount = 0;
+  uint32_t checksum = 0;
+};
+
+struct debug_pladdr_t {
+  const pladdr_t &addr;
+};
+
+inline std::ostream& operator<<(std::ostream &out, const debug_pladdr_t& d) {
+  const auto &addr = d.addr;
+  if (addr.is_laddr()) {
+    return out << addr.get_local_snap_id() << " 0";
+  } else {
+    return out << addr.get_paddr() << " " << addr.has_shadow;
+  }
+}
+
+inline std::ostream& operator<<(std::ostream& out, const debug_mapping_t& mapping) {
+  return out << mapping.laddr << " " << mapping.len << " "
+             << debug_pladdr_t{mapping.pladdr} << " " << mapping.refcount << " "
+             << mapping.checksum;
+}
+
+struct debug_op_t {
+  debug_op_type_t op_type;
+  debug_mapping_t mapping;
+};
+
+inline std::ostream& operator<<(std::ostream& out, const debug_op_t& debug_op) {
+  return out << debug_op.op_type << " " << debug_op.mapping;
+}
+
 struct io_stat_t {
   uint64_t num = 0;
   uint64_t bytes = 0;
@@ -434,6 +497,7 @@ public:
     ool_write_stats = {};
     rewrite_version_stats = {};
     obj_info.clear();
+    debug_ops.clear();
     conflicted = false;
     if (!has_reset) {
       has_reset = true;
@@ -548,6 +612,19 @@ public:
   std::map<laddr_t, obj_info_t> &get_obj_info() {
     return obj_info;
   }
+
+  void put_debug(
+    debug_op_type_t op_type,
+    laddr_t laddr,
+    extent_len_t length,
+    pladdr_t pladdr,
+    extent_ref_count_t refcount,
+    uint32_t checksum)
+  {
+    debug_ops.push_back(debug_op_t{op_type, debug_mapping_t{laddr, length, pladdr, refcount, checksum}});
+  }
+
+  std::vector<debug_op_t> debug_ops;
 
 private:
   friend class Cache;
@@ -719,4 +796,5 @@ using with_trans_ertr = typename T::base_ertr::template extend<crimson::ct_error
 
 #if FMT_VERSION >= 90000
 template <> struct fmt::formatter<crimson::os::seastore::io_stat_t> : fmt::ostream_formatter {};
+template <> struct fmt::formatter<crimson::os::seastore::debug_op_t> : fmt::ostream_formatter {};
 #endif

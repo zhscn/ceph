@@ -442,6 +442,8 @@ TransactionManager::do_submit_transaction(
       cache->stop_alloced();
     }
     return tref.get_handle().enter(write_pipeline.prepare);
+  }).si_then([this, &tref] {
+    return cache->send_debug(tref);
   }).si_then([this, FNAME, &tref, trim_alloc_to=std::move(trim_alloc_to)]() mutable
 	      -> submit_transaction_iertr::future<> {
     if (trim_alloc_to && *trim_alloc_to != JOURNAL_SEQ_NULL) {
