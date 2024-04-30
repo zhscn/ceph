@@ -1041,14 +1041,13 @@ BtreeLBAManager::search_insert_pos(
     ).si_then([c, laddr, length](LBABtree::iterator pos) {
       LOG_PREFIX(BtreeLBAManager::search_insert_pos);
       if (!pos.is_end()) {
+	DEBUGT("insert {}~{} at {} -- {}", c.trans, laddr, length, pos.get_key(), pos.get_val());
 	ceph_assert(pos.get_key() != laddr);
 	ceph_assert(laddr + length <= pos.get_key());
-	DEBUGT("insert {}~{} at {} -- {}", c.trans, laddr, length, pos.get_key(), pos.get_val());
       } else {
 	DEBUGT("insert {}~{} at begin", c.trans, laddr, length);
       }
 
-#ifndef NDEBUG
       if (!pos.is_begin()) {
 	return pos.prev(c).si_then([laddr, pos](LBABtree::iterator prev) {
 	  auto prev_laddr = prev.get_key();
@@ -1058,7 +1057,6 @@ BtreeLBAManager::search_insert_pos(
 	    insert_pos_t>(std::move(pos), laddr);
 	});
       } else
-#endif
 	return alloc_extent_iertr::make_ready_future<
 	  insert_pos_t>(std::move(pos), laddr);
     });

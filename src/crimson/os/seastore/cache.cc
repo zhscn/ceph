@@ -1652,6 +1652,10 @@ void Cache::complete_commit(
     const auto t_src = t.get_src();
     i->invalidate_hints();
     add_extent(i, &t_src);
+    if (i->get_type() == extent_types_t::OBJECT_DATA_BLOCK) {
+      auto l = i->cast<LogicalCachedExtent>();
+      INFOT("asdf fresh {} {} {}", t, i->get_paddr(), i->get_length(), l->get_laddr());
+    }
     epm.commit_space_used(i->get_paddr(), i->get_length());
     if (is_backref_mapped_extent_node(i)) {
       DEBUGT("backref_list new {} len {}",
@@ -1701,10 +1705,20 @@ void Cache::complete_commit(
   }
 
   for (auto &i: t.retired_set) {
+    if (i->get_type() == extent_types_t::OBJECT_DATA_BLOCK) {
+      auto l = i->cast<LogicalCachedExtent>();
+      INFOT("asdf remove {} {} {}", t, i->get_paddr(), i->get_length(), l->get_laddr());
+    } else if (i->get_type() == extent_types_t::RETIRED_PLACEHOLDER) {
+      INFOT("asdf remove_place_holder {} {}", t, i->get_paddr(), i->get_length());
+    }
     epm.mark_space_free(i->get_paddr(), i->get_length());
   }
   for (auto &i: t.existing_block_list) {
     if (i->is_valid()) {
+      if (i->get_type() == extent_types_t::OBJECT_DATA_BLOCK) {
+	auto l = i->cast<LogicalCachedExtent>();
+	INFOT("asdf remap {} {} {}", t, i->get_paddr(), i->get_length(), l->get_laddr());
+      }
       epm.mark_space_used(i->get_paddr(), i->get_length());
     }
   }
@@ -1775,6 +1789,7 @@ void Cache::complete_commit(
 
   for (auto &i: t.pre_alloc_list) {
     if (!i->is_valid()) {
+      INFOT("asdf remove_invalid {} {}", t, i->get_paddr(), i->get_length());
       epm.mark_space_free(i->get_paddr(), i->get_length());
     }
   }
