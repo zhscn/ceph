@@ -1356,6 +1356,8 @@ public:
     stats.submit_record.stop();
   }
 
+  seastar::future<> send_debug(Transaction &t);
+
 private:
   /// Update lru for access to ref
   void touch_extent(
@@ -1426,6 +1428,29 @@ private:
   friend class crimson::os::seastore::BackrefManager;
 
   MemoryCacheRef memory_cache;
+
+  struct Socket {
+    explicit Socket(seastar::connected_socket s)
+      : sock(std::move(s)),
+	out(sock.output())
+    {}
+
+    seastar::future<> write(std::string buf) {
+      return seastar::do_with(std::move(buf), [this](auto &buf) {
+	return out.write(buf);
+      });
+    }
+
+    void close() {
+      sock.shutdown_input();
+      sock.shutdown_output();
+    }
+
+    seastar::connected_socket sock;
+    seastar::output_stream<char> out;
+  };
+  std::optional<Socket> sock;
+  bool sock_fail = false;
 
   struct query_counters_t {
     uint64_t access = 0;

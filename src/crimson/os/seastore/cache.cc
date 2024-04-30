@@ -1184,6 +1184,111 @@ CachedExtentRef Cache::duplicate_for_write(
   return ret;
 }
 
+seastar::future<> Cache::send_debug(Transaction &t) {
+  LOG_PREFIX(Cache::send_debug);
+  if (sock_fail) {
+    return seastar::now();
+  }
+
+  auto fut = seastar::now();
+
+  if (!sock) {
+    seastar::unix_domain_addr addr("/tmp/debug_crimson.sock");
+    return seastar::connect(seastar::socket_address(addr)
+    ).then([this](auto connected_socket) {
+      auto s = Socket(std::move(connected_socket));
+      sock.emplace(std::move(s));
+    }).handle_exception([this, FNAME](auto e) {
+      try {
+	std::rethrow_exception(e);
+      } catch (const std::exception &e) {
+	WARN("connect failed: {}. disable sending debug message", e.what());
+      }
+      sock_fail = true;
+    });
+  }
+
+  return fut.then([this, FNAME, &t] {
+    if (!sock) {
+      return seastar::now();
+    }
+
+    std::string buffer;
+
+    for (auto &op : t.debug_ops) {
+      fmt::format_to(std::back_inserter(buffer), "{} {}\n", t.get_trans_id(), op);
+    }
+
+    t.for_each_finalized_fresh_block([&buffer, &t](const CachedExtentRef &i) {
+      if (i->get_type() == extent_types_t::OBJECT_DATA_BLOCK) {
+	auto l = i->cast<LogicalCachedExtent>();
+	fmt::format_to(
+	  std::back_inserter(buffer),
+	  "{} fresh {} {} {}\n",
+	  t.get_trans_id(),
+	  i->get_paddr(),
+	  i->get_length(),
+	  l->get_laddr());
+      }
+    });
+
+    for (auto &i : t.retired_set) {
+      if (i->get_type() == extent_types_t::OBJECT_DATA_BLOCK) {
+	auto l = i->cast<LogicalCachedExtent>();
+	fmt::format_to(
+	  std::back_inserter(buffer),
+	  "{} remove {} {} {}",
+	  t.get_trans_id(),
+	  i->get_paddr(),
+	  i->get_length(),
+	  l->get_laddr());
+      } else if (i->get_type() == extent_types_t::RETIRED_PLACEHOLDER) {
+	fmt::format_to(
+	  std::back_inserter(buffer),
+	  "{} remove_place_holder {} {}",
+	  t.get_trans_id(),
+	  i->get_paddr(),
+	  i->get_length());
+      }
+    }
+
+    for (auto &i: t.existing_block_list) {
+      if (i->is_valid()) {
+	if (i->get_type() == extent_types_t::OBJECT_DATA_BLOCK) {
+	  auto l = i->cast<LogicalCachedExtent>();
+	  fmt::format_to(
+	    std::back_inserter(buffer),
+	    "{} remap {} {} {}",
+	    t.get_trans_id(),
+	    i->get_paddr(),
+	    i->get_length(),
+	    l->get_laddr());
+	}
+      }
+    }
+
+    for (auto &i: t.pre_alloc_list) {
+      if (!i->is_valid()) {
+	fmt::format_to(
+	  std::back_inserter(buffer),
+	  "{} remove_invalid {} {}",
+	  t.get_trans_id(),
+	  i->get_paddr(),
+	  i->get_length());
+      }
+    }
+    DEBUG("send debug info to socket");
+    return sock->write(std::move(buffer));
+  }).handle_exception([this, FNAME](auto e) {
+    try {
+      std::rethrow_exception(e);
+    } catch (const std::exception &e) {
+      WARN("send debug failed: {}, disable sending debug message", e.what());
+    }
+    sock_fail = true;
+  });
+}
+
 record_t Cache::prepare_record(
   Transaction &t,
   const journal_seq_t &journal_head,
@@ -1840,6 +1945,11 @@ Cache::close_ertr::future<> Cache::close()
   backref_entryrefs_by_seq.clear();
   assert(stats.dirty_bytes == 0);
   memory_cache->clear();
+  if (sock) {
+    sock->close();
+    sock.reset();
+  }
+  sock_fail = false;
   return close_ertr::now();
 }
 
