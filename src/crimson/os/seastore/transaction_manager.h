@@ -640,7 +640,8 @@ public:
       hint,
       mapping.get_length(),
       intermediate_key,
-      intermediate_base
+      intermediate_base,
+      true
     );
   }
 
@@ -1134,7 +1135,8 @@ private:
 	remap_laddr,
 	remap_length,
 	intermediate_key,
-	intermediate_base);
+	intermediate_base,
+	false);
     }
     return fut.si_then([remap_laddr, remap_length, remap_paddr,
 			this, cold_ext, shadow_paddr, &t](auto &&ref) mutable {
