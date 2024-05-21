@@ -825,11 +825,22 @@ public:
    * Ensure the existance of an object in a collection. Create an
    * empty object if necessary
    */
-  void touch(const coll_t& cid, const ghobject_t& oid) {
+  void touch(
+    const coll_t& cid,
+    const ghobject_t& oid,
+    std::optional<ghobject_t> target_oid = std::nullopt,
+    std::optional<local_clone_id_t> clone_id = std::nullopt) {
+    using ceph::encode;
     Op* _op = _get_next_op();
     _op->op = OP_TOUCH;
     _op->cid = _get_coll_id(cid);
     _op->oid = _get_object_id(oid);
+    if (target_oid) {
+      _op->dest_oid = _get_object_id(*target_oid);
+    }
+    if (clone_id) {
+      encode(*clone_id, data_bl);
+    }
     data.ops = data.ops + 1;
   }
   /**
@@ -902,12 +913,12 @@ public:
     data.ops = data.ops + 1;
   }
   /// Set an xattr of an object
-  void setattr(const coll_t& cid, const ghobject_t& oid, const char* name, ceph::buffer::list& val) {
+  void setattr(const coll_t& cid, const ghobject_t& oid, const char* name, const ceph::buffer::list& val) {
     std::string n(name);
     setattr(cid, oid, n, val);
   }
   /// Set an xattr of an object
-  void setattr(const coll_t& cid, const ghobject_t& oid, const std::string& s, ceph::buffer::list& val) {
+  void setattr(const coll_t& cid, const ghobject_t& oid, const std::string& s, const ceph::buffer::list& val) {
     using ceph::encode;
     Op* _op = _get_next_op();
     _op->op = OP_SETATTR;
