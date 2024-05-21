@@ -1287,7 +1287,18 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
                 return seastar::make_ready_future<seastar::stop_iteration>(
                   seastar::stop_iteration::yes);
               };
-            });
+            }).si_then([&onodes, &d_onodes] {
+	      for (OnodeRef &onode: onodes) {
+		if (onode) {
+		  ceph_assert(onode->get_layout().local_snap_id != LOCAL_SNAP_ID_NULL);
+		}
+	      }
+	      for (OnodeRef &onode: d_onodes) {
+		if (onode) {
+		  ceph_assert(onode->get_layout().local_snap_id != LOCAL_SNAP_ID_NULL);
+		}
+	      }
+	    });
         }).si_then([this, &ctx] {
           return transaction_manager->submit_transaction(*ctx.transaction);
         });
