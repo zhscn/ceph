@@ -1160,6 +1160,11 @@ ReplicatedRecoveryBackend::prep_push_target(
   }
   // create a new object
   if (!complete || !recovery_info.object_exist) {
+    auto iter = attrs.find(LC_ATTR);
+    ceph_assert(iter != attrs.end());
+    auto clone_id = LOCAL_CLONE_ID_NULL;
+    auto it = iter->second.cbegin();
+    decode(clone_id, it);
     t->remove(coll->get_cid(), target_oid);
     t->touch(coll->get_cid(), target_oid);
     object_info_t oi;
