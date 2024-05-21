@@ -2264,6 +2264,15 @@ SeaStore::Shard::_setattrs(
     }
   }
 
+  if (auto it = aset.find(LC_ATTR); it != aset.end()) {
+    auto &val = it->second;
+    local_clone_id_t lc_id;
+    auto iter = val.cbegin();
+    decode(lc_id, iter);
+    onode->update_local_clone_id(*ctx.transaction, lc_id);
+    aset.erase(it);
+  }
+
   if (aset.empty()) {
     DEBUGT("all attrs set in onode layout", *ctx.transaction);
     return fut;
