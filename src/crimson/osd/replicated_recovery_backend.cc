@@ -1153,16 +1153,31 @@ ReplicatedRecoveryBackend::prep_push_target(
                    __func__, target_oid);
     add_temp_obj(target_oid.hobj);
   }
+  auto iter = attrs.find(LC_ATTR);
+  ceph_assert(iter != attrs.end());
   // create a new object
   if (!complete || !recovery_info.object_exist) {
+    auto clone_id = LOCAL_CLONE_ID_NULL;
+    auto it = iter->second.cbegin();
+    decode(clone_id, it);
+    logger().debug("{}: creating target_oid {}, local_clone_id {}",
+      __func__, target_oid, clone_id);
     t->remove(coll->get_cid(), target_oid);
-    t->touch(coll->get_cid(), target_oid);
+    t->touch(
+      coll->get_cid(),
+      target_oid,
+      complete
+      ? std::nullopt
+      : std::make_optional<ghobject_t>(recovery_info.soid),
+      std::make_optional<local_clone_id_t>(clone_id));
     object_info_t oi;
     oi.decode_no_oid(attrs.at(OI_ATTR));
     t->set_alloc_hint(coll->get_cid(), target_oid,
                       oi.expected_object_size,
                       oi.expected_write_size,
                       oi.alloc_hint_flags);
+  } else {
+    t->setattr(coll->get_cid(), target_oid, LC_ATTR, iter->second);
   }
   if (complete) {
     // remove xattr and update later if overwrite on original object
