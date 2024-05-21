@@ -1054,6 +1054,9 @@ SeaStore::Shard::get_attrs(
           attrs.emplace(SS_ATTR, std::move(bl));
          DEBUGT("set ss from onode layout", t);
         }
+	bl.clear();
+	encode(layout.local_clone_id, bl);
+	attrs.emplace(LC_ATTR, std::move(bl));
         return seastar::make_ready_future<omap_values_t>(std::move(attrs));
       });
     }
