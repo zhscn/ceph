@@ -1409,29 +1409,90 @@ SeaStore::Shard::_do_transaction_step(
       case Transaction::OP_TOUCH:
       {
 	auto r = L_ADDR_NULL;
-	if (auto iter = removed_laddrs.find(i.get_oid(op->oid));
-	    iter != removed_laddrs.end()) {
-	  r = iter->second;
-	}
 	auto &ghobj = i.get_oid(op->oid);
-	if (r == L_ADDR_NULL && ghobj.hobj.is_head() &&
-	    onodes[op->oid]->get_layout().object_data.get().is_null()) {
-	  return onode_manager->get_latest_snap(*ctx.transaction, ghobj
-	  ).si_then([this, &ctx, &onodes, op](auto &&onode) {
-	    if (onode) {
-	      const auto &layout = onode->get_layout();
-	      uint32_t local_snap_id = layout.local_snap_id;
-	      object_data_t obj_data = layout.object_data.get();
-	      ceph_assert(!obj_data.is_null());
-	      auto laddr = obj_data.get_reserved_data_base();
-	      ceph_assert(local_snap_id == laddr.get_local_snap_id());
-	      auto head_laddr = laddr.with_local_snap_id(local_snap_id + 1);
-	      return _touch(ctx, onodes[op->oid], head_laddr);
-	    }
-	    return _touch(ctx, onodes[op->oid], L_ADDR_NULL);
-	  });
+	if (ghobj.hobj.is_head() && ghobj.is_null_local_snap_id()) {
+	  if (auto iter = removed_laddrs.find(i.get_oid(op->oid));
+	      iter != removed_laddrs.end()) {
+	    r = iter->second;
+	  }
+	}
+#ifndef NDEBUG
+	else {
+	  if (auto iter = removed_laddrs.find(i.get_oid(op->oid));
+	      iter != removed_laddrs.end()) {
+	    ceph_abort("unexpected clones' removal and"
+		       " touch in the same trans");
+	  }
+	}
+#endif
+	auto &onode = onodes[op->oid];
+	auto layout = onode->get_layout();
+	auto object_data = layout.object_data.get();
+	assert((object_data.is_null() && !layout.local_snap_id) ||
+	  layout.local_snap_id ==
+	    object_data.get_reserved_data_base().get_local_snap_id());
+	if (object_data.is_null()) {
+	  if (r != L_ADDR_NULL) {
+	    assert(ghobj.hobj.is_head());
+	    assert(ghobj.is_null_local_snap_id());
+	    return _touch(ctx, onode, r);
+	  }
+	  if (ghobj.is_null_local_snap_id()) {
+	    assert(ghobj.hobj.is_head());
+	    return onode_manager->get_latest_snap(*ctx.transaction, ghobj
+	    ).si_then([this, &ctx, &onode](auto &&o) {
+	      laddr_t laddr = L_ADDR_NULL;
+	      if (o) {
+		const auto &layout2 = o->get_layout();
+		object_data_t obj_data = layout2.object_data.get();
+		ceph_assert(!obj_data.is_null());
+		auto laddr = obj_data.get_reserved_data_base();
+		uint32_t local_snap_id = layout2.local_snap_id;
+		ceph_assert(local_snap_id == laddr.get_local_snap_id());
+		laddr.set_local_snap_id(local_snap_id + 1);
+	      }
+	      return _touch(ctx, onode, laddr);
+	    });
+	  } else if (!ghobj.hobj.is_head()) {
+	    return seastar::do_with(
+	      ghobj,
+	      [this, &ctx, &onode, &ghobj](auto &head) {
+	      head.hobj.snap = CEPH_NOSNAP;
+	      return onode_manager->get_onode(*ctx.transaction, head
+	      ).si_then([this, &ctx, &onode, &ghobj](auto &&o) {
+		if (o) {
+		  const auto &layout2 = o->get_layout();
+		  object_data_t obj_data = layout2.object_data.get();
+		  ceph_assert(!obj_data.is_null());
+		  auto laddr = obj_data.get_reserved_data_base();
+		  laddr.set_local_snap_id(ghobj.get_local_snap_id());
+		  return _touch(ctx, onode, laddr);
+		} else {
+		  laddr_t laddr = L_ADDR_NULL;
+		  laddr.set_local_snap_id(ghobj.get_local_snap_id());
+		  return _touch(ctx, onode, laddr);
+		}
+	      }).handle_error_interruptible(
+		crimson::ct_error::enoent::assert_failure("unexpected enoent"),
+		TransactionManager::base_iertr::pass_further{}
+	      );
+	    });
+	  } else {
+	    auto laddr = L_ADDR_NULL;
+	    laddr.set_local_snap_id(ghobj.get_local_snap_id());
+	    return _touch(ctx, onode, laddr);
+	  }
 	} else {
-	  return _touch(ctx, onodes[op->oid], r);
+	  laddr_t laddr = object_data.get_reserved_data_base();
+	  if (!ghobj.is_null_local_snap_id() &&
+	      ghobj.get_local_snap_id() != laddr.get_local_snap_id()) {
+	    laddr.set_local_snap_id(ghobj.get_local_snap_id());
+	    return _remove_kv_data(ctx, onode
+	    ).si_then([this, laddr, &onode, &ctx] {
+	      return _touch(ctx, onode, laddr);
+	    });
+	  }
+	  return tm_iertr::now();
 	}
       }
       case Transaction::OP_WRITE:
@@ -1734,13 +1795,13 @@ SeaStore::Shard::_touch(
   if (!onode->get_layout().object_data.get().is_null()) {
     return tm_iertr::make_ready_future();
   }
-  bool determinsitic;
-  if (hint != L_ADDR_NULL) {
-    determinsitic = true;
-    onode->update_local_snap_id(*ctx.transaction, hint.get_local_snap_id());
-  } else {
+  bool determinsitic = true;
+  auto id = hint.get_local_snap_id();
+  if (id != LOCAL_SNAP_ID_NULL) {
+    onode->update_local_snap_id(*ctx.transaction, id);
+  }
+  if (hint.without_local_snap_id() == L_ADDR_NULL) {
     determinsitic = false;
-    ceph_assert(onode->get_layout().local_snap_id == 0);
     hint = onode->get_data_hint();
   }
   return seastar::do_with(

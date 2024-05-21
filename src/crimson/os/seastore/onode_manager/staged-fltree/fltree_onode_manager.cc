@@ -186,6 +186,11 @@ FLTreeOnodeManager::get_or_create_onode(
     if (created) {
       DEBUGT("created onode for entry for {}", trans, hoid);
       onode->create_default_layout(trans);
+      auto id = hoid.get_local_snap_id();
+      if (id == LOCAL_SNAP_ID_NULL) {
+        id = 0;
+      }
+      onode->update_local_snap_id(trans, id);
     }
     return get_or_create_onode_iertr::make_ready_future<OnodeRef>(onode);
   });
