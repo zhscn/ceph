@@ -263,6 +263,9 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
         }
 	auto ghobj = current_cursor.get_ghobj();
 	DEBUGT("found onode for {}", trans, ghobj);
+	ghobj.set_local_snap_id(FLTreeOnode(
+	  default_metadata_range,
+	  current_cursor.value()).get_layout().local_snap_id);
         std::get<0>(ret).emplace_back(std::move(ghobj));
         return tree.get_next(trans, current_cursor
         ).si_then([&to_list, &current_cursor] (auto&& next_cursor) mutable {
