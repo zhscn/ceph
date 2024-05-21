@@ -1160,6 +1160,12 @@ ReplicatedRecoveryBackend::prep_push_target(
   }
   // create a new object
   if (!complete || !recovery_info.object_exist) {
+    auto iter = attrs.find(LS_ATTR);
+    ceph_assert(iter != attrs.end());
+    auto local_snap_id = LOCAL_SNAP_ID_NULL;
+    auto it = iter->second.cbegin();
+    decode(local_snap_id, it);
+    target_oid.set_local_snap_id(local_snap_id);
     t->remove(coll->get_cid(), target_oid);
     t->touch(coll->get_cid(), target_oid);
     object_info_t oi;
