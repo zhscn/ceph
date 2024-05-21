@@ -58,6 +58,9 @@ public:
 public:
   object_t oid;
   snapid_t snap;
+#ifdef WITH_SEASTAR
+  local_snap_t local_snap_id = LOCAL_SNAP_ID_NULL;
+#endif
 private:
   uint32_t hash;
   bool max;
@@ -501,6 +504,20 @@ struct ghobject_t {
     // make sure we are distinct from hobject_t(), which has pool INT64_MIN
     return hobj.pool >= 0 && hobj.oid.name.empty();
   }
+
+#ifdef WITH_SEASTAR
+  bool is_null_local_snap_id() const {
+    return hobj.local_snap_id == LOCAL_SNAP_ID_NULL;
+  }
+
+  local_snap_t get_local_snap_id() const {
+    return hobj.local_snap_id;
+  }
+
+  void set_local_snap_id(local_snap_t lsid) {
+    hobj.local_snap_id = lsid;
+  }
+#endif
 
   bool is_internal_pg_local() const {
     return hobj.is_internal_pg_local();

@@ -113,6 +113,9 @@ void hobject_t::encode(bufferlist& bl) const
   encode(key, bl);
   encode(oid, bl);
   encode(snap, bl);
+#ifdef WITH_SEASTAR
+  encode(local_snap_id, bl);
+#endif
   encode(hash, bl);
   encode(max, bl);
   encode(nspace, bl);
@@ -128,6 +131,9 @@ void hobject_t::decode(bufferlist::const_iterator& bl)
     decode(key, bl);
   decode(oid, bl);
   decode(snap, bl);
+#ifdef WITH_SEASTAR
+  decode(local_snap_id, bl);
+#endif
   decode(hash, bl);
   if (struct_v >= 2)
     decode(max, bl);
@@ -171,6 +177,10 @@ void hobject_t::decode(json_spirit::Value& v)
       key = p.value_.get_str();
     else if (p.name_ == "snapid")
       snap = p.value_.get_uint64();
+#ifdef WITH_SEASTAR
+    else if (p.name_ == "local_snap_id")
+      local_snap_id = p.value_.get_int();
+#endif
     else if (p.name_ == "hash")
       hash = p.value_.get_int();
     else if (p.name_ == "max")
@@ -188,6 +198,9 @@ void hobject_t::dump(Formatter *f) const
   f->dump_string("oid", oid.name);
   f->dump_string("key", key);
   f->dump_int("snapid", snap);
+#ifdef WITH_SEASTAR
+  f->dump_int("local_snap_id", local_snap_id);
+#endif
   f->dump_int("hash", hash);
   f->dump_int("max", (int)max);
   f->dump_int("pool", pool);
@@ -266,6 +279,9 @@ ostream& operator<<(ostream& out, const hobject_t& o)
   v.push_back(':');
   append_out_escaped(o.oid.name, &v);
   out << v << ':' << o.snap;
+#ifdef WITH_SEASTAR
+  out << ":lsi_" << o.local_snap_id;
+#endif
   return out;
 }
 
@@ -372,7 +388,7 @@ int cmp(const hobject_t& l, const hobject_t& r)
 void ghobject_t::encode(bufferlist& bl) const
 {
   // when changing this, remember to update encoded_size() too.
-  ENCODE_START(6, 3, bl);
+  ENCODE_START(7, 3, bl);
   encode(hobj.key, bl);
   encode(hobj.oid, bl);
   encode(hobj.snap, bl);
