@@ -5665,6 +5665,9 @@ inline static const bool should_whiteout(
 
 #define OI_ATTR "_"
 #define SS_ATTR "snapset"
+#ifdef WITH_SEASTAR
+#define LC_ATTR "local_clone"
+#endif
 
 struct watch_info_t {
   uint64_t cookie;
