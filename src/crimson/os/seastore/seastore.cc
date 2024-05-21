@@ -1629,13 +1629,22 @@ SeaStore::Shard::tm_ret
 SeaStore::Shard::_remove_omaps(
   internal_context_t &ctx,
   OnodeRef &onode,
-  omap_root_t &&omap_root)
+  const omap_type_t otype)
 {
+  omap_root_t omap_root;
+  if (otype == omap_type_t::XATTR) {
+    omap_root = onode->get_layout().xattr_root.get(
+      onode->get_metadata_hint(device->get_block_size()));
+  } else {
+    assert(otype == omap_type_t::OMAP);
+    omap_root = onode->get_layout().omap_root.get(
+      onode->get_metadata_hint(device->get_block_size()));
+  }
   if (omap_root.get_location() != L_ADDR_NULL) {
     return seastar::do_with(
       BtreeOMapManager(*transaction_manager),
       std::move(omap_root),
-      [&ctx, onode](auto &omap_manager, auto &omap_root) {
+      [&ctx](auto &omap_manager, auto &omap_root) {
       return omap_manager.omap_clear(
 	omap_root,
 	*ctx.transaction
@@ -1645,29 +1654,35 @@ SeaStore::Shard::_remove_omaps(
 	  "Invalid error in SeaStore::_remove"
 	}
       );
+    }).si_then([onode, otype, &ctx] {
+      omap_root_t root;
+      if (otype == omap_type_t::XATTR) {
+	onode->update_xattr_root(*ctx.transaction, root);
+      } else {
+	assert(otype == omap_type_t::OMAP);
+	onode->update_omap_root(*ctx.transaction, root);
+      }
     });
   }
   return tm_iertr::now();
 }
 
 SeaStore::Shard::tm_ret
-SeaStore::Shard::_remove(
+SeaStore::Shard::_remove_kv_data(
   internal_context_t &ctx,
   OnodeRef &onode)
 {
-  LOG_PREFIX(SeaStore::_remove);
+  LOG_PREFIX(SeaStore::_remove_kv_data);
   DEBUGT("onode={}", *ctx.transaction, *onode);
   return _remove_omaps(
     ctx,
     onode,
-    onode->get_layout().omap_root.get(
-      onode->get_metadata_hint(device->get_block_size()))
+    omap_type_t::OMAP
   ).si_then([this, &ctx, onode]() mutable {
     return _remove_omaps(
       ctx,
       onode,
-      onode->get_layout().xattr_root.get(
-	onode->get_metadata_hint(device->get_block_size())));
+      omap_type_t::XATTR);
   }).si_then([this, &ctx, onode] {
     return seastar::do_with(
       ObjectDataHandler(max_object_size),
@@ -1679,7 +1694,23 @@ SeaStore::Shard::_remove(
 	    *onode,
 	  });
     });
-  }).si_then([this, &ctx, onode]() mutable {
+  }).handle_error_interruptible(
+    crimson::ct_error::input_output_error::pass_further(),
+    crimson::ct_error::assert_all(
+      "Invalid error in SeaStore::_remove"
+    )
+  );
+}
+
+SeaStore::Shard::tm_ret
+SeaStore::Shard::_remove(
+  internal_context_t &ctx,
+  OnodeRef &onode)
+{
+  LOG_PREFIX(SeaStore::_remove);
+  DEBUGT("onode={}", *ctx.transaction, *onode);
+  return _remove_kv_data(ctx, onode
+  ).si_then([this, &ctx, onode]() mutable {
     return onode_manager->erase_onode(*ctx.transaction, onode);
   }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
