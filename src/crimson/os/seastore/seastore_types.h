@@ -1097,6 +1097,22 @@ struct laddr_t {
     return ret;
   }
 
+  bool is_shadow() const {
+    return ShadowSpec::get<bool>(value);
+  }
+
+  laddr_t with_shadow() const {
+    auto ret = *this;
+    ShadowSpec::set(ret.value, 1);
+    return ret;
+  }
+
+  laddr_t without_shadow() const {
+    auto ret = *this;
+    ShadowSpec::set(ret.value, 0);
+    return ret;
+  }
+
   local_snap_t get_local_snap_id() const {
     return LocalSnapIdSpec::get<local_snap_t>(value);
   }
@@ -1213,10 +1229,10 @@ public:
     if (detailed) {
       return fmt::format_to(
         ctx.out(),
-	"(pool={}, shard={}, crush={:#x}, random={:#x}, is_metadata={}, "
-	"local_snap_id={}, offset={})",
-	get_pool(), get_shard(), get_crush(), get_random(), is_metadata(),
-	get_local_snap_id(), get_offset());
+	"(pool={}, shard={}, crush={:#x}, random={:#x}, is_shadow={}, "
+	"is_metadata={}, local_snap_id={}, offset={})",
+	get_pool(), get_shard(), get_crush(), get_random(), is_shadow(),
+	is_metadata(), get_local_snap_id(), get_offset());
     } else {
       return it;
     }
@@ -1286,7 +1302,8 @@ private:
   using PoolSpec        = FieldSpec<8, 120>;
   using ShardSpec       = FieldSpec<8, 112>;
   using CrushSpec       = FieldSpec<32, 80>;
-  using RandomSpec      = FieldSpec<32, 48>;
+  using RandomSpec      = FieldSpec<31, 49>;
+  using ShadowSpec      = FieldSpec<1,  48>;
   using MetadataSpec    = FieldSpec<1,  47>;
   using LocalSnapIdSpec = FieldSpec<32, 15>;
   using OffsetSpec      = FieldSpec<15,  0>; // hard limit of object size is 128MiB
@@ -1330,12 +1347,12 @@ private:
     return MetadataSpec::get<bool>(value);
   }
 
-  // [pool:8][shard:8][crush:32][random:32][metadata:1][local_snap_id:32][offset:15]
+  // [pool:8][shard:8][crush:32][random:31][shadow:1][metadata:1][local_snap_id:32][offset:15]
   internal128_t value = 0;
 
   struct random_generator_t {
-    // random field uses 32 bits
-    constexpr static uint32_t MAX = std::numeric_limits<uint32_t>::max();
+    // random field uses 31 bits
+    constexpr static uint32_t MAX = (1ULL << RandomSpec::len) - 1;
 
     random_generator_t() : rd(), eng(rd()), dist(0, MAX) {}
     uint32_t operator()() {

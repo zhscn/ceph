@@ -222,13 +222,13 @@ laddr_t laddr_t::get_hint_from_offset(uint64_t offset) {
   auto l = L_ADDR_MIN;
   l.value = offset & OffsetSpec::MASK;
   l.value |= internal128_t{offset >> OffsetSpec::len}
-    << (OffsetSpec::len + LocalSnapIdSpec::len + MetadataSpec::len);
+    << (OffsetSpec::len + LocalSnapIdSpec::len + MetadataSpec::len + ShadowSpec::len);
   return l;
 }
 
 uint64_t laddr_t::get_original_offset() const {
   uint64_t offset = value & OffsetSpec::MASK;
-  auto off = OffsetSpec::len + LocalSnapIdSpec::len + MetadataSpec::len;
+  auto off = OffsetSpec::len + LocalSnapIdSpec::len + MetadataSpec::len + ShadowSpec::len;
   offset |= static_cast<uint64_t>(value >> off) << OffsetSpec::len;
   offset <<= UNIT_SHIFT;
   return offset;
