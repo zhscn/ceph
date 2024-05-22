@@ -659,7 +659,8 @@ public:
 	      paddr,
 	      placement_hint_t::HOT,
 	      INIT_GENERATION,
-	      t.get_trans_id());
+	      t.get_trans_id(),
+	      write_policy_t::WRITE_BACK);
 	    return move_mappings_iertr::make_ready_future<LogicalCachedExtent*>(new_ext.get());
 	  }
 	});
