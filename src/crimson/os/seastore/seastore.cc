@@ -1414,8 +1414,8 @@ SeaStore::Shard::_do_transaction_step(
 	TRACET("removing {}", *ctx.transaction, i.get_oid(op->oid));
 	auto obj_data = onodes[op->oid]->get_layout().object_data.get();
 	auto laddr = obj_data.get_reserved_data_base();
-	removed_laddrs.emplace(i.get_oid(op->oid), laddr);
-        return _remove(ctx, onodes[op->oid]
+	auto p = removed_laddrs.emplace(i.get_oid(op->oid), laddr);
+        return _remove(ctx, p.first->first, onodes[op->oid]
 	).si_then([&onodes, &d_onodes, op] {
 	  onodes[op->oid].reset();
 	  d_onodes[op->oid].reset();
@@ -1785,6 +1785,7 @@ SeaStore::Shard::_remove_kv_data(
 SeaStore::Shard::tm_ret
 SeaStore::Shard::_remove(
   internal_context_t &ctx,
+  const ghobject_t &hobj,
   OnodeRef &onode)
 {
   LOG_PREFIX(SeaStore::_remove);
