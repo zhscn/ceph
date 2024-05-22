@@ -160,6 +160,25 @@ public:
     });
   }
 
+  void update_hit_ratio(Transaction& t, device_id_t id) {
+    if (epm->is_cold_device(id)) {
+      t.write_hit_cold++;
+    } else {
+      t.write_hit_hot++;
+    }
+  }
+  void update_read_ratio(Transaction& t, device_id_t id) {
+    if (epm->is_cold_device(id)) {
+      t.read_hit_cold++;
+    } else {
+      t.read_hit_hot++;
+    }
+  }
+  void submit_read_ratio(Transaction& t) {
+    if (cache) {
+      cache->update_read_ratio(t);
+    }
+  }
   /**
    * read_extent
    *
