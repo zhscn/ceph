@@ -1095,6 +1095,22 @@ struct laddr_t {
     return RecoverSpec::get<bool>(value);
   }
 
+  bool is_shadow() const {
+    return ShadowSpec::get<bool>(value);
+  }
+
+  laddr_t with_shadow() const {
+    auto ret = *this;
+    ShadowSpec::set(ret.value, 1);
+    return ret;
+  }
+
+  laddr_t without_shadow() const {
+    auto ret = *this;
+    ShadowSpec::set(ret.value, 0);
+    return ret;
+  }
+
   laddr_t with_recover() const {
     laddr_t ret = *this;
     RecoverSpec::set(ret.value, 1);
@@ -1223,10 +1239,10 @@ public:
     if (detailed) {
       return fmt::format_to(
         ctx.out(),
-	"(pool={}, shard={}, crush={:#x}, random={:#x}, is_metadata={}, "
-	"local_clone_id={}, offset={})",
-	get_pool(), get_shard(), get_crush(), get_random(), is_metadata(),
-	get_local_clone_id(), get_offset());
+	"(pool={}, shard={}, crush={:#x}, random={:#x}, is_shadow={}, "
+	"is_metadata={}, local_clone_id={}, offset={})",
+	get_pool(), get_shard(), get_crush(), get_random(), is_shadow(),
+	is_metadata(), get_local_clone_id(), get_offset());
     } else {
       return it;
     }
@@ -1296,7 +1312,8 @@ private:
   using PoolSpec         = FieldSpec<8, 120>;
   using ShardSpec        = FieldSpec<8, 112>;
   using CrushSpec        = FieldSpec<32, 80>;
-  using RandomSpec       = FieldSpec<31, 49>;
+  using RandomSpec       = FieldSpec<30, 50>;
+  using ShadowSpec       = FieldSpec<1,  49>;
   using MetadataSpec     = FieldSpec<1,  48>;
   using RecoverSpec      = FieldSpec<1,  47>;
   using LocalCloneIdSpec = FieldSpec<32, 15>;
@@ -1341,11 +1358,11 @@ private:
     return MetadataSpec::get<bool>(value);
   }
 
-  // [pool:8][shard:8][crush:32][random:31][metadata:1][recover:1][local_clone_id:32][offset:15]
+  // [pool:8][shard:8][crush:32][random:30][shadow:1][metadata:1][recover:1][local_clone_id:32][offset:15]
   internal128_t value = 0;
 
   struct random_generator_t {
-    // random field uses 31 bits
+    // random field uses 30 bits
     constexpr static uint32_t MAX = (1ULL << RandomSpec::len) - 1;
 
     random_generator_t() : rd(), eng(rd()), dist(0, MAX) {}

@@ -226,14 +226,14 @@ laddr_t laddr_t::get_hint_from_offset(uint64_t offset) {
   l.value = offset & OffsetSpec::MASK;
   l.value |= internal128_t{offset >> OffsetSpec::len}
              << (OffsetSpec::len + LocalCloneIdSpec::len + MetadataSpec::len +
-                 RecoverSpec::len);
+                 RecoverSpec::len + ShadowSpec::len);
   return l;
 }
 
 uint64_t laddr_t::get_original_offset() const {
   uint64_t offset = value & OffsetSpec::MASK;
   auto off = OffsetSpec::len + LocalCloneIdSpec::len + MetadataSpec::len +
-             RecoverSpec::len;
+             RecoverSpec::len + ShadowSpec::len;
   offset |= static_cast<uint64_t>(value >> off) << OffsetSpec::len;
   offset <<= UNIT_SHIFT;
   return offset;
