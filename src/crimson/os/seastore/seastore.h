@@ -363,6 +363,7 @@ public:
       omap_root_t &&omap_root);
     tm_ret _remove(
       internal_context_t &ctx,
+      const ghobject_t &hobj,
       OnodeRef &onode);
     tm_ret _touch(
       internal_context_t &ctx,

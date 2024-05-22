@@ -34,6 +34,11 @@ public:
     Transaction &trans,
     const ghobject_t &hoid) = 0;
 
+  virtual contains_onode_ret contains_onode(
+    Transaction &trans,
+    const ghobject_t &start,
+    const ghobject_t &end) = 0;
+
   using get_onode_iertr = base_iertr::extend<
     crimson::ct_error::enoent>;
   using get_onode_ret = get_onode_iertr::future<

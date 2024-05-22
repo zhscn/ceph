@@ -454,6 +454,17 @@ TransactionManager::do_submit_transaction(
       journal->get_trimmer().update_journal_tails(
 	cache->get_oldest_dirty_from().value_or(start_seq),
 	cache->get_oldest_backref_dirty_from().value_or(start_seq));
+
+      if (nv_cache) {
+	for (auto &p : tref.get_obj_info()) {
+	  if (p.second.op == Transaction::obj_op_t::ADD) {
+	    nv_cache->move_to_top(p.first, p.second.type, /*create_if_absent=*/true);
+	  } else {
+	    nv_cache->remove(p.first, p.second.type);
+	  }
+	}
+      }
+
       return journal->finish_commit(tref.get_src()
       ).then([&tref] {
 	return tref.get_handle().complete();
@@ -697,9 +708,9 @@ TransactionManager::promote_extent(
   cache->retire_extent(t, extent);
 
   auto retired_lextent = extent->cast<LogicalCachedExtent>();
-  // t.update_obj_info(
-  //   retired_lextent->get_laddr().get_object_prefix(),
-  //   retired_lextent->get_type());
+  t.update_obj_info(
+    retired_lextent->get_laddr().get_object_prefix(),
+    retired_lextent->get_type());
 
   auto promoted_extents = cache->alloc_new_data_extents_by_type(
     t,
