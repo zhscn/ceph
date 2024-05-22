@@ -908,20 +908,44 @@ TransactionManager::get_extents_if_live(
               LBAMappingRef &pin) -> Cache::get_extent_iertr::future<>
           {
             auto pin_paddr = pin->get_val();
-            auto &pin_seg_paddr = pin_paddr.as_seg_paddr();
-            auto pin_paddr_seg_id = pin_seg_paddr.get_segment_id();
-            auto pin_len = pin->get_length();
-            if (pin_paddr_seg_id != paddr_seg_id) {
-              return seastar::now();
-            }
-            // Only extent split can happen during the lookup
-            ceph_assert(pin_seg_paddr >= paddr &&
-                        pin_seg_paddr.add_offset(pin_len) <= paddr.add_offset(len));
-            return read_pin_by_type(t, std::move(pin), type
-            ).si_then([&list](auto ret) {
-              list.emplace_back(std::move(ret));
-              return seastar::now();
-            });
+	    auto fut = [this, pin_paddr, paddr_seg_id, paddr, len, type, &list, &t]
+	      (LBAMappingRef &pin) -> get_extents_if_live_iertr::future<> {
+	      ceph_assert(pin->get_val().get_device_id() == paddr.get_device_id());
+	      auto &pin_seg_paddr = pin_paddr.as_seg_paddr();
+	      auto pin_paddr_seg_id = pin_seg_paddr.get_segment_id();
+	      auto pin_len = pin->get_length();
+	      if (pin_paddr_seg_id != paddr_seg_id) {
+		return get_extents_if_live_iertr::make_ready_future();
+	      }
+	      // Only extent split can happen during the lookup
+	      ceph_assert(pin_seg_paddr >= paddr &&
+			  pin_seg_paddr.add_offset(pin_len) <= paddr.add_offset(len));
+	      return read_pin_by_type(t, std::move(pin), type
+              ).si_then([&list](auto ret) {
+		list.emplace_back(std::move(ret));
+		return get_extents_if_live_iertr::make_ready_future();
+	      });
+	    };
+	    if (pin_paddr.get_device_id() != paddr.get_device_id()) {
+	      if (pin->has_shadow_mapping()) {
+		auto shadow_laddr = pin->get_key().with_shadow();
+		return lba_manager->get_mapping(t, shadow_laddr
+	        ).handle_error_interruptible(
+                  get_extents_if_live_iertr::pass_further{},
+		  crimson::ct_error::assert_all{
+		    "shadow mapping must exist"
+		  }
+	        ).si_then([fut=std::move(fut)](auto pin) {
+		  return seastar::do_with(std::move(pin), [fut=std::move(fut)](auto &pin) {
+		    return fut(pin);
+		  });
+		});
+	      } else {
+		return get_extents_if_live_iertr::make_ready_future();
+	      }
+	    } else {
+	      return fut(pin);
+	    }
           }).si_then([&list] {
             return get_extents_if_live_ret(
               interruptible::ready_future_marker{},
