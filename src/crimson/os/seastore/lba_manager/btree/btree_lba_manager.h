@@ -134,6 +134,10 @@ public:
     return intermediate_length;
   }
 
+  bool has_shadow_mapping() const final {
+    return raw_val.has_shadow_mapping();
+  }
+
   bool is_clone() const final {
     return get_map_val().refcount > 1;
   }
@@ -464,7 +468,7 @@ public:
 	      remap_laddr,
 	      *extents[i],
 	      EXTENT_DEFAULT_REF_COUNT,
-	      {.determinsitic=true});
+	      {.determinsitic=true, .has_shadow=(ret.ruret.shadow_paddr != P_ADDR_NULL)});
 	  }
 	  return fut.si_then([remap_laddr, remap_len, &ret,
 			      remap_paddr](auto &&ref) {
