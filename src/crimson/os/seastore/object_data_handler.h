@@ -234,6 +234,30 @@ public:
   using clone_ret = clone_iertr::future<>;
   clone_ret clone(context_t ctx);
 
+  clone_ret clone_range(
+    context_t ctx,
+    extent_len_t srcoff,
+    extent_len_t length,
+    extent_len_t dstoff);
+
+  using remap_entry = TransactionManager::remap_entry;
+  using remap_pin_iertr = TransactionManager::remap_pin_iertr;
+  using remap_pin_ret = TransactionManager::remap_pin_ret;
+  template <std::size_t N>
+  remap_pin_ret remap_pin(
+    context_t ctx,
+    LBAMappingRef &&pin,
+    std::array<remap_entry, N> remaps)
+  {
+    if (pin->get_val().is_zero()) {
+      return ctx.tm.remap_reserved_region(
+	ctx.t, std::move(pin), std::move(remaps));
+    } else {
+      return ctx.tm.remap_pin<ObjectDataBlock, N>(
+	ctx.t, std::move(pin), std::move(remaps));
+    }
+  }
+
 private:
   /// Updates region [_offset, _offset + bl.length) to bl
   write_ret overwrite(
@@ -260,10 +284,19 @@ private:
 
   clone_ret clone_extents(
     context_t ctx,
+    object_data_t &object_data,
     lba_pin_list_t &pins,
-    laddr_t from,
-    laddr_t to,
-    extent_len_t length);
+    laddr_t data_base,
+    extent_len_t clone_offset,
+    extent_len_t clone_len);
+
+  clone_ret _clone_range(
+    context_t ctx,
+    object_data_t &object_data,
+    object_data_t &d_object_data,
+    extent_len_t srcoff,
+    extent_len_t length,
+    bool is_clone_range);
 
 private:
   /**
