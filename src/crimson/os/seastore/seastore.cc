@@ -1589,6 +1589,7 @@ SeaStore::Shard::_do_transaction_step(
     bool is_temp_obj = i.get_oid(op->oid).hobj.oid.name.starts_with(
       TEMP_RECOVERING_OBJ_PREFIX);
     if ((op->op == Transaction::OP_CLONE
+	  || op->op == Transaction::OP_CLONERANGE2
 	  || op->op == Transaction::OP_COLL_MOVE_RENAME)
 	&& !d_onodes[op->dest_oid]) {
       //TODO: use when_all_succeed after making onode tree
@@ -1768,6 +1769,22 @@ SeaStore::Shard::_do_transaction_step(
 	}
 	return _clone(ctx, onodes[op->oid], d_onodes[op->dest_oid], data_hint);
       }
+      case Transaction::OP_CLONERANGE2:
+      {
+	assert(op->off <= std::numeric_limits<extent_len_t>::max());
+	assert(op->len <= std::numeric_limits<extent_len_t>::max());
+	assert(op->dest_off <= std::numeric_limits<extent_len_t>::max());
+        extent_len_t srcoff = (extent_len_t)op->off;
+        extent_len_t len = (extent_len_t)op->len;
+        extent_len_t dstoff = (extent_len_t)op->dest_off;
+	return _clone_range(
+	  ctx,
+	  onodes[op->oid],
+	  d_onodes[op->dest_oid],
+	  srcoff,
+	  len,
+	  dstoff);
+      }
       case Transaction::OP_COLL_MOVE_RENAME:
       {
 	ceph_assert(op->cid == op->dest_cid);
@@ -1792,11 +1809,10 @@ SeaStore::Shard::_do_transaction_step(
     }
   }).handle_error_interruptible(
     tm_iertr::pass_further{},
-    crimson::ct_error::enoent::handle([op] {
+    crimson::ct_error::enoent::handle([op, FNAME, &ctx] {
       //OMAP_CLEAR, TRUNCATE, REMOVE etc ops will tolerate absent onode.
       if (op->op == Transaction::OP_CLONERANGE ||
           op->op == Transaction::OP_CLONE ||
-          op->op == Transaction::OP_CLONERANGE2 ||
           op->op == Transaction::OP_COLL_ADD ||
           op->op == Transaction::OP_SETATTR ||
           op->op == Transaction::OP_SETATTRS ||
@@ -1807,6 +1823,7 @@ SeaStore::Shard::_do_transaction_step(
           op->op == Transaction::OP_OMAP_SETHEADER) {
         ceph_abort_msg("unexpected enoent error");
       }
+      ERRORT("Got enoent processing op {}", *ctx.transaction, op->op);
       return seastar::now();
     }),
     crimson::ct_error::assert_all{
@@ -2085,6 +2102,62 @@ SeaStore::Shard::_clone(
     return _clone_omaps(ctx, onode, d_onode, omap_type_t::XATTR);
   }).si_then([&ctx, &onode, &d_onode, this] {
     return _clone_omaps(ctx, onode, d_onode, omap_type_t::OMAP);
+  });
+}
+
+SeaStore::Shard::tm_ret
+SeaStore::Shard::_clone_range(
+  internal_context_t &ctx,
+  OnodeRef &src_onode,
+  OnodeRef &dst_onode,
+  extent_len_t srcoff,
+  extent_len_t length,
+  extent_len_t dstoff)
+{
+  LOG_PREFIX(SeaStore::_clone_range);
+  DEBUGT("src_onode={}, dst_onode={}, src {}~{}, dst {}",
+    *ctx.transaction, *src_onode, *dst_onode, srcoff, length, dstoff);
+  auto &s_layout = src_onode->get_layout();
+  auto s_object_data = s_layout.object_data.get();
+  auto s_lc_id = s_object_data.get_reserved_data_base().get_local_clone_id();
+  auto &d_layout = dst_onode->get_layout();
+  auto d_object_data = d_layout.object_data.get();
+  auto d_base = d_object_data.get_reserved_data_base();
+  auto d_lc_id = d_base.get_local_clone_id();
+  laddr_t hint = L_ADDR_NULL;
+  if (s_lc_id != d_lc_id) {
+    local_clone_id_t hint_lc_id = LOCAL_CLONE_ID_NULL;
+    ceph_assert(s_lc_id != LOCAL_CLONE_ID_NULL);
+    ceph_assert(d_lc_id != LOCAL_CLONE_ID_NULL);
+    ceph_assert(s_lc_id % 2 == 0);
+    ceph_assert(d_lc_id % 2 == 0);
+    // shared lba mappings always exist in the "data_local_clone_id" laddr
+    // spaces of the earlier clone objects
+    if (s_lc_id > 0 && d_lc_id > 0) {
+      hint_lc_id = std::min(s_lc_id, d_lc_id) - 1;
+    } else {
+      hint_lc_id = std::max(s_lc_id, d_lc_id) - 1;
+    }
+    ceph_assert(hint_lc_id % 2 == 1);
+    hint = d_base.with_local_clone_id(hint_lc_id);
+  } else {
+    ceph_assert(s_lc_id == 0);
+    ceph_assert(d_lc_id == 0);
+    ceph_assert(d_base.is_recover());
+  }
+  return seastar::do_with(
+    ObjectDataHandler(max_object_size),
+    [=, this, &ctx](auto &objHandler) {
+    return objHandler.clone_range(
+      ObjectDataHandler::context_t{
+	*transaction_manager,
+	*ctx.transaction,
+	*src_onode,
+	dst_onode.get(),
+	hint},
+      srcoff,
+      length,
+      dstoff);
   });
 }
 
