@@ -588,7 +588,8 @@ public:
 	  return reserve_region(
 	    t,
 	    orig_mapping->get_key() + remap.offset,
-	    remap.len
+	    remap.len,
+	    true
 	  ).si_then([&ret](auto mapping) {
 	    ret.emplace_back(std::move(mapping));
 	    return seastar::now();
@@ -634,19 +635,27 @@ public:
   clone_extent_ret clone_pin(
     Transaction &t,
     laddr_t hint,
-    const LBAMapping &mapping) {
+    const LBAMapping &mapping,
+    extent_len_t inner_offset,
+    extent_len_t new_length) {
     auto intermediate_key =
       mapping.is_indirect()
 	? mapping.get_intermediate_key()
 	: mapping.get_key();
+    auto length = mapping.get_length();
+    if (new_length) {
+      intermediate_key = intermediate_key + inner_offset;
+      length = new_length;
+    }
 
     LOG_PREFIX(TransactionManager::clone_pin);
-    SUBDEBUGT(seastore_tm, "len={}, laddr_hint={}, clone_offset {}",
-      t, mapping.get_length(), hint, intermediate_key);
+    SUBDEBUGT(seastore_tm,
+      "len={}, laddr_hint={}, clone_offset {}, original_mapping {}",
+      t, length, hint, intermediate_key, mapping);
     return lba_manager->clone_mapping(
       t,
       hint,
-      mapping.get_length(),
+      length,
       intermediate_key);
   }
 

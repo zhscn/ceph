@@ -651,7 +651,7 @@ struct transaction_manager_test_t :
     laddr_t offset,
     const LBAMapping &mapping) {
     auto pin = with_trans_intr(*(t.t), [&](auto &trans) {
-      return tm->clone_pin(trans, offset, mapping);
+      return tm->clone_pin(trans, offset, mapping, 0, 0);
     }).unsafe_get0();
     EXPECT_EQ(offset, pin->get_key());
     EXPECT_EQ(mapping.get_key(), pin->get_intermediate_key());
