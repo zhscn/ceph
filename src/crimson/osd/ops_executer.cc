@@ -995,6 +995,8 @@ void OpsExecuter::update_clone_overlap() {
   assert(osd_op_params);
   osd_op_params->modified_ranges.intersection_of(*newest_overlap);
   newest_overlap->subtract(osd_op_params->modified_ranges);
+  logger().debug("{} object {}, new clone_overlap {}",
+    __func__, obc->obs.oi.soid, *newest_overlap);
   delta_stats.num_bytes += osd_op_params->modified_ranges.size();
 }
 
