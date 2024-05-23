@@ -823,17 +823,6 @@ protected:
 
   friend class Cache;
   friend class LRUMemoryCache;
-  template <typename T, typename... Args>
-  static TCachedExtentRef<T> make_cached_extent_ref(
-    Args&&... args) {
-    return new T(std::forward<Args>(args)...);
-  }
-
-  template <typename T>
-  static TCachedExtentRef<T> make_placeholder_cached_extent_ref(
-    extent_len_t length) {
-    return new T(length);
-  }
 
   void reset_prior_instance() {
     prior_instance.reset();
@@ -894,6 +883,21 @@ protected:
       return addr;
     }
   }
+
+  void on_construct(uint64_t *ext_cnt) {
+    ceph_assert(!extent_count_token);
+    ceph_assert(ext_cnt);
+    extent_count_token = ext_cnt;
+    *extent_count_token += 1;
+  }
+
+  void on_destruct() const {
+    if (extent_count_token) {
+      *extent_count_token -= 1;
+    }
+  }
+
+  uint64_t* extent_count_token = nullptr;
 
   friend class crimson::os::seastore::SegmentedAllocator;
   friend class crimson::os::seastore::TransactionManager;

@@ -673,7 +673,7 @@ public:
 	      original_bptr);
 	    return move_mappings_iertr::make_ready_future<LogicalCachedExtent*>(new_ext.get());
 	  } else {
-	    auto new_ext = CachedExtent::make_placeholder_cached_extent_ref<
+	    auto new_ext = cache->make_placeholder_cached_extent_ref<
 	      AliveExtentPlaceholder>(len);
 	    new_ext->init(
 	      CachedExtent::extent_state_t::EXIST_CLEAN,

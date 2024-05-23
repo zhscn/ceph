@@ -548,8 +548,7 @@ private:
     LOG_PREFIX(Cache::do_get_caching_extent);
     auto cached = query_cache(offset, p_src_ext);
     if (!cached) {
-      auto ret = CachedExtent::make_cached_extent_ref<T>(
-        alloc_cache_buf(length));
+      auto ret = make_cached_extent_ref<T>(alloc_cache_buf(length));
       ret->init(CachedExtent::extent_state_t::CLEAN_PENDING,
                 offset,
                 PLACEMENT_HINT_NULL,
@@ -569,8 +568,7 @@ private:
 
     // extent PRESENT in cache
     if (cached->get_type() == extent_types_t::RETIRED_PLACEHOLDER) {
-      auto ret = CachedExtent::make_cached_extent_ref<T>(
-        alloc_cache_buf(length));
+      auto ret = make_cached_extent_ref<T>(alloc_cache_buf(length));
       ret->init(CachedExtent::extent_state_t::CLEAN_PENDING,
                 offset,
                 PLACEMENT_HINT_NULL,
@@ -868,7 +866,7 @@ public:
     if (!result) {
       return nullptr;
     }
-    auto ret = CachedExtent::make_cached_extent_ref<T>(std::move(result->bp));
+    auto ret = make_cached_extent_ref<T>(std::move(result->bp));
     ret->init(CachedExtent::extent_state_t::INITIAL_WRITE_PENDING,
               result->paddr,
               hint,
@@ -917,7 +915,7 @@ public:
 #endif
     std::vector<TCachedExtentRef<T>> extents;
     for (auto &result : results) {
-      auto ret = CachedExtent::make_cached_extent_ref<T>(std::move(result.bp));
+      auto ret = make_cached_extent_ref<T>(std::move(result.bp));
       ret->init(CachedExtent::extent_state_t::INITIAL_WRITE_PENDING,
                 result.paddr,
                 hint,
@@ -959,9 +957,9 @@ public:
         remap_length);
       // ExtentPlacementManager::alloc_new_extent will make a new
       // (relative/temp) paddr, so make extent directly
-      ext = CachedExtent::make_cached_extent_ref<T>(std::move(nbp));
+      ext = make_cached_extent_ref<T>(std::move(nbp));
     } else {
-      ext = CachedExtent::make_placeholder_cached_extent_ref<T>(remap_length);
+      ext = make_placeholder_cached_extent_ref<T>(remap_length);
     }
 
     ext->init(CachedExtent::extent_state_t::EXIST_CLEAN,
@@ -1371,6 +1369,22 @@ public:
   seastar::future<> send_debug(Transaction &t);
 
 private:
+  template <typename T, typename... Args>
+  TCachedExtentRef<T> make_cached_extent_ref(
+    Args&&... args) {
+    auto ret = new T(std::forward<Args>(args)...);
+    ret->on_construct(&get_by_ext(stats.alive_extents_count, T::TYPE));
+    return ret;
+  }
+
+  template <typename T>
+  TCachedExtentRef<T> make_placeholder_cached_extent_ref(
+    extent_len_t length) {
+    auto ret = new T(length);
+    ret->on_construct(&get_by_ext(stats.alive_extents_count, T::TYPE));
+    return ret;
+  }
+
   /// Update lru for access to ref
   void touch_extent(
       CachedExtent &ext,
@@ -1438,6 +1452,7 @@ private:
 
   friend class crimson::os::seastore::backref::BtreeBackrefManager;
   friend class crimson::os::seastore::BackrefManager;
+  friend class crimson::os::seastore::TransactionManager;
 
   MemoryCacheRef memory_cache;
 
@@ -1579,6 +1594,7 @@ private:
     tracer_t write_delayed{};
     tracer_t write_alloced{};
     tracer_t submit_record{};
+    counter_by_extent_t<uint64_t> alive_extents_count;
   } stats;
 
   template <typename CounterT>

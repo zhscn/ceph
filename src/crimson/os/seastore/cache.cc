@@ -92,8 +92,7 @@ Cache::retire_extent_ret Cache::retire_extent_addr(
     DEBUGT("retire {}~{} in cache -- {}", t, addr, length, *ext);
   } else {
     // add a new placeholder to Cache
-    ext = CachedExtent::make_cached_extent_ref<
-      RetiredExtentPlaceholder>(length);
+    ext = make_cached_extent_ref<RetiredExtentPlaceholder>(length);
     ext->init(CachedExtent::extent_state_t::CLEAN,
               addr,
               PLACEMENT_HINT_NULL,
@@ -122,8 +121,7 @@ void Cache::retire_absent_extent_addr(
 #endif
   LOG_PREFIX(Cache::retire_absent_extent_addr);
   // add a new placeholder to Cache
-  ext = CachedExtent::make_cached_extent_ref<
-    RetiredExtentPlaceholder>(length);
+  ext = make_cached_extent_ref<RetiredExtentPlaceholder>(length);
   ext->init(CachedExtent::extent_state_t::CLEAN,
 	    addr,
 	    PLACEMENT_HINT_NULL,
@@ -776,6 +774,21 @@ void Cache::register_metrics()
       ),
     }
   );
+
+  for (auto& [ext, ext_label] : labels_by_ext) {
+    auto& value = get_by_ext(stats.alive_extents_count, ext);
+    metrics.add_group(
+      "cache",
+      {
+	sm::make_counter(
+          "alive_extent_count",
+	  value,
+	  sm::description("total number of extents alive in memory"),
+	  {ext_label}
+	),
+      }
+    );
+  }
 }
 
 void Cache::add_extent(
@@ -880,6 +893,7 @@ void Cache::commit_replace_extent(
     add_to_dirty(next);
   }
 
+  std::swap(next->extent_count_token, prev->extent_count_token);
   next->on_replace_prior();
   invalidate_extent(t, *prev);
 }
@@ -1929,6 +1943,7 @@ void Cache::init()
     root = nullptr;
   }
   root = new RootBlock();
+  root->on_construct(&get_by_ext(stats.alive_extents_count, extent_types_t::ROOT));
   root->init(CachedExtent::extent_state_t::CLEAN,
              P_ADDR_ROOT,
              PLACEMENT_HINT_NULL,

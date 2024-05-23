@@ -79,6 +79,7 @@ CachedExtent::~CachedExtent()
     assert(is_linked());
     parent_index->erase(*this);
   }
+  on_destruct();
 }
 CachedExtent* CachedExtent::get_transactional_view(Transaction &t) {
   return get_transactional_view(t.get_trans_id());
