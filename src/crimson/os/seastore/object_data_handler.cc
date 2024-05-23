@@ -1704,53 +1704,261 @@ ObjectDataHandler::clear_ret ObjectDataHandler::clear(
     });
 }
 
-ObjectDataHandler::clone_ret
-ObjectDataHandler::clone_extents(
+// With clone_range supported, clone_offset~clone_len
+// may cut the first and last pins.
+ObjectDataHandler::clone_ret ObjectDataHandler::clone_extents(
   context_t ctx,
+  object_data_t &object_data,
   lba_pin_list_t &pins,
-  laddr_t from,
-  laddr_t to,
-  extent_len_t length)
+  laddr_t data_base,
+  extent_len_t clone_offset,
+  extent_len_t clone_len)
 {
+  ceph_assert(clone_offset % laddr_t::UNIT_SIZE == 0);
+  ceph_assert(clone_len % laddr_t::UNIT_SIZE == 0);
+  LOG_PREFIX(ObjectDataHandler::clone_extents);
+  TRACET(
+    " object_data: {}~{}, data_base: {}, "
+    "clone_offset {}, clone_len {}, {} mappings",
+    ctx.t,
+    object_data.get_reserved_data_base(),
+    object_data.get_reserved_data_len(),
+    data_base,
+    clone_offset,
+    clone_len,
+    pins.size());
   return seastar::do_with(
-    (extent_len_t)0,
-    [ctx, &pins, from, to, length](auto &last_pos) {
-      return trans_intr::do_for_each(
-        pins,
-	[&last_pos, ctx, from, to](auto &pin) {
-	  auto offset = pin->get_key() - from;
-	  ceph_assert(offset == last_pos);
-	  using alloc_iertr = TransactionManager::alloc_extent_iertr;
-	  auto fut = alloc_iertr::make_ready_future<LBAMappingRef>();
-	  auto addr = to + offset;
-	  if (pin->get_val().is_zero()) {
-	    fut = ctx.tm.reserve_region(ctx.t, addr, pin->get_length(), true);
-	  } else {
-	    fut = ctx.tm.clone_pin(ctx.t, addr, *pin);
-	  }
-	  return fut.si_then([&pin, &last_pos, offset](auto) {
-	    last_pos = offset + pin->get_length();
-	    return seastar::now();
-	  }).handle_error_interruptible(
-	    crimson::ct_error::input_output_error::pass_further(),
-	    crimson::ct_error::assert_all("not possible")
-	  );
-	}).si_then([&last_pos, to, length, ctx] {
-          if (last_pos != length) {
-            return ctx.tm.reserve_region(
-	      ctx.t,
-	      to + last_pos,
-	      length - last_pos,
-	      true
-	    ).discard_result();
-          }
-          return TransactionManager::reserve_extent_iertr::now();
-        });
+    (extent_len_t)(clone_offset),
+    [&object_data, ctx, data_base, &pins,
+    clone_offset, clone_len](auto &last_pos) {
+    return trans_intr::do_for_each(
+      pins,
+      [&last_pos, &object_data, ctx, data_base,
+      clone_offset, clone_len, &pins](auto &pin) {
+      auto offset = pin->get_key() - data_base;
+      if (clone_offset > offset &&
+	  clone_offset < offset + pin->get_length()) {
+	// This is the first pin, and we only need part of it cloned.
+	assert(pin.get() == pins.front().get());
+	offset = clone_offset;
+      }
+      ceph_assert(offset == last_pos);
+      auto fut = TransactionManager::alloc_extent_iertr
+	::make_ready_future<LBAMappingRef>();
+      auto addr = object_data.get_reserved_data_base() + offset;
+      auto nlen = 0;
+      auto noff = 0;
+      if (clone_len) {
+	if (offset != pin->get_key() - data_base) {
+	  assert(offset > pin->get_key() - data_base);
+	  // first pin and need half clone.
+	  assert(pin.get() == pins.front().get());
+	  noff = offset - (pin->get_key() - data_base);
+	  nlen = std::min((size_t)(pin->get_length() - noff),
+			  (size_t)clone_len);
+	  ceph_assert(nlen > 0);
+	} else if ((clone_offset + clone_len) <
+		   (pin->get_key() - data_base + pin->get_length())) {
+	  // last pin and need half clone.
+	  assert(pin.get() == pins.back().get());
+	  assert(clone_offset + clone_len > pin->get_key() - data_base);
+	  auto clone_end = clone_offset + clone_len;
+	  nlen = clone_end - (pin->get_key() - data_base);
+	  ceph_assert(nlen > 0);
+	}
+      }
+      if (pin->get_val().is_zero()) {
+	if (!nlen) {
+	  nlen = pin->get_length();
+	}
+	fut = ctx.tm.reserve_region(ctx.t, addr, nlen, true);
+      } else {
+	fut = ctx.tm.clone_pin(ctx.t, addr, *pin, noff, nlen);
+      }
+      return fut.si_then(
+	[&pin, &last_pos, offset, nlen](auto) {
+	last_pos = offset + (nlen != 0 ? nlen : pin->get_length());
+	return seastar::now();
+      }).handle_error_interruptible(
+	crimson::ct_error::input_output_error::pass_further(),
+	crimson::ct_error::assert_all("not possible")
+      );
+    }).si_then([&last_pos, &object_data, ctx, clone_len] {
+      if (clone_len == 0 /*clone the whole obj data lba space*/ &&
+	  last_pos != object_data.get_reserved_data_len()) {
+	return ctx.tm.reserve_region(
+	  ctx.t,
+	  object_data.get_reserved_data_base() + last_pos,
+	  object_data.get_reserved_data_len() - last_pos,
+	  true
+	).si_then([](auto) {
+	  return seastar::now();
+	});
+      }
+      return TransactionManager::reserve_extent_iertr::now();
+    });
   }).handle_error_interruptible(
     ObjectDataHandler::write_iertr::pass_further{},
     crimson::ct_error::assert_all{
       "object_data_handler::clone invalid error"
   });
+}
+
+ObjectDataHandler::clone_ret ObjectDataHandler::clone_range(
+  context_t ctx,
+  extent_len_t srcoff,
+  extent_len_t length,
+  extent_len_t dstoff)
+{
+  // TODO: we don't support cloning skewing ranges yet
+  assert(srcoff == dstoff);
+  return with_objects_data(
+    ctx,
+    [ctx, this, srcoff, length]
+    (auto &object_data, auto &d_object_data) {
+    assert(!d_object_data.is_null());
+    return _clone_range(ctx, object_data, d_object_data, srcoff, length, true);
+  }).handle_error_interruptible(
+    ObjectDataHandler::clone_iertr::pass_further{},
+    crimson::ct_error::assert_all{
+      "object_data_handler::clone invalid error"
+  });
+}
+
+// clone_range first deal with the start and end mappings(may need to be
+// remaped), after which it clones all mappings in the middle.
+ObjectDataHandler::clone_ret ObjectDataHandler::_clone_range(
+  context_t ctx,
+  object_data_t &object_data,
+  object_data_t &d_object_data,
+  extent_len_t srcoff,
+  extent_len_t length,
+  bool is_clone_range)
+{
+  srcoff = p2align((uint64_t)srcoff, laddr_t::UNIT_SIZE);
+  length = p2roundup((uint64_t)length, laddr_t::UNIT_SIZE);
+  ceph_assert(!object_data.is_null());
+  ceph_assert(!d_object_data.is_null());
+  LOG_PREFIX(ObjectDataHandler::_clone_range);
+  DEBUGT("{}~{} is_clone_range: {}", ctx.t, srcoff, length, is_clone_range);
+  auto fut = clone_iertr::make_ready_future<lba_pin_list_t>();
+  if (ctx.hint == L_ADDR_NULL) {
+    fut = ctx.tm.get_pins(
+      ctx.t,
+      object_data.get_reserved_data_base() + srcoff,
+      length);
+  } else {
+    auto src_start = object_data.get_reserved_data_base() + srcoff;
+    auto dst_start = ctx.hint + srcoff;
+    fut = ctx.tm.move_mappings<ObjectDataBlock>(
+      ctx.t, src_start, dst_start, length, true
+    ).handle_error_interruptible(
+      clone_iertr::pass_further{},
+      crimson::ct_error::assert_all{"unexpected error"}
+    );
+  }
+  return fut.si_then([ctx, this, &d_object_data, &object_data, FNAME,
+		      length, srcoff, is_clone_range](auto pin_list) {
+    assert(!pin_list.empty());
+    DEBUGT("{}~{} src pin list: {} mappings",
+      ctx.t, srcoff, length, pin_list.size());
+    return seastar::do_with(
+      std::move(pin_list),
+      [ctx, this, &d_object_data, &object_data,
+      length, srcoff, is_clone_range](auto &pin_list) {
+      return ctx.tm.get_pins(
+	ctx.t,
+	d_object_data.get_reserved_data_base() + srcoff,
+	length
+      ).si_then([ctx, this, &d_object_data, &object_data,
+		&pin_list, length, srcoff, is_clone_range](auto pins) {
+	return seastar::do_with(
+	  std::move(pins),
+	  [ctx, this, &d_object_data, &object_data,
+	  &pin_list, srcoff, length, is_clone_range](auto &pins) {
+	  if (pins.empty()) {
+	    ceph_assert(!is_clone_range);
+	    return TransactionManager::ref_iertr::now();
+	  }
+	  ceph_assert(is_clone_range);
+	  auto d_data_base = d_object_data.get_reserved_data_base();
+	  auto d_pin_base = pins.front()->get_key();
+	  auto d_pin_last = pins.back()->get_key();
+	  auto d_pin_end = d_pin_last + pins.back()->get_length();
+	  auto s_data_base = object_data.get_reserved_data_base();
+	  auto s_pin_base = pin_list.front()->get_key();
+	  auto s_pin_last = pin_list.back()->get_key();
+	  auto s_pin_end = s_pin_last + pin_list.back()->get_length();
+	  auto clone_start = d_data_base + srcoff;
+	  auto clone_end = clone_start + length;
+	  ceph_assert(srcoff >= d_pin_base - d_data_base);
+	  ceph_assert(srcoff >= s_pin_base - s_data_base);
+	  ceph_assert(srcoff + length <= d_pin_end - d_data_base);
+	  ceph_assert(srcoff + length <= s_pin_end - s_data_base);
+	  TransactionManager::remap_entry left(0, 0), right(0, 0);
+	  if (clone_start > d_pin_base) {
+	    left.len = clone_start - d_pin_base;
+	  }
+	  if (clone_end < d_pin_end) {
+	    right.offset = clone_end - d_pin_last;
+	    right.len = d_pin_end - clone_end;
+	  }
+	  auto fut = TransactionManager::remap_pin_iertr::now();
+	  if (left.len && right.len && pins.size() == 1) {
+	    fut = remap_pin(
+	      ctx,
+	      std::move(pins.front()),
+	      std::array{std::move(left), std::move(right)}
+	    ).si_then([&pins](auto) {
+	      pins.clear();
+	    });
+	  } else {
+	    if (left.len) {
+	      fut = remap_pin(
+		ctx,
+		std::move(pins.front()),
+		std::array{std::move(left)}
+	      ).si_then([&pins](auto) {
+		pins.pop_front();
+	      });
+	    }
+
+	    if (right.len) {
+	      fut = fut.si_then([ctx, &pins, right, this] {
+		return remap_pin(
+		  ctx,
+		  std::move(pins.back()),
+		  std::array{std::move(right)}
+		).si_then([&pins](auto) {
+		  pins.pop_back();
+		});
+	      });
+	    }
+	  }
+	  return fut.si_then([ctx, &pins] {
+	    std::vector<laddr_t> laddrs;
+	    for (auto &pin : pins) {
+	      laddrs.push_back(pin->get_key());
+	    }
+	    return ctx.tm.remove(ctx.t, std::move(laddrs)
+	    ).discard_result();
+	  });
+	}).si_then([ctx, this, &d_object_data, &object_data,
+		    srcoff, length, &pin_list] {
+	    return clone_extents(
+	      ctx,
+	      d_object_data,
+	      pin_list,
+	      object_data.get_reserved_data_base(),
+	      srcoff,
+	      length);
+	  });
+      });
+    });
+  }).handle_error_interruptible(
+    clone_iertr::pass_further{},
+    crimson::ct_error::assert_all{"unexpected error"}
+  );
 }
 
 ObjectDataHandler::clone_ret ObjectDataHandler::clone(
@@ -1759,36 +1967,15 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
   return with_objects_data(
     ctx,
     [ctx, this](auto &object_data, auto &d_object_data) {
-      ceph_assert(!object_data.is_null());
-      ceph_assert(!d_object_data.is_null());
-      auto get_pins = [&object_data, ctx] {
-	if (ctx.hint != L_ADDR_NULL) {
-	  return ctx.tm.move_mappings<ObjectDataBlock>(
-	    ctx.t,
-	    object_data.get_reserved_data_base(),
-	    ctx.hint,
-	    object_data.get_reserved_data_len(),
-	    true);
-	} else {
-	  return ctx.tm.get_pins(
-	    ctx.t,
-	    object_data.get_reserved_data_base(),
-	    object_data.get_reserved_data_len());
-	}
-      };
-      return get_pins(
-      ).si_then([&object_data, &d_object_data, ctx, this](auto pins) {
-	return seastar::do_with(
-	  std::move(pins),
-	  [&object_data, &d_object_data, ctx, this](auto &pins) {
-	    return clone_extents(
-	      ctx,
-	      pins,
-	      object_data.get_reserved_data_base(),
-	      d_object_data.get_reserved_data_base(),
-	      d_object_data.get_reserved_data_len());
-	});
-      });
+    ceph_assert(!object_data.is_null());
+    ceph_assert(!d_object_data.is_null());
+    return _clone_range(
+      ctx,
+      object_data,
+      d_object_data,
+      0,
+      d_object_data.get_reserved_data_len(),
+      false);
   });
 }
 
