@@ -23,16 +23,24 @@ CommonClientRequest::do_recover_missing(
   assert(pg->is_primary());
   logger().debug("{} reqid {} check for recovery, {}",
                  __func__, reqid, soid);
-  auto &peering_state = pg->get_peering_state();
-  auto &missing_loc = peering_state.get_missing_loc();
-  bool needs_recovery = missing_loc.needs_recovery(soid, &ver);
-  if (!pg->is_unreadable_object(soid) &&
-      !pg->is_degraded_or_backfilling_object(soid)) {
+
+  bool needs_recovery_or_backfill = false;
+  if (pg->is_unreadable_object(soid)) {
+    auto &peering_state = pg->get_peering_state();
+    auto &missing_loc = peering_state.get_missing_loc();
+    ceph_assert(missing_loc.needs_recovery(soid, &ver));
+    needs_recovery_or_backfill = true;
+  }
+
+  if (pg->is_degraded_or_backfilling_object(soid)) {
+    needs_recovery_or_backfill = true;
+  }
+
+  if (!needs_recovery_or_backfill) {
     logger().debug("{} reqid {} nothing to recover {}",
                    __func__, reqid, soid);
     return seastar::now();
   }
-  ceph_assert(needs_recovery);
 
   logger().debug("{} reqid {} need to wait for recovery, {} version {}",
                  __func__, reqid, soid, ver);
