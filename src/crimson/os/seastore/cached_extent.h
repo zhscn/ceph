@@ -1112,6 +1112,7 @@ public:
   bool is_zero_reserved() const {
     return !get_val().is_real();
   }
+  virtual bool is_parent_valid() const = 0;
 
   virtual ~PhysicalNodeMapping() {}
 protected:
