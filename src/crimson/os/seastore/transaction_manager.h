@@ -568,6 +568,43 @@ public:
     });
   }
 
+  template <std::size_t N>
+  remap_pin_ret remap_reserved_region(
+    Transaction &t,
+    LBAMappingRef &&pin,
+    std::array<remap_entry, N> remaps)
+  {
+    ceph_assert(pin->get_val().is_zero());
+    return seastar::do_with(
+      std::vector<remap_entry>(remaps.begin(), remaps.end()),
+      std::move(pin),
+      std::vector<LBAMappingRef>(),
+      [this, &t](auto &remaps, auto &orig_mapping, auto &ret) {
+      return remove(t, orig_mapping->get_key()
+      ).si_then([this, &t, &remaps, &ret, &orig_mapping](auto) {
+	return trans_intr::do_for_each(
+	  remaps,
+	  [this, &t, &ret, &orig_mapping](auto &remap) {
+	  return reserve_region(
+	    t,
+	    orig_mapping->get_key() + remap.offset,
+	    remap.len
+	  ).si_then([&ret](auto mapping) {
+	    ret.emplace_back(std::move(mapping));
+	    return seastar::now();
+	  });
+	});
+      }).si_then([&ret] {
+	return remap_pin_iertr::make_ready_future<
+	  std::vector<LBAMappingRef>>(std::move(ret));
+      });
+    }).handle_error_interruptible(
+      crimson::ct_error::enoent::assert_failure{"unexpected enoent"},
+      crimson::ct_error::enospc::assert_failure{"unexpected enospc"},
+      TransactionManager::remap_pin_iertr::pass_further{}
+    );
+  }
+
   using reserve_extent_iertr = alloc_extent_iertr;
   using reserve_extent_ret = reserve_extent_iertr::future<LBAMappingRef>;
   reserve_extent_ret reserve_region(
