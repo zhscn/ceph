@@ -789,6 +789,20 @@ void Cache::register_metrics()
       }
     );
   }
+
+  for (auto& [src, src_label] : labels_by_src) {
+    metrics.add_group(
+      "cache",
+      {
+        sm::make_counter(
+          "dirty_bytes_by_src",
+          get_by_src(stats.dirty_bytes_by_src, src),
+          sm::description("total bytes of dirty extents produced by each transaction"),
+          {src_label}
+        ),
+      }
+    );
+  }
 }
 
 void Cache::add_extent(
@@ -1341,6 +1355,7 @@ record_t Cache::prepare_record(
   LOG_PREFIX(Cache::prepare_record);
   SUBTRACET(seastore_t, "enter, journal_head={}, dirty_tail={}",
             t, journal_head, journal_dirty_tail);
+  int64_t pre_dirty_bytes = stats.dirty_bytes;
 
   auto trans_src = t.get_src();
   assert(!t.is_weak());
@@ -1744,6 +1759,9 @@ record_t Cache::prepare_record(
   } else {
     assert(rewrite_version_stats.is_clear());
   }
+
+  auto &dirty_bytes_by_src = get_by_src(stats.dirty_bytes_by_src, t.get_src());
+  dirty_bytes_by_src += static_cast<int64_t>(stats.dirty_bytes) - pre_dirty_bytes;
 
   return record;
 }

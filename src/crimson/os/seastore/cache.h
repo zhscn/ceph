@@ -1595,6 +1595,7 @@ private:
     tracer_t write_alloced{};
     tracer_t submit_record{};
     counter_by_extent_t<uint64_t> alive_extents_count;
+    counter_by_src_t<int64_t> dirty_bytes_by_src;
   } stats;
 
   template <typename CounterT>
