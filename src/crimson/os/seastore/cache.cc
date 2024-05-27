@@ -1182,7 +1182,7 @@ CachedExtentRef Cache::duplicate_for_write(
   if (i->is_exist_clean()) {
     i->version++;
     i->state = CachedExtent::extent_state_t::EXIST_MUTATION_PENDING;
-    i->last_committed_crc = i->calc_crc32c();
+    i->set_last_committed_crc(i->calc_crc32c());
     // deepcopy the buffer of exist clean extent beacuse it shares
     // buffer with original clean extent.
     auto bp = i->get_bptr();
@@ -1205,7 +1205,7 @@ CachedExtentRef Cache::duplicate_for_write(
   if (ret->get_type() == extent_types_t::ROOT) {
     t.root = ret->cast<RootBlock>();
   } else {
-    ret->last_committed_crc = i->last_committed_crc;
+    ret->set_last_committed_crc(i->get_last_committed_crc());
   }
 
   ret->version++;
@@ -1440,7 +1440,7 @@ record_t Cache::prepare_record(
 	  (i->is_logical()
 	   ? i->cast<LogicalCachedExtent>()->get_laddr()
 	   : L_ADDR_NULL),
-	  i->last_committed_crc,
+	  i->get_last_committed_crc(),
 	  final_crc,
 	  i->get_length(),
 	  i->get_version() - 1,
@@ -1448,7 +1448,7 @@ record_t Cache::prepare_record(
 	  stype,
 	  std::move(delta_bl)
 	});
-      i->last_committed_crc = final_crc;
+      i->set_last_committed_crc(final_crc);
     }
     assert(delta_length);
     get_by_ext(efforts.delta_bytes_by_ext,
@@ -2135,11 +2135,11 @@ Cache::replay_delta(
 
       if (delta.paddr.get_addr_type() == paddr_types_t::SEGMENT ||
 	  !can_inplace_rewrite(delta.type)) {
-	ceph_assert_always(extent->last_committed_crc == delta.prev_crc);
+	ceph_assert_always(extent->get_last_committed_crc() == delta.prev_crc);
 	assert(extent->version == delta.pversion);
 	extent->apply_delta_and_adjust_crc(record_base, delta.bl);
 	extent->set_modify_time(modify_time);
-	ceph_assert_always(extent->last_committed_crc == delta.final_crc);
+	ceph_assert_always(extent->get_last_committed_crc() == delta.final_crc);
       } else {
 	assert(delta.paddr.get_addr_type() == paddr_types_t::RANDOM_BLOCK);
 	extent->apply_delta_and_adjust_crc(record_base, delta.bl);

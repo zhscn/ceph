@@ -1701,7 +1701,7 @@ private:
 	if (extent->is_valid()) {
 	  // crc will be checked against LBA leaf entry for logical extents,
 	  // or check against in-extent crc for physical extents.
-	  extent->last_committed_crc = extent->calc_crc32c();
+	  extent->set_last_committed_crc(extent->calc_crc32c());
 	  extent->on_clean_read();
 	}
         extent->complete_io();
