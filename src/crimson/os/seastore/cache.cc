@@ -51,6 +51,11 @@ Cache::Cache(
   INFO("created");
   register_metrics();
   segment_providers_by_device_id.resize(DEVICE_ID_MAX, nullptr);
+  stats.delta_map_length_util.buckets.resize(DELTA_MAP_HISTOGRAM_BUCKET_COUNT);
+  for (int i = 0; i < DELTA_MAP_HISTOGRAM_BUCKET_COUNT; i++) {
+    stats.delta_map_length_util.buckets[i].count = 0;
+    stats.delta_map_length_util.buckets[i].upper_bound = 1 << i;
+  }
 }
 
 Cache::~Cache()
@@ -786,6 +791,12 @@ void Cache::register_metrics()
 	  sm::description("total number of extents alive in memory"),
 	  {ext_label}
 	),
+	sm::make_counter(
+          "partial_extent_count",
+	  get_by_ext(stats.partial_extents_count, ext),
+	  sm::description("total number of partial extents"),
+	  {ext_label}
+	),
       }
     );
   }
@@ -803,6 +814,15 @@ void Cache::register_metrics()
       }
     );
   }
+
+  metrics.add_group(
+    "cache",
+    {
+      sm::make_histogram(
+        "delta_map_length",
+	stats.delta_map_length_util,
+	sm::description("utilization distribution of cached delta map's length"))
+    });
 }
 
 void Cache::add_extent(
@@ -1961,7 +1981,10 @@ void Cache::init()
     root = nullptr;
   }
   root = new RootBlock();
-  root->on_construct(&get_by_ext(stats.alive_extents_count, extent_types_t::ROOT));
+  root->on_construct(
+    &get_by_ext(stats.alive_extents_count, extent_types_t::ROOT),
+    &get_by_ext(stats.partial_extents_count, extent_types_t::ROOT),
+    &stats.delta_map_length_util);
   root->init(CachedExtent::extent_state_t::CLEAN,
              P_ADDR_ROOT,
              PLACEMENT_HINT_NULL,

@@ -26,6 +26,8 @@
 
 namespace crimson::os::seastore {
 
+constexpr int DELTA_MAP_HISTOGRAM_BUCKET_COUNT = 8;
+
 /* using a special xattr key "omap_header" to store omap header */
   const std::string OMAP_HEADER_XATTR_KEY = "omap_header";
 

@@ -884,11 +884,15 @@ protected:
     }
   }
 
-  void on_construct(uint64_t *ext_cnt) {
+  void on_construct(uint64_t *ext_cnt, uint64_t *partial_cnt, seastar::metrics::histogram *histogram) {
     ceph_assert(!extent_count_token);
     ceph_assert(ext_cnt);
+
     extent_count_token = ext_cnt;
     *extent_count_token += 1;
+
+    partial_count_token = partial_cnt;
+    delta_map_len_distribution = histogram;
   }
 
   void on_destruct() const {
@@ -898,6 +902,8 @@ protected:
   }
 
   uint64_t* extent_count_token = nullptr;
+  uint64_t* partial_count_token = nullptr;
+  seastar::metrics::histogram *delta_map_len_distribution = nullptr;
 
   friend class crimson::os::seastore::SegmentedAllocator;
   friend class crimson::os::seastore::TransactionManager;

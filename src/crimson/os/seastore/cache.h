@@ -1373,7 +1373,10 @@ private:
   TCachedExtentRef<T> make_cached_extent_ref(
     Args&&... args) {
     auto ret = new T(std::forward<Args>(args)...);
-    ret->on_construct(&get_by_ext(stats.alive_extents_count, T::TYPE));
+    ret->on_construct(
+      &get_by_ext(stats.alive_extents_count, T::TYPE),
+      &get_by_ext(stats.partial_extents_count, T::TYPE),
+      &stats.delta_map_length_util);
     return ret;
   }
 
@@ -1381,7 +1384,10 @@ private:
   TCachedExtentRef<T> make_placeholder_cached_extent_ref(
     extent_len_t length) {
     auto ret = new T(length);
-    ret->on_construct(&get_by_ext(stats.alive_extents_count, T::TYPE));
+    ret->on_construct(
+      &get_by_ext(stats.alive_extents_count, T::TYPE),
+      &get_by_ext(stats.partial_extents_count, T::TYPE),
+      &stats.delta_map_length_util);
     return ret;
   }
 
@@ -1595,7 +1601,9 @@ private:
     tracer_t write_alloced{};
     tracer_t submit_record{};
     counter_by_extent_t<uint64_t> alive_extents_count;
+    counter_by_extent_t<uint64_t> partial_extents_count;
     counter_by_src_t<int64_t> dirty_bytes_by_src;
+    seastar::metrics::histogram delta_map_length_util;
   } stats;
 
   template <typename CounterT>
