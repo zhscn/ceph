@@ -324,6 +324,19 @@ std::ostream &operator<<(std::ostream &out, const journal_seq_t &seq)
   }
 }
 
+std::ostream &operator<<(std::ostream &out, extent_data_state_t state) {
+  switch (state) {
+  case extent_data_state_t::NONE:
+    return out << "NONE";
+  case extent_data_state_t::EMPTY:
+    return out << "EMPTY";
+  case extent_data_state_t::PARTIAL:
+    return out << "PARTIAL";
+  case extent_data_state_t::FULL:
+    return out << "FULL";
+  }
+}
+
 std::ostream &operator<<(std::ostream &out, extent_types_t t)
 {
   switch (t) {

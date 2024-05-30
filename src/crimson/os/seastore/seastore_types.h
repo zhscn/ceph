@@ -1642,6 +1642,14 @@ struct paddr_list_t : std::list<std::pair<paddr_t, extent_len_t>> {
 std::ostream &operator<<(std::ostream &out, const laddr_list_t &rhs);
 std::ostream &operator<<(std::ostream &out, const paddr_list_t &rhs);
 
+enum class extent_data_state_t : uint8_t {
+  NONE,
+  EMPTY,
+  PARTIAL,
+  FULL
+};
+std::ostream &operator<<(std::ostream &out, extent_data_state_t state);
+
 /* identifies type of extent, used for interpretting deltas, managing
  * writeback.
  *

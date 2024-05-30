@@ -183,6 +183,8 @@ class CachedExtent
   friend class onode::DummyNodeExtent;
   friend class onode::TestReplayExtent;
 
+  extent_data_state_t data_state = extent_data_state_t::NONE;
+
   uint32_t last_committed_crc = 0;
 
   // Points at current version while in state MUTATION_PENDING
@@ -205,6 +207,11 @@ public:
     rewrite_generation = gen;
     pending_for_transaction = trans_id;
     write_policy = policy;
+    if (ptr.has_value()) {
+      data_state = extent_data_state_t::FULL;
+    } else {
+      data_state = extent_data_state_t::EMPTY;
+    }
   }
 
   void set_modify_time(sea_time_point t) {
@@ -353,7 +360,7 @@ public:
 	<< ", refcount=" << use_count()
 	<< ", user_hint=" << user_hint
 	<< ", write_policy=" << write_policy
-	<< ", fully_loaded=" << is_fully_loaded()
+	<< ", data_state=" << get_data_state()
 	<< ", rewrite_gen=" << rewrite_gen_printer_t{rewrite_generation};
     if (state != extent_state_t::INVALID &&
         state != extent_state_t::CLEAN_PENDING) {
@@ -532,7 +539,7 @@ public:
   /// Return true if extent is fully loaded or is about to be fully loaded (call 
   /// wait_io() in this case)
   bool is_fully_loaded() const {
-    return ptr.has_value();
+    return data_state == extent_data_state_t::FULL;
   }
 
   /**
@@ -591,6 +598,14 @@ public:
   }
 
   virtual ~CachedExtent();
+
+  extent_data_state_t get_data_state() const {
+    return data_state;
+  }
+
+  void set_data_state(extent_data_state_t state) {
+    data_state = state;
+  }
 
   placement_hint_t get_user_hint() const {
     return user_hint;
