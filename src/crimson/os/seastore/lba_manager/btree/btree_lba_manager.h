@@ -225,9 +225,11 @@ public:
 
 
   struct alloc_mapping_info_t {
+    laddr_t key = L_ADDR_NULL;
     extent_len_t len = 0;
     pladdr_t val;
     uint32_t checksum = 0;
+    extent_ref_count_t refcount = EXTENT_DEFAULT_REF_COUNT;
     LogicalCachedExtent* extent = nullptr;
   };
 
@@ -237,15 +239,22 @@ public:
     extent_len_t len) final
   {
     std::vector<alloc_mapping_info_t> alloc_infos = {
-      alloc_mapping_info_t{len, P_ADDR_ZERO, 0, nullptr}};
+      alloc_mapping_info_t{
+        L_ADDR_NULL,
+	len,
+	P_ADDR_ZERO,
+	0,
+	EXTENT_DEFAULT_REF_COUNT,
+	nullptr
+      }
+    };
     return seastar::do_with(
       std::move(alloc_infos),
       [&t, hint, this](auto &alloc_infos) {
       return _alloc_extents(
 	t,
 	hint,
-	alloc_infos,
-	EXTENT_DEFAULT_REF_COUNT
+	alloc_infos
       ).si_then([](auto mappings) {
 	assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -294,15 +303,19 @@ public:
     // The real checksum will be updated upon transaction commit
     assert(ext.get_last_committed_crc() == 0);
     std::vector<alloc_mapping_info_t> alloc_infos = {{
-      ext.get_length(), ext.get_paddr(), ext.get_last_committed_crc(), &ext}};
+      L_ADDR_NULL,
+      ext.get_length(),
+      ext.get_paddr(),
+      ext.get_last_committed_crc(),
+      refcount,
+      &ext}};
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint, refcount](auto &alloc_infos) {
+      [this, &t, hint](auto &alloc_infos) {
       return _alloc_extents(
 	t,
 	hint,
-	alloc_infos,
-	refcount
+	alloc_infos
       ).si_then([](auto mappings) {
 	assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -320,15 +333,17 @@ public:
     std::vector<alloc_mapping_info_t> alloc_infos;
     for (auto &extent : extents) {
       alloc_infos.emplace_back(alloc_mapping_info_t{
+	L_ADDR_NULL,
 	extent->get_length(),
 	pladdr_t(extent->get_paddr()),
 	extent->get_last_committed_crc(),
+	refcount,
 	extent.get()});
     }
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint, refcount](auto &alloc_infos) {
-      return _alloc_extents(t, hint, alloc_infos, refcount);
+      [this, &t, hint](auto &alloc_infos) {
+      return _alloc_extents(t, hint, alloc_infos);
     });
   }
 
@@ -551,8 +566,7 @@ private:
   alloc_extents_ret _alloc_extents(
     Transaction &t,
     laddr_t hint,
-    std::vector<alloc_mapping_info_t> &alloc_infos,
-    extent_ref_count_t refcount);
+    std::vector<alloc_mapping_info_t> &alloc_infos);
 
   ref_ret _incref_extent(
     Transaction &t,
@@ -574,10 +588,12 @@ private:
     assert(intermediate_key != L_ADDR_NULL);
     std::vector<alloc_mapping_info_t> alloc_infos = {
       alloc_mapping_info_t{
+	L_ADDR_NULL,
 	len,
 	intermediate_key,
 	0,	// crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
+	EXTENT_DEFAULT_REF_COUNT,
 	nullptr}};
     return seastar::do_with(
       std::move(alloc_infos),
@@ -585,8 +601,7 @@ private:
       return _alloc_extents(
 	t,
 	laddr,
-	alloc_infos,
-	EXTENT_DEFAULT_REF_COUNT
+	alloc_infos
       ).si_then([laddr](auto mappings) {
 	ceph_assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
