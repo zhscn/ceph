@@ -8907,7 +8907,7 @@ hobject_t PrimaryLogPG::get_temp_recovery_object(
   eversion_t version)
 {
   ostringstream ss;
-  ss << "temp_recovering_" << info.pgid  // (note this includes the shardid)
+  ss << TEMP_RECOVERING_OBJ_PREFIX << "_" << info.pgid  // (note this includes the shardid)
      << "_" << version
      << "_" << info.history.same_interval_since
      << "_" << target.snap;
