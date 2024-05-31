@@ -113,6 +113,9 @@
 /// priority when more full
 #define OSD_DELETE_PRIORITY_FULL 255
 
+/// prefix for the name of temp_recovering objects
+#define TEMP_RECOVERING_OBJ_PREFIX "temp_recovering"
+
 static std::map<int, int> max_prio_map = {
 	{OSD_BACKFILL_PRIORITY_BASE, OSD_BACKFILL_DEGRADED_PRIORITY_BASE - 1},
 	{OSD_BACKFILL_DEGRADED_PRIORITY_BASE, OSD_RECOVERY_PRIORITY_BASE - 1},

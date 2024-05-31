@@ -23,7 +23,7 @@ hobject_t RecoveryBackend::get_temp_recovery_object(
   eversion_t version) const
 {
   hobject_t hoid =
-    target.make_temp_hobject(fmt::format("temp_recovering_{}_{}_{}_{}",
+    target.make_temp_hobject(fmt::format(TEMP_RECOVERING_OBJ_PREFIX"_{}_{}_{}_{}",
                                          pg.get_info().pgid,
                                          version,
                                          pg.get_info().history.same_interval_since,
