@@ -1062,6 +1062,50 @@ std::vector<CachedExtentRef> Cache::alloc_new_data_extents_by_type(
   }
 }
 
+CachedExtentRef Cache::alloc_remapped_extent_by_type(
+    Transaction &t,
+    extent_types_t type,
+    laddr_t remap_laddr,
+    paddr_t remap_paddr,
+    extent_len_t remap_length,
+    laddr_t original_laddr,
+    const std::optional<ceph::bufferptr> &original_bptr)
+{
+  switch (type) {
+  case extent_types_t::ONODE_BLOCK_STAGED:
+    return alloc_remapped_extent<onode::SeastoreNodeExtent>(
+      t, remap_laddr, remap_paddr, remap_length, original_laddr,
+      original_bptr);
+  case extent_types_t::OMAP_INNER:
+    return alloc_remapped_extent<omap_manager::OMapInnerNode>(
+      t, remap_laddr, remap_paddr, remap_length, original_laddr,
+      original_bptr);
+  case extent_types_t::OMAP_LEAF:
+    return alloc_remapped_extent<omap_manager::OMapLeafNode>(
+      t, remap_laddr, remap_paddr, remap_length, original_laddr,
+      original_bptr);
+  case extent_types_t::COLL_BLOCK:
+    return alloc_remapped_extent<collection_manager::CollectionNode>(
+      t, remap_laddr, remap_paddr, remap_length, original_laddr,
+      original_bptr);
+  case extent_types_t::OBJECT_DATA_BLOCK:
+    return alloc_remapped_extent<ObjectDataBlock>(
+      t, remap_laddr, remap_paddr, remap_length, original_laddr,
+      original_bptr);
+  case extent_types_t::TEST_BLOCK:
+    return alloc_remapped_extent<TestBlock>(
+      t, remap_laddr, remap_paddr, remap_length, original_laddr,
+      original_bptr);
+  case extent_types_t::TEST_BLOCK_PHYSICAL:
+    return alloc_remapped_extent<TestBlockPhysical>(
+      t, remap_laddr, remap_paddr, remap_length, original_laddr,
+      original_bptr);
+  default:
+    ceph_assert(0 == "impossible");
+    return CachedExtentRef();
+  }
+}
+
 CachedExtentRef Cache::duplicate_for_write(
   Transaction &t,
   CachedExtentRef i) {

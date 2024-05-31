@@ -930,7 +930,7 @@ public:
     paddr_t remap_paddr,
     extent_len_t remap_length,
     laddr_t original_laddr,
-    std::optional<ceph::bufferptr> &original_bptr) {
+    const std::optional<ceph::bufferptr> &original_bptr) {
     LOG_PREFIX(Cache::alloc_remapped_extent);
     assert(remap_laddr >= original_laddr);
     TCachedExtentRef<T> ext;
@@ -958,6 +958,15 @@ public:
       t, T::TYPE, remap_length, remap_laddr, original_bptr.has_value(), *ext);
     return ext;
   }
+
+  CachedExtentRef alloc_remapped_extent_by_type(
+    Transaction &t,
+    extent_types_t type,
+    laddr_t remap_laddr,
+    paddr_t remap_paddr,
+    extent_len_t remap_length,
+    laddr_t original_laddr,
+    const std::optional<ceph::bufferptr> &original_bptr);
 
   /**
    * alloc_new_extent
