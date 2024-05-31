@@ -347,6 +347,15 @@ public:
     });
   }
 
+  move_mappings_ret move_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    bool data_only,
+    bool replace_with_indirect,
+    remap_extent_func_t func) final;
+
   ref_ret decref_extent(
     Transaction &t,
     laddr_t addr) final {

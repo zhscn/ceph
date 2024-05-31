@@ -571,6 +571,58 @@ public:
     );
   }
 
+  using move_mappings_iertr = LBAManager::move_mappings_iertr;
+  using move_mappings_ret = LBAManager::move_mappings_ret;
+  move_mappings_ret move_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    bool data_only,
+    bool replace_with_indirect)
+  {
+    return lba_manager->move_mappings(
+      t, src_base, dst_base, length, data_only, replace_with_indirect,
+      [this, &t](LogicalCachedExtent *extent, paddr_t paddr, extent_len_t len)
+          -> move_mappings_iertr::future<LogicalCachedExtent *> {
+	auto fut = [this, &t, extent, paddr, len] {
+	  if (extent) {
+	    cache->retire_extent(t, extent);
+	    return move_mappings_iertr::now();
+	  } else {
+	    return cache->retire_extent_addr(t, paddr, len);
+	  }
+	};
+	return fut().si_then([this, extent, &t, paddr, len] {
+	  if (extent) {
+	    std::optional<ceph::bufferptr> original_bptr = std::nullopt;
+	    if (extent->is_fully_loaded()) {
+	      original_bptr = extent->get_bptr();
+	    }
+	    auto new_ext = cache->alloc_remapped_extent_by_type(
+	      t,
+	      extent->get_type(),
+	      extent->get_laddr(),
+	      extent->get_paddr(),
+	      extent->get_length(),
+	      extent->get_laddr(),
+	      original_bptr);
+	    return move_mappings_iertr::make_ready_future<LogicalCachedExtent*>(new_ext.get());
+	  } else {
+	    auto new_ext = CachedExtent::make_placeholder_cached_extent_ref<
+	      AliveExtentPlaceholder>(len);
+	    new_ext->init(
+	      CachedExtent::extent_state_t::EXIST_CLEAN,
+	      paddr,
+	      placement_hint_t::HOT,
+	      INIT_GENERATION,
+	      t.get_trans_id());
+	    return move_mappings_iertr::make_ready_future<LogicalCachedExtent*>(new_ext.get());
+	  }
+	});
+      });
+  }
+
   /* alloc_extents
    *
    * allocates more than one new blocks of type T.

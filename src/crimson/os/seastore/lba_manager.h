@@ -74,6 +74,23 @@ public:
     laddr_t offset) = 0;
 
   /**
+   * Move mappings from src_base~length to dst_base
+   */
+  using remap_extent_func_t = std::function<
+    base_iertr::future<LogicalCachedExtent*>
+      (LogicalCachedExtent*, paddr_t, extent_len_t)>;
+  using move_mappings_iertr = base_iertr;
+  using move_mappings_ret = move_mappings_iertr::future<>;
+  virtual move_mappings_ret move_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    bool data_only,
+    bool replace_with_indirect,
+    remap_extent_func_t func) = 0;
+
+  /**
    * Allocates a new mapping referenced by LBARef
    *
    * Offset will be relative to the block offset of the record

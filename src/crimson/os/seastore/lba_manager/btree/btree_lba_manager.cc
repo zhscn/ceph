@@ -300,6 +300,135 @@ BtreeLBAManager::_get_mapping(
     });
 }
 
+BtreeLBAManager::move_mappings_ret
+BtreeLBAManager::move_mappings(
+  Transaction &t,
+  laddr_t src_base,
+  laddr_t dst_base,
+  extent_len_t length,
+  bool data_only,
+  bool replace_with_indirect,
+  remap_extent_func_t func)
+{
+  LOG_PREFIX(BtreeLBAManager::move_mappings);
+  DEBUGT("move {}~{} to {}, data_only: {} replace_with_indirect: {}",
+	 t, src_base, length, dst_base, data_only, replace_with_indirect);
+  struct state_t {
+    laddr_t src_base;
+    laddr_t dst_base;
+    extent_len_t length;
+    std::optional<LBABtree::iterator> iter;
+    std::vector<alloc_mapping_info_t> mappings;
+    remap_extent_func_t remap_extent;
+
+    state_t(
+      laddr_t src_base,
+      laddr_t dst_base,
+      extent_len_t length,
+      remap_extent_func_t func)
+      : src_base(src_base),
+	dst_base(dst_base),
+	length(length),
+	iter(std::nullopt),
+	mappings(),
+	remap_extent(std::move(func)) {}
+  };
+
+  auto c = get_context(t);
+  return with_btree_state<LBABtree, state_t>(
+    cache,
+    c,
+    state_t(src_base, dst_base, length, std::move(func)),
+    [c, data_only, replace_with_indirect, FNAME, this](LBABtree &btree, state_t &state) {
+      return btree.lower_bound(c, state.src_base
+      ).si_then([c, data_only, replace_with_indirect,
+		 &btree, &state, FNAME, this](LBABtree::iterator iter) {
+	ceph_assert(!iter.is_end());
+	ceph_assert(state.src_base == iter.get_key());
+	state.iter.emplace(std::move(iter));
+	return trans_intr::repeat([c, data_only, replace_with_indirect, &btree, &state, FNAME] {
+	  if (state.iter->is_end() ||
+	      state.iter->get_key() >= state.src_base + state.length) {
+	    TRACET("stopping iterate, move {} mappings to dst", c.trans, state.mappings.size());
+	    return base_iertr::make_ready_future<
+	      seastar::stop_iteration>(seastar::stop_iteration::yes);
+	  }
+
+	  auto laddr = state.iter->get_key();
+	  auto map_val = state.iter->get_val();
+	  if (data_only &&
+	      (map_val.pladdr.is_laddr() ||
+	       map_val.pladdr.get_paddr().is_zero())) {
+	    TRACET("skip {} {}", c.trans, laddr, map_val);
+	    return base_iertr::make_ready_future<
+	      seastar::stop_iteration>(seastar::stop_iteration::yes);
+	  }
+
+	  auto fut = move_mappings_iertr::make_ready_future<LogicalCachedExtent*>(nullptr);
+	  if (map_val.pladdr.is_paddr()) {
+	    auto pin = state.iter->get_pin(c);
+	    auto ext = pin->get_logical_extent(c.trans);
+	    if (ext.has_child()) {
+	      auto paddr = map_val.pladdr.get_paddr();
+	      auto length = map_val.len;
+	      fut = trans_intr::make_interruptible(
+	        std::move(ext.get_child_fut())
+	      ).si_then([&state, paddr, length](auto extent) {
+		return state.remap_extent(extent.get(), paddr, length);
+	      });
+	    }
+	  }
+
+	  return fut.si_then([c, laddr, map_val, data_only,
+			      replace_with_indirect, &btree, &state, FNAME]
+			     (LogicalCachedExtent *extent) {
+	    TRACET("move {} {}", c.trans, laddr, map_val);
+	    state.mappings.push_back(alloc_mapping_info_t{
+		state.iter->get_key(), map_val.len, map_val.pladdr,
+		map_val.checksum, map_val.refcount, extent});
+	    return btree.remove(c, *state.iter
+	    ).si_then([c, data_only, replace_with_indirect,
+		       laddr, map_val, &btree, &state, FNAME](auto iter) mutable {
+	      if (replace_with_indirect) {
+		ceph_assert(data_only);
+		map_val.pladdr = pladdr_t{state.dst_base + (laddr - state.src_base)};
+		map_val.checksum = 0;
+		TRACET("replace to indirect mapping {} {}", c.trans, laddr, map_val);
+		return btree.insert(c, std::move(iter), laddr, map_val, nullptr
+		).si_then([c, &state](auto iter) {
+		  ceph_assert(iter.second);
+		  return iter.first.next(c).si_then([&state](auto iter) {
+		    state.iter.emplace(std::move(iter));
+		    return seastar::make_ready_future<
+		      seastar::stop_iteration>(seastar::stop_iteration::no);
+		  });
+		});
+	      } else {
+		state.iter.emplace(std::move(iter));
+		return move_mappings_iertr::make_ready_future<
+		  seastar::stop_iteration>(seastar::stop_iteration::no);
+	      }
+	    });
+	  });
+	}).si_then([c, &state, this] {
+	  return _alloc_extents(c.trans, state.dst_base, state.mappings
+	  ).si_then([&state](auto mappings) {
+#ifndef NDEBUG
+	    for (auto &mapping : mappings) {
+	      auto start = mapping->get_key();
+	      auto end = mapping->get_key() + mapping->get_length();
+	      assert(start >= state.dst_base && end <= state.dst_base + state.length);
+	    }
+#else
+	    boost::ignore_unused(state);
+	    boost::ignore_unused(mappings);
+#endif
+	  });
+	});
+      });
+    }).discard_result();
+}
+
 BtreeLBAManager::alloc_extents_ret
 BtreeLBAManager::_alloc_extents(
   Transaction &t,
