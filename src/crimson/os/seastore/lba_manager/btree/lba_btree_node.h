@@ -222,7 +222,9 @@ struct LBALeafNode
       iter.get_offset(),
       addr,
       (void*)nextent);
-    this->insert_child_ptr(iter, nextent);
+    if (nextent && !nextent->is_placeholder()) {
+      this->insert_child_ptr(iter, nextent);
+    }
     if (val.pladdr.is_paddr()) {
       val.pladdr = maybe_generate_relative(val.pladdr.get_paddr());
     }

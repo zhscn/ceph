@@ -506,7 +506,8 @@ public:
 
   /// Returns true if extent is a plcaeholder
   bool is_placeholder() const {
-    return get_type() == extent_types_t::RETIRED_PLACEHOLDER;
+    return get_type() == extent_types_t::RETIRED_PLACEHOLDER ||
+      get_type() == extent_types_t::ALIVE_PLACEHOLDER;
   }
 
   bool is_pending_io() const {
@@ -777,6 +778,13 @@ protected:
   CachedExtent(retired_placeholder_t, extent_len_t _length)
     : state(extent_state_t::INVALID),
       length(_length) {
+    assert(length > 0);
+  }
+
+  struct alive_placeholder_t{};
+  CachedExtent(alive_placeholder_t, extent_len_t length)
+    : state(extent_state_t::INVALID),
+      length(length) {
     assert(length > 0);
   }
 
@@ -1220,6 +1228,8 @@ class ChildableCachedExtent : public CachedExtent {
 public:
   template <typename... T>
   ChildableCachedExtent(T&&... t) : CachedExtent(std::forward<T>(t)...) {}
+  ChildableCachedExtent(alive_placeholder_t holder, extent_len_t length)
+    : CachedExtent(holder, length) {}
   bool has_parent_tracker() const {
     return (bool)parent_tracker;
   }
@@ -1258,6 +1268,10 @@ public:
   template <typename... T>
   LogicalCachedExtent(T&&... t)
     : ChildableCachedExtent(std::forward<T>(t)...)
+  {}
+
+  LogicalCachedExtent(alive_placeholder_t holder, extent_len_t length)
+    : ChildableCachedExtent(holder, length)
   {}
 
   void on_rewrite(CachedExtent &extent, extent_len_t off) final {
@@ -1346,6 +1360,30 @@ struct ref_laddr_cmp {
   bool operator()(const LogicalCachedExtentRef &lhs,
 		  const laddr_t &rhs) const {
     return lhs->get_laddr() < rhs;
+  }
+};
+
+struct AliveExtentPlaceholder : public LogicalCachedExtent {
+  AliveExtentPlaceholder(extent_len_t length)
+    : LogicalCachedExtent(alive_placeholder_t{}, length) {}
+
+  static constexpr extent_types_t TYPE = extent_types_t::ALIVE_PLACEHOLDER;
+  extent_types_t get_type() const final {
+    return TYPE;
+  }
+
+  CachedExtentRef duplicate_for_write(Transaction&) final {
+    ceph_assert(0 == "Should never happen for a placeholder");
+    return CachedExtentRef();
+  }
+
+  ceph::bufferlist get_delta() final {
+    ceph_assert(0 == "Should never happen for a placeholder");
+    return ceph::bufferlist();
+  }
+
+  void apply_delta(const ceph::bufferlist &) final {
+    ceph_assert(0 == "Should never happen for a placeholder");
   }
 };
 

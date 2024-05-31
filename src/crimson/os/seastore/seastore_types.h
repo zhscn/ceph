@@ -1187,8 +1187,9 @@ enum class extent_types_t : uint8_t {
   TEST_BLOCK_PHYSICAL = 13,
   BACKREF_INTERNAL = 14,
   BACKREF_LEAF = 15,
+  ALIVE_PLACEHOLDER = 16,
   // None and the number of valid extent_types_t
-  NONE = 16,
+  NONE = 17,
 };
 using extent_types_le_t = uint8_t;
 constexpr auto EXTENT_TYPES_MAX = static_cast<uint8_t>(extent_types_t::NONE);

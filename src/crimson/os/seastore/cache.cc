@@ -178,7 +178,8 @@ void Cache::register_metrics()
     {extent_types_t::TEST_BLOCK,          sm::label_instance("ext", "TEST_BLOCK")},
     {extent_types_t::TEST_BLOCK_PHYSICAL, sm::label_instance("ext", "TEST_BLOCK_PHYSICAL")},
     {extent_types_t::BACKREF_INTERNAL,    sm::label_instance("ext", "BACKREF_INTERNAL")},
-    {extent_types_t::BACKREF_LEAF,        sm::label_instance("ext", "BACKREF_LEAF")}
+    {extent_types_t::BACKREF_LEAF,        sm::label_instance("ext", "BACKREF_LEAF")},
+    {extent_types_t::ALIVE_PLACEHOLDER,   sm::label_instance("ext", "ALIVE_PLACEHOLDER")}
   };
   assert(labels_by_ext.size() == (std::size_t)extent_types_t::NONE);
 
