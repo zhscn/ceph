@@ -64,6 +64,11 @@ public:
       hobj(hobj)
   {}
 
+  bool is_fully_initialized() const {
+    return get_layout().object_data.get().get_reserved_data_base()
+      != L_ADDR_NULL;
+  }
+
   virtual bool is_alive() const = 0;
   virtual const onode_layout_t &get_layout() const = 0;
   virtual ~Onode() = default;
