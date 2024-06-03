@@ -77,7 +77,7 @@ public:
 	meta),
       key(meta.begin),
       indirect(val.pladdr.is_laddr()),
-      intermediate_key(indirect ? val.pladdr.get_laddr() : L_ADDR_NULL),
+      intermediate_key(indirect ? val.pladdr.build_laddr(key) : L_ADDR_NULL),
       intermediate_length(indirect ? val.len : 0),
       raw_val(val.pladdr),
       map_val(val),
@@ -151,7 +151,7 @@ public:
     laddr_t interkey = L_ADDR_NULL)
   {
     assert(indirect);
-    assert(value.is_paddr());
+    assert(value_is_paddr());
     intermediate_key = (interkey == L_ADDR_NULL ? key : interkey);
     key = new_key;
     len = length;
@@ -262,7 +262,7 @@ public:
     LogicalCachedExtent* extent = nullptr;
 
     static alloc_mapping_info_t create_zero(extent_len_t len) {
-      return {L_ADDR_NULL, len, P_ADDR_ZERO, 0, nullptr};
+      return {L_ADDR_NULL, len, pladdr_t{P_ADDR_ZERO}, 0, nullptr};
     }
     static alloc_mapping_info_t create_indirect(
       laddr_t laddr,
@@ -271,7 +271,7 @@ public:
       return {
 	laddr,
 	len,
-	intermediate_key,
+	pladdr_t{intermediate_key},
 	0,	// crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
 	nullptr};
@@ -282,7 +282,7 @@ public:
       paddr_t paddr,
       uint32_t checksum,
       LogicalCachedExtent *extent) {
-      return {laddr, len, paddr, checksum, extent};
+      return {laddr, len, pladdr_t{paddr}, checksum, extent};
     }
   };
 
