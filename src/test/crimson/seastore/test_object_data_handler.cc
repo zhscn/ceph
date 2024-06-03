@@ -26,7 +26,9 @@ class TestOnode final : public Onode {
   bool dirty = false;
 
 public:
-  TestOnode(uint32_t dmr) : Onode(dmr, hobject_t()) {}
+  TestOnode(uint32_t dmr) : Onode(dmr, hobject_t()) {
+    layout.local_clone_id = 0;
+  }
   const onode_layout_t &get_layout() const final {
     return layout;
   }
@@ -44,6 +46,12 @@ public:
   void update_onode_size(Transaction &t, uint32_t size) final {
     with_mutable_layout(t, [size](onode_layout_t &mlayout) {
       mlayout.size = size;
+    });
+  }
+
+  void update_local_clone_id(Transaction &t, local_clone_id_t id) final {
+    with_mutable_layout(t, [id](onode_layout_t &mlayout) {
+      mlayout.local_clone_id = id;
     });
   }
 
