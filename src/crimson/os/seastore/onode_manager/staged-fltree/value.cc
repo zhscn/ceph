@@ -82,9 +82,9 @@ Value::do_prepare_mutate_payload(Transaction& t)
    return p_cursor->prepare_mutate_value_payload(get_context(t));
 }
 
-laddr_t Value::get_hint() const
+laddr_t Value::get_data_hint(local_clone_id_t id) const
 {
-  return p_cursor->get_key_view(vb.get_header_magic()).get_hint();
+  return p_cursor->get_key_view(vb.get_header_magic()).get_data_hint(id);
 }
 
 std::unique_ptr<ValueDeltaRecorder>
