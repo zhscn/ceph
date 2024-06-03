@@ -117,7 +117,11 @@ struct fltree_onode_manager_test_t
     with_transaction([this, &it, f=std::move(f)] (auto& t) {
       auto p_kv = *it;
       auto onode = with_trans_intr(t, [&](auto &t) {
-        return manager->get_or_create_onode(t, p_kv->key);
+        return manager->get_or_create_onode(t, p_kv->key
+        ).si_then([&t](auto onode) {
+          onode->update_local_clone_id(t, 0);
+          return onode;
+        });
       }).unsafe_get0();
       std::invoke(f, t, *onode, p_kv->value);
     });
@@ -166,7 +170,13 @@ struct fltree_onode_manager_test_t
     with_onodes_process(start, end,
         [this, f=std::move(f)] (auto& t, auto& oids, auto& items) {
       auto onodes = with_trans_intr(t, [&](auto &t) {
-        return manager->get_or_create_onodes(t, oids);
+        return manager->get_or_create_onodes(t, oids
+        ).si_then([&t](auto onodes) {
+          for (auto &onode : onodes) {
+            onode->update_local_clone_id(t, 0);
+          }
+          return onodes;
+        });
       }).unsafe_get0();
       for (auto tup : boost::combine(onodes, items)) {
         OnodeRef onode;
