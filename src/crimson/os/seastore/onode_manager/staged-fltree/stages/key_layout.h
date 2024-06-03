@@ -14,18 +14,6 @@
 
 namespace crimson::os::seastore::onode {
 
-using shard_t = int8_t;
-using pool_t = int64_t;
-// Note: this is the reversed version of the object hash
-using crush_hash_t = uint32_t;
-using snap_t = uint64_t;
-using gen_t = uint64_t;
-static_assert(sizeof(shard_t) == sizeof(ghobject_t().shard_id.id));
-static_assert(sizeof(pool_t) == sizeof(ghobject_t().hobj.pool));
-static_assert(sizeof(crush_hash_t) == sizeof(ghobject_t().hobj.get_bitwise_key_u32()));
-static_assert(sizeof(snap_t) == sizeof(ghobject_t().hobj.snap.val));
-static_assert(sizeof(gen_t) == sizeof(ghobject_t().generation));
-
 constexpr auto MAX_SHARD = std::numeric_limits<shard_t>::max();
 constexpr auto MAX_POOL = std::numeric_limits<pool_t>::max();
 constexpr auto MAX_CRUSH = std::numeric_limits<crush_hash_t>::max();
@@ -46,9 +34,7 @@ static laddr_t get_lba_hint(shard_t shard, pool_t pool, crush_hash_t crush) {
   // FIXME: It is possible that PGs from different pools share the same prefix
   // if the mask 0xFF is not long enough, result in unexpected transaction
   // conflicts.
-  return ((uint64_t)(shard & 0XFF)<<56 |
-          (uint64_t)(pool  & 0xFF)<<48 |
-          (uint64_t)(crush       )<<16);
+  return laddr_t::get_data_hint(pool, shard, crush, 0);
 }
 
 struct node_offset_packed_t {
