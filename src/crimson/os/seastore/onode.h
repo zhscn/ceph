@@ -31,6 +31,7 @@ struct onode_layout_t {
   ceph_le32 size{0};
   ceph_le32 oi_size{0};
   ceph_le32 ss_size{0};
+  local_clone_id_le_t local_clone_id{LOCAL_CLONE_ID_NULL};
   omap_root_le_t omap_root;
   omap_root_le_t xattr_root;
 
@@ -68,6 +69,7 @@ public:
   virtual ~Onode() = default;
 
   virtual void update_onode_size(Transaction&, uint32_t) = 0;
+  virtual void update_local_clone_id(Transaction&, local_clone_id_t) = 0;
   virtual void update_omap_root(Transaction&, omap_root_t&) = 0;
   virtual void update_xattr_root(Transaction&, omap_root_t&) = 0;
   virtual void update_object_data(Transaction&, object_data_t&) = 0;
