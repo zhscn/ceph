@@ -282,6 +282,53 @@ FLTreeOnodeManager::list_onodes_ret FLTreeOnodeManager::list_onodes(
   });
 }
 
+FLTreeOnodeManager::get_latest_snap_and_head_ret
+FLTreeOnodeManager::get_latest_snap_and_head(
+  Transaction &trans,
+  const ghobject_t& ghobj)
+{
+  LOG_PREFIX(FLTreeOnodeManager::get_latest_snap);
+  DEBUGT("ghobj {}", trans, ghobj);
+  ceph_assert(ghobj.hobj.is_head());
+  return seastar::do_with(
+    ghobj,
+    OnodeRef(nullptr),
+    OnodeRef(nullptr),
+    [this, &trans, &ghobj, FNAME](ghobject_t &start, OnodeRef &snap, OnodeRef &head) {
+      start.hobj.snap = 0;
+      // FIXME: implement get_prev to avoid linear scanning
+      return tree.lower_bound(trans, start
+      ).si_then([this, &trans, &ghobj, &snap, &head, FNAME](auto &&cursor) {
+        return seastar::do_with(
+          std::move(cursor),
+          [this, &trans, &ghobj, &snap, &head, FNAME](auto &cursor) {
+            return trans_intr::repeat([this, &trans, &ghobj, &snap, &head, &cursor, FNAME] {
+              ceph_assert(!cursor.is_end());
+              if (cursor.get_ghobj() >= ghobj) {
+                if (cursor.get_ghobj() == ghobj) {
+                  head.reset(new FLTreeOnode(default_metadata_range, cursor.value()));
+                }
+                TRACET("reached ghobj, return", trans);
+                return get_latest_snap_and_head_iertr::make_ready_future<
+                  seastar::stop_iteration>(seastar::stop_iteration::yes);
+              }
+              DEBUGT("found onode {}", trans, cursor.get_ghobj());
+              snap.reset(new FLTreeOnode(default_metadata_range, cursor.value()));
+              return tree.get_next(trans, cursor
+              ).si_then([&cursor](auto &&next) {
+                cursor = next;
+                return get_latest_snap_and_head_iertr::make_ready_future<
+                  seastar::stop_iteration>(seastar::stop_iteration::no);
+              });
+            });
+          });
+      }).si_then([&snap, head] {
+        return get_latest_snap_and_head_iertr::make_ready_future<
+          std::pair<OnodeRef, OnodeRef>>(std::move(snap), std::move(head));
+      });
+    });
+}
+
 FLTreeOnodeManager::~FLTreeOnodeManager() {}
 
 }
