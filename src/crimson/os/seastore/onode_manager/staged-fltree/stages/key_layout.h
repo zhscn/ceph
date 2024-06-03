@@ -42,11 +42,16 @@ template<> struct _full_key_type<KeyT::HOBJ> { using type = key_hobj_t; };
 template <KeyT type>
 using full_key_t = typename _full_key_type<type>::type;
 
-static laddr_t get_lba_hint(shard_t shard, pool_t pool, crush_hash_t crush) {
+static laddr_t get_lba_hint(
+  shard_t shard,
+  pool_t pool,
+  crush_hash_t crush,
+  local_clone_id_t id)
+{
   // FIXME: It is possible that PGs from different pools share the same prefix
   // if the mask 0xFF is not long enough, result in unexpected transaction
   // conflicts.
-  return laddr_t::get_data_hint(pool, shard, crush, 0);
+  return laddr_t::get_data_hint(pool, shard, crush, id);
 }
 
 struct node_offset_packed_t {
@@ -437,8 +442,11 @@ class key_hobj_t {
     // Note: this is the reversed version of the object hash
     return ghobj.hobj.get_bitwise_key_u32();
   }
-  laddr_t get_hint() const {
-    return get_lba_hint(shard(), pool(), crush());
+  laddr_t get_metadat_hint() const {
+    return laddr_t::get_metadata_hint(get_lba_hint(shard(), pool(), crush(), 0));
+  }
+  laddr_t get_data_hint(local_clone_id_t id) const {
+    return get_lba_hint(shard(), pool(), crush(), id);
   }
   std::string_view nspace() const {
     // TODO(cross-node string dedup)
@@ -530,8 +538,11 @@ class key_view_t {
   inline shard_t shard() const;
   inline pool_t pool() const;
   inline crush_hash_t crush() const;
-  laddr_t get_hint() const {
-    return get_lba_hint(shard(), pool(), crush());
+  laddr_t get_metadata_hint() const {
+    return laddr_t::get_metadata_hint(get_lba_hint(shard(), pool(), crush(), 0));
+  }
+  laddr_t get_data_hint(local_clone_id_t id) const {
+    return get_lba_hint(shard(), pool(), crush(), id);
   }
   std::string_view nspace() const {
     // TODO(cross-node string dedup)
