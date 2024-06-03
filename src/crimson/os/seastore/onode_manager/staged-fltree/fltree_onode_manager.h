@@ -48,6 +48,7 @@ struct FLTreeOnode final : Onode, Value {
   struct Recorder : public ValueDeltaRecorder {
     enum class delta_op_t : uint8_t {
       UPDATE_ONODE_SIZE,
+      UPDATE_LOCAL_CLONE_ID,
       UPDATE_OMAP_ROOT,
       UPDATE_XATTR_ROOT,
       UPDATE_OBJECT_DATA,
@@ -115,6 +116,22 @@ struct FLTreeOnode final : Onode, Value {
 	  recorder->encode_update(
 	    payload_mut, Recorder::delta_op_t::UPDATE_ONODE_SIZE);
 	}
+    });
+  }
+
+  void update_local_clone_id(Transaction &t, local_clone_id_t id) final {
+    LOG_PREFIX(FLTreeOnode::update_local_clone_id);
+    SUBTRACET(seastore_onode, " hobj={}, local_clone_id={}", t, hobj, id);
+    with_mutable_layout(
+      t,
+      [id](NodeExtentMutable &payload_mut, Recorder *recorder) {
+        auto &mlayout = *reinterpret_cast<onode_layout_t*>(
+          payload_mut.get_write());
+        mlayout.local_clone_id = id;
+        if (recorder) {
+          recorder->encode_update(
+            payload_mut, Recorder::delta_op_t::UPDATE_LOCAL_CLONE_ID);
+        }
     });
   }
 
