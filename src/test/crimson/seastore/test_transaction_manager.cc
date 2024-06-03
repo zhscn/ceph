@@ -2183,7 +2183,7 @@ TEST_P(tm_single_device_test_t, invalid_lba_mapping_detect)
       for (int i = 0; i < LEAF_NODE_CAPACITY; i++) {
 	auto extent = alloc_extent(
 	  t,
-	  i * 4096,
+	  laddr_t::get_hint_from_offset(i * 4096),
 	  4096,
 	  'a');
       }
@@ -2192,12 +2192,22 @@ TEST_P(tm_single_device_test_t, invalid_lba_mapping_detect)
 
     {
       auto t = create_transaction();
-      auto pin = get_pin(t, (LEAF_NODE_CAPACITY - 1) * 4096);
+      auto pin = get_pin(
+	t,
+	laddr_t::get_hint_from_offset((LEAF_NODE_CAPACITY - 1) * 4096));
       assert(pin->is_parent_valid());
-      auto extent = alloc_extent(t, LEAF_NODE_CAPACITY * 4096, 4096, 'a');
+      auto extent = alloc_extent(
+	t,
+	laddr_t::get_hint_from_offset(LEAF_NODE_CAPACITY * 4096),
+	4096,
+	'a');
       assert(!pin->is_parent_valid());
-      pin = get_pin(t, LEAF_NODE_CAPACITY * 4096);
-      std::ignore = alloc_extent(t, (LEAF_NODE_CAPACITY + 1) * 4096, 4096, 'a');
+      pin = get_pin(t, laddr_t::get_hint_from_offset(LEAF_NODE_CAPACITY * 4096));
+      std::ignore = alloc_extent(
+	t,
+	laddr_t::get_hint_from_offset((LEAF_NODE_CAPACITY + 1) * 4096),
+	4096,
+	'a');
       assert(pin->is_parent_valid());
       assert(pin->parent_modified());
       pin->maybe_fix_pos();
