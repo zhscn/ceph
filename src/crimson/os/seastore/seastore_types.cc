@@ -106,11 +106,15 @@ std::ostream &operator<<(std::ostream &out, const loffset_t &loffset)
 
 std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr)
 {
+  out << "pladdr(";
   if (pladdr.is_laddr()) {
-    return out << pladdr.get_laddr();
+    // pladdr(local_clone_id=...)
+    out << "local_clone_id=" << pladdr.get_local_clone_id();
   } else {
-    return out << pladdr.get_paddr();
+    // pladdr(paddr=<...>)
+    out << pladdr.get_paddr();
   }
+  return out << ")";
 }
 
 std::ostream &operator<<(std::ostream &out, const paddr_t &rhs)
