@@ -143,17 +143,17 @@ BtreeBackrefManager::get_mappings(
 	  if (pos.is_end() || pos.get_key() >= end) {
 	    TRACET("{}~{} done with {} results",
 	           c.trans, offset, end, ret.size());
-	    return BackrefBtree::iterate_repeat_ret_inner(
-	      interruptible::ready_future_marker{},
-	      seastar::stop_iteration::yes);
+	    return base_iertr::make_ready_future<
+	      BackrefBtree::repeat_indicator_t>(
+	        seastar::stop_iteration::yes, std::nullopt);
 	  }
 	  TRACET("{}~{} got {}, {}, repeat ...",
 	         c.trans, offset, end, pos.get_key(), pos.get_val());
 	  ceph_assert((pos.get_key().add_offset(pos.get_val().len)) > offset);
 	  ret.emplace_back(pos.get_pin(c));
-	  return BackrefBtree::iterate_repeat_ret_inner(
-	    interruptible::ready_future_marker{},
-	    seastar::stop_iteration::no);
+	  return base_iertr::make_ready_future<
+	    BackrefBtree::repeat_indicator_t>(
+	      seastar::stop_iteration::no, std::nullopt);
 	});
     });
 }
@@ -205,9 +205,9 @@ BtreeBackrefManager::new_mapping(
                    //stats.num_alloc_extents_iter_nexts - lookup_attempts,
                    state.last_end);
 	    state.insert_iter = pos;
-	    return BackrefBtree::iterate_repeat_ret_inner(
-	      interruptible::ready_future_marker{},
-	      seastar::stop_iteration::yes);
+	    return base_iertr::make_ready_future<
+	      BackrefBtree::repeat_indicator_t>(
+	        seastar::stop_iteration::yes, std::nullopt);
 	  } else if (pos.get_key() >= (state.last_end.add_offset(len))) {
 	    DEBUGT("{}~{}, paddr={}, state: {}~{}, "
 		   "insert at {} -- {}",
@@ -217,18 +217,18 @@ BtreeBackrefManager::new_mapping(
                    state.last_end,
                    pos.get_val());
 	    state.insert_iter = pos;
-	    return BackrefBtree::iterate_repeat_ret_inner(
-	      interruptible::ready_future_marker{},
-	      seastar::stop_iteration::yes);
+	    return base_iertr::make_ready_future<
+	      BackrefBtree::repeat_indicator_t>(
+	        seastar::stop_iteration::yes, std::nullopt);
 	  } else {
 	    ERRORT("{}~{}, paddr={}, state: {}~{}, repeat ... -- {}",
                    t, addr, len, key,
                    pos.get_key(), pos.get_val().len,
                    pos.get_val());
 	    ceph_abort("not possible for the backref tree");
-	    return BackrefBtree::iterate_repeat_ret_inner(
-	      interruptible::ready_future_marker{},
-	      seastar::stop_iteration::no);
+	    return base_iertr::make_ready_future<
+	      BackrefBtree::repeat_indicator_t>(
+	        seastar::stop_iteration::no, std::nullopt);
 	  }
 	}).si_then([c, addr, len, key, &btree, &state, val] {
 	  return btree.insert(
@@ -357,9 +357,9 @@ BtreeBackrefManager::scan_mapped_space(
 	  P_ADDR_MIN),
 	[c, &scan_visitor, block_size, FNAME](auto &pos) {
 	  if (pos.is_end()) {
-	    return BackrefBtree::iterate_repeat_ret_inner(
-	      interruptible::ready_future_marker{},
-	      seastar::stop_iteration::yes);
+	    return base_iertr::make_ready_future<
+	      BackrefBtree::repeat_indicator_t>(
+	        seastar::stop_iteration::yes, std::nullopt);
 	  }
 	  TRACET("tree value {}~{} {}~{} {} used",
 		 c.trans,
@@ -379,9 +379,9 @@ BtreeBackrefManager::scan_mapped_space(
 	      pos.get_val().len,
 	      pos.get_val().type,
 	      pos.get_val().laddr);
-	  return BackrefBtree::iterate_repeat_ret_inner(
-	    interruptible::ready_future_marker{},
-	    seastar::stop_iteration::no);
+	  return base_iertr::make_ready_future<
+	    BackrefBtree::repeat_indicator_t>(
+	      seastar::stop_iteration::no, std::nullopt);
 	}
       );
     }).si_then([this, &scan_visitor, c, FNAME, block_size] {
@@ -448,13 +448,13 @@ BtreeBackrefManager::scan_mapped_space(
 	      &tree_visitor),
 	    [](auto &pos) {
 	      if (pos.is_end()) {
-		return BackrefBtree::iterate_repeat_ret_inner(
-		  interruptible::ready_future_marker{},
-		  seastar::stop_iteration::yes);
+		return base_iertr::make_ready_future<
+		  BackrefBtree::repeat_indicator_t>(
+	            seastar::stop_iteration::yes, std::nullopt);
 	      }
-	      return BackrefBtree::iterate_repeat_ret_inner(
-		interruptible::ready_future_marker{},
-		seastar::stop_iteration::no);
+	      return base_iertr::make_ready_future<
+		BackrefBtree::repeat_indicator_t>(
+	          seastar::stop_iteration::no, std::nullopt);
 	    },
 	    &tree_visitor
 	  );

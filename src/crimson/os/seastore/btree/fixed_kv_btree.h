@@ -652,17 +652,19 @@ public:
         [](auto &pos) {
           if (pos.is_end()) {
             return base_iertr::make_ready_future<
-              seastar::stop_iteration>(
-                seastar::stop_iteration::yes);
+              repeat_indicator_t>(seastar::stop_iteration::yes, std::nullopt);
           }
           return base_iertr::make_ready_future<
-            seastar::stop_iteration>(
-              seastar::stop_iteration::no);
+            repeat_indicator_t>(seastar::stop_iteration::no, std::nullopt);
         },
         &checker);
     });
   }
 
+  struct repeat_indicator_t {
+    seastar::stop_iteration done = seastar::stop_iteration::no;
+    std::optional<iterator> iter;
+  };
   using iterate_repeat_ret_inner = base_iertr::future<
     seastar::stop_iteration>;
   template <typename F>
@@ -682,21 +684,28 @@ public:
 	    [c, visitor, &f, &pos] {
 	      return f(
 		pos
-	      ).si_then([c, visitor, &pos](auto done) {
-		if (done == seastar::stop_iteration::yes) {
+	      ).si_then([c, visitor, &pos](auto &&indicator) {
+		if (indicator.done == seastar::stop_iteration::yes) {
 		  return iterate_repeat_ret_inner(
 		    interruptible::ready_future_marker{},
 		    seastar::stop_iteration::yes);
 		} else {
-		  ceph_assert(!pos.is_end());
-		  return pos.next(
-		    c, visitor
-		  ).si_then([&pos](auto next) {
-		    pos = next;
-		    return iterate_repeat_ret_inner(
+                  if (indicator.iter) {
+                    pos = std::move(*indicator.iter);
+                    return iterate_repeat_ret_inner(
 		      interruptible::ready_future_marker{},
 		      seastar::stop_iteration::no);
-		  });
+                  } else {
+                    ceph_assert(!pos.is_end());
+                    return pos.next(
+                      c, visitor
+                    ).si_then([&pos](auto next) {
+                      pos = next;
+                      return iterate_repeat_ret_inner(
+                        interruptible::ready_future_marker{},
+                        seastar::stop_iteration::no);
+                    });
+                  }
 		}
 	      });
 	    });
