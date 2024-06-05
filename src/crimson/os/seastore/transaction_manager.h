@@ -608,6 +608,67 @@ public:
     );
   }
 
+  using move_mappings_iertr = LBAManager::move_mappings_iertr;
+  using move_mappings_ret = LBAManager::move_mappings_ret;
+  template <typename T>
+  move_mappings_ret move_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    bool data_only)
+  {
+    return lba_manager->move_mappings(
+      t, src_base, dst_base, length, data_only,
+      [this, &t](LogicalCachedExtent *extent,
+		 LBAMappingRef mapping,
+		 std::vector<LBAManager::remap_entry> remaps)
+            -> move_mappings_iertr::future<std::list<LogicalCachedExtentRef>> {
+	auto laddr = mapping->get_key();
+	auto paddr = mapping->get_val();
+	auto fut = [this, &t, extent, mapping=std::move(mapping)]() mutable {
+	  if (extent) {
+	    cache->retire_extent(t, extent);
+	    return move_mappings_iertr::make_ready_future<
+	      TCachedExtentRef<T>>(extent->template cast<T>());
+	  } else if (full_extent_integrity_check) {
+	    return read_pin<T>(t, std::move(mapping)
+	    ).si_then([this, &t](auto ext) {
+	      cache->retire_extent(t, ext);
+	      return move_mappings_iertr::make_ready_future<
+		TCachedExtentRef<T>>(ext);
+	    });
+	  } else {
+	    return cache->retire_extent_addr(
+	      t, mapping->get_val(), mapping->get_length()
+	    ).si_then([] {
+	      return move_mappings_iertr::make_ready_future<
+		TCachedExtentRef<T>>();
+	    });
+	  }
+	};
+	return fut().si_then([this, &t, laddr, paddr,
+			      remaps=std::move(remaps)](auto extent) {
+	  std::list<LogicalCachedExtentRef> res{};
+	  for (auto &remap : remaps) {
+	    auto remap_laddr = laddr + remap.offset;
+	    auto ext = cache->alloc_remapped_extent<T>(
+                  t,
+		  remap_laddr,
+		  paddr.add_offset(remap.offset),
+		  remap.len,
+                  laddr,
+		  (extent && extent->is_fully_loaded())
+		  ? std::make_optional(extent->get_bptr())
+		  : std::nullopt);
+	    res.emplace_back(std::move(ext));
+	  }
+	  return move_mappings_iertr::make_ready_future<
+	    std::list<LogicalCachedExtentRef>>(std::move(res));
+	});
+      });
+  }
+
   /* alloc_extents
    *
    * allocates more than one new blocks of type T.
