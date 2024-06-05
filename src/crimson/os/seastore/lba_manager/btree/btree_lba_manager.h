@@ -420,6 +420,14 @@ public:
     });
   }
 
+  move_mappings_ret move_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    bool direct_mapping_only,
+    remap_extent_func_t func) final;
+
   ref_ret decref_extent(
     Transaction &t,
     laddr_t addr) final {
@@ -606,6 +614,53 @@ private:
     return op_context_t<laddr_t>{cache, t};
   }
 
+  struct move_mapping_state_t {
+    laddr_t src_base;
+    laddr_t dst_base;
+    extent_len_t length;
+    remap_extent_func_t remap_extent;
+    lba_pin_list_t res;
+    std::vector<alloc_mapping_info_t> mappings;
+    std::list<LogicalCachedExtentRef> remapped_extents;
+
+    laddr_t get_src_end() const { return src_base + length; }
+
+    move_mapping_state_t(
+      laddr_t src_base,
+      laddr_t dst_base,
+      extent_len_t length,
+      remap_extent_func_t func)
+      : src_base(src_base), dst_base(dst_base), length(length),
+	remap_extent(std::move(func)), res(), mappings(), remapped_extents()
+    {}
+  };
+
+  move_mappings_iertr::future<LBABtree::iterator>
+  _move_mapping_without_remap(
+    op_context_t<laddr_t> c,
+    BtreeLBAManager::move_mapping_state_t &state,
+    LBABtree::iterator &iter,
+    laddr_t laddr,
+    lba_map_val_t &map_val,
+    LBABtree &btree);
+
+  move_mappings_iertr::future<LBABtree::iterator>
+  _move_mapping_with_remap(
+    op_context_t<laddr_t> c,
+    BtreeLBAManager::move_mapping_state_t &state,
+    LBABtree::iterator &iter,
+    laddr_t laddr,
+    lba_map_val_t &map_val,
+    LBABtree &btree);
+
+  move_mappings_iertr::future<LBABtree::iterator>
+  _remap_mapping_on_move(
+    op_context_t<laddr_t> c,
+    LBABtree &btree,
+    BtreeLBAManager::move_mapping_state_t &state,
+    LBABtree::iterator it,
+    bool left);
+
   seastar::metrics::metric_group metrics;
   void register_metrics();
 
@@ -716,6 +771,11 @@ private:
     Transaction &t,
     laddr_t addr,
     extent_len_t len);
+
+  using load_child_ext_ret = base_iertr::future<LogicalCachedExtentRef>;
+  load_child_ext_ret load_child_ext(
+    Transaction &t,
+    const LBABtree::iterator &iter);
 };
 using BtreeLBAManagerRef = std::unique_ptr<BtreeLBAManager>;
 
