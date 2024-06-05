@@ -882,7 +882,8 @@ BtreeLBAManager::update_mapping(
       ret.checksum = checksum;
       return ret;
     },
-    nextent
+    nextent,
+    false
   ).si_then([&t, laddr, prev_addr, addr, FNAME](auto res) {
       auto &result = res.map_value;
       DEBUGT("laddr={}, paddr {} => {} done -- {}",
@@ -1008,7 +1009,8 @@ BtreeLBAManager::update_refcount(
   Transaction &t,
   laddr_t addr,
   int delta,
-  bool cascade_remove)
+  bool cascade_remove,
+  bool subextent)
 {
   LOG_PREFIX(BtreeLBAManager::update_refcount);
   TRACET("laddr={}, delta={}", t, addr, delta);
@@ -1021,7 +1023,8 @@ BtreeLBAManager::update_refcount(
       out.refcount += delta;
       return out;
     },
-    nullptr
+    nullptr,
+    subextent
   ).si_then([&t, addr, delta, FNAME, this, cascade_remove](auto res) {
     auto &map_value = res.map_value;
     auto &mapping = res.mapping;
@@ -1062,22 +1065,26 @@ BtreeLBAManager::_update_mapping(
   Transaction &t,
   laddr_t addr,
   update_func_t &&f,
-  LogicalCachedExtent* nextent)
+  LogicalCachedExtent* nextent,
+  bool subextent)
 {
   auto c = get_context(t);
   return with_btree_ret<LBABtree, update_mapping_ret_bare_t>(
     cache,
     c,
-    [f=std::move(f), c, addr, nextent](auto &btree) mutable {
-      return btree.lower_bound(
+    [f=std::move(f), c, addr, nextent, subextent](auto &btree) mutable {
+      return btree.upper_bound_right(
 	c, addr
-      ).si_then([&btree, f=std::move(f), c, addr, nextent](auto iter)
+      ).si_then([&btree, f=std::move(f), c, addr, nextent, subextent](auto iter)
 		-> _update_mapping_ret {
-	if (iter.is_end() || iter.get_key() != addr) {
+	if (iter.is_end() ||
+	    (subextent && iter.get_key() > addr) ||
+	    (!subextent && iter.get_key() != addr)) {
 	  LOG_PREFIX(BtreeLBAManager::_update_mapping);
 	  ERRORT("laddr={} doesn't exist", c.trans, addr);
 	  return crimson::ct_error::enoent::make();
 	}
+	assert(iter.get_key() + iter.get_val().len > addr);
 
 	auto ret = f(iter.get_val());
 	if (ret.refcount == 0) {
