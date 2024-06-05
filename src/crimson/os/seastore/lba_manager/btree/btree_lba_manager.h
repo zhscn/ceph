@@ -59,6 +59,21 @@ class BtreeLBAMapping : public BtreeNodeMapping<laddr_t, paddr_t> {
 //
 // NOTE THAT, for direct BtreeLBAMappings, their intermediate_keys are the same as
 // their keys.
+//
+// Indirect BtreeLBAMapping can be further categrozied into HALF_INDIRECT and
+// FULL_INDIRECT.
+// 1. HALF_INDIRECT mappings: indirect mappings that don't have information from
+//    the intermediate mapping. Specifically, they don't have valid intermediate_base,
+//    intermediate_offset or intermediate_length.
+// 2. FULL_INDIRECT mappings: ones that have all information about the intermediate
+//    mapping
+
+enum indirect_state_t : uint8_t {
+  DIRECT,
+  HALF_INDIRECT,
+  FULL_INDIRECT,
+  MAX
+};
 public:
   BtreeLBAMapping(op_context_t<laddr_t> ctx)
     : BtreeNodeMapping(ctx) {}
@@ -76,9 +91,10 @@ public:
 	val.len,
 	meta),
       key(meta.begin),
-      indirect(val.pladdr.is_laddr()),
-      intermediate_key(indirect ? val.pladdr.build_laddr(key) : L_ADDR_NULL),
-      intermediate_length(indirect ? val.len : 0),
+      indirect(val.pladdr.is_laddr() ? indirect_state_t::HALF_INDIRECT
+				     : indirect_state_t::DIRECT),
+      intermediate_key(indirect > indirect_state_t::DIRECT
+	? val.pladdr.build_laddr(key) : L_ADDR_NULL),
       raw_val(val.pladdr),
       map_val(val),
       parent_modifications(parent->modifications)
@@ -89,7 +105,15 @@ public:
   }
 
   bool is_indirect() const final {
-    return indirect;
+    return indirect >= indirect_state_t::HALF_INDIRECT;
+  }
+
+  bool is_half_indirect() const final {
+    return indirect == indirect_state_t::HALF_INDIRECT;
+  }
+
+  bool is_full_indirect() const final {
+    return indirect == indirect_state_t::FULL_INDIRECT;
   }
 
   void make_indirect(
@@ -97,8 +121,8 @@ public:
     extent_len_t length,
     laddr_t interkey = L_ADDR_NULL)
   {
-    assert(!indirect);
-    indirect = true;
+    assert(indirect == indirect_state_t::DIRECT);
+    indirect = indirect_state_t::FULL_INDIRECT;
     intermediate_base = key;
     intermediate_length = len;
     adjust_mutable_indirect_attrs(new_key, length, interkey);
@@ -119,7 +143,7 @@ public:
   }
 
   laddr_t get_intermediate_base() const final {
-    assert(is_indirect());
+    assert(is_full_indirect());
     assert(intermediate_base != L_ADDR_NULL);
     return intermediate_base;
   }
@@ -132,7 +156,7 @@ public:
   }
 
   extent_len_t get_intermediate_length() const final {
-    assert(is_indirect());
+    assert(is_full_indirect());
     assert(intermediate_length);
     return intermediate_length;
   }
@@ -196,7 +220,7 @@ private:
   }
 
   laddr_t key = L_ADDR_NULL;
-  bool indirect = false;
+  indirect_state_t indirect = indirect_state_t::DIRECT;
   laddr_t intermediate_key = L_ADDR_NULL;
   laddr_t intermediate_base = L_ADDR_NULL;
   extent_len_t intermediate_length = 0;
@@ -352,7 +376,7 @@ public:
       ).si_then([imapping=std::move(imapping)](auto p) mutable {
 	auto mapping = std::move(p.mapping);
 	ceph_assert(mapping->is_stable());
-	ceph_assert(imapping->is_indirect());
+	ceph_assert(imapping->is_half_indirect());
 	mapping->make_indirect(
 	  imapping->get_key(),
 	  imapping->get_length(),
@@ -459,6 +483,7 @@ public:
     LOG_PREFIX(BtreeLBAManager::remap_mappings);
     assert((orig_mapping->is_indirect())
       == (remaps.size() != extents.size()));
+    assert(!orig_mapping->is_half_indirect());
     return seastar::do_with(
       lba_remap_ret_t{},
       std::move(remaps),
@@ -470,7 +495,7 @@ public:
       ).si_then([&ret, this, &extents, &remaps,
 		&t, &orig_mapping, FNAME](auto r) {
 	ret.ruret = std::move(r.ref_update_res);
-	if (!orig_mapping->is_indirect()) {
+	if (!orig_mapping->is_full_indirect()) {
 	  ceph_assert(ret.ruret.refcount == 0 &&
 	    ret.ruret.addr.is_paddr() &&
 	    !ret.ruret.addr.get_paddr().is_zero());
@@ -478,15 +503,15 @@ public:
 	auto fut = alloc_extent_iertr::make_ready_future<
 	  std::vector<LBAMappingRef>>();
 	laddr_t orig_laddr = orig_mapping->get_key();
-	if (orig_mapping->is_indirect()) {
+	if (orig_mapping->is_full_indirect()) {
 	  std::vector<alloc_mapping_info_t> alloc_infos;
 	  for (auto &remap : remaps) {
 	    extent_len_t orig_len = orig_mapping->get_length();
 	    paddr_t orig_paddr = orig_mapping->get_val();
-	    laddr_t intermediate_base = orig_mapping->is_indirect()
+	    laddr_t intermediate_base = orig_mapping->is_full_indirect()
 	      ? orig_mapping->get_intermediate_base()
 	      : L_ADDR_NULL;
-	    laddr_t intermediate_key = orig_mapping->is_indirect()
+	    laddr_t intermediate_key = orig_mapping->is_full_indirect()
 	      ? orig_mapping->get_intermediate_key()
 	      : L_ADDR_NULL;
 	    auto remap_offset = remap.offset;
@@ -552,7 +577,7 @@ public:
 	  return seastar::now();
 	});
       }).si_then([&remaps, &t, &orig_mapping, this] {
-	if (remaps.size() > 1 && orig_mapping->is_indirect()) {
+	if (remaps.size() > 1 && orig_mapping->is_full_indirect()) {
 	  auto intermediate_base = orig_mapping->get_intermediate_base();
 	  return _incref_extent(t, intermediate_base, remaps.size() - 1
 	  ).si_then([](auto) {
