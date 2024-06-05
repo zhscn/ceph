@@ -391,6 +391,14 @@ public:
     });
   }
 
+  move_mappings_ret move_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    bool data_only,
+    remap_extent_func_t func) final;
+
   ref_ret decref_extent(
     Transaction &t,
     laddr_t addr) final {
@@ -687,6 +695,11 @@ private:
     Transaction &t,
     laddr_t addr,
     extent_len_t len);
+
+  using load_child_ext_ret = base_iertr::future<LogicalCachedExtentRef>;
+  load_child_ext_ret load_child_ext(
+    Transaction &t,
+    const LBABtree::iterator &iter);
 };
 using BtreeLBAManagerRef = std::unique_ptr<BtreeLBAManager>;
 
