@@ -602,10 +602,6 @@ public:
       mapping.is_indirect()
 	? mapping.get_intermediate_key()
 	: mapping.get_key();
-    auto intermediate_base =
-      mapping.is_indirect()
-        ? mapping.get_intermediate_base()
-        : mapping.get_key();
 
     LOG_PREFIX(TransactionManager::clone_pin);
     SUBDEBUGT(seastore_tm, "len={}, laddr_hint={}, clone_offset {}",
@@ -614,9 +610,7 @@ public:
       t,
       hint,
       mapping.get_length(),
-      intermediate_key,
-      intermediate_base
-    );
+      intermediate_key);
   }
 
   using move_mappings_iertr = LBAManager::move_mappings_iertr;
