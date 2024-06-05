@@ -183,6 +183,7 @@ public:
     Transaction &t,
     LBAMappingRef pin)
   {
+    assert(!pin->is_half_indirect());
     auto fut = base_iertr::make_ready_future<LBAMappingRef>();
     if (!pin->is_parent_viewable()) {
       if (pin->is_parent_valid()) {
@@ -218,6 +219,7 @@ public:
     LBAMappingRef pin)
   {
     ceph_assert(pin->is_parent_viewable());
+    assert(!pin->is_half_indirect());
     // checking the lba child must be atomic with creating
     // and linking the absent child
     auto v = pin->get_logical_extent(t);
@@ -244,6 +246,7 @@ public:
     extent_types_t type)
   {
     ceph_assert(!pin->parent_modified());
+    assert(!pin->is_half_indirect());
     auto v = pin->get_logical_extent(t);
     // checking the lba child must be atomic with creating
     // and linking the absent child
@@ -952,6 +955,7 @@ private:
     LOG_PREFIX(TransactionManager::pin_to_extent);
     SUBTRACET(seastore_tm, "getting extent {}", t, *pin);
     static_assert(is_logical_type(T::TYPE));
+    assert(!pin->is_half_indirect());
     using ret = pin_to_extent_ret<T>;
     auto &pref = *pin;
     return cache->get_absent_extent<T>(
@@ -1016,6 +1020,7 @@ private:
     LOG_PREFIX(TransactionManager::pin_to_extent_by_type);
     SUBTRACET(seastore_tm, "getting extent {} type {}", t, *pin, type);
     assert(is_logical_type(type));
+    assert(!pin->is_half_indirect());
     auto &pref = *pin;
     return cache->get_absent_extent_by_type(
       t,
