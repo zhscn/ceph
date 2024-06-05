@@ -165,6 +165,32 @@ public:
     ) = 0;
 
   /**
+   * move_mappings
+   *
+   * Move mappings from src_base~length to dst_base
+   *
+   * data_only:
+   * true: move direct mappings from src_base~length to dst, and create
+   *       indirect mappings point to dst mappings
+   *    => reutrn all mappings from src~length
+   * false: move all mappings(include indirect and zero mappings) to dst
+   *    => return all mappings within dst~length
+   */
+  using remap_extent_func_t = std::function<
+    base_iertr::future<
+      std::list<LogicalCachedExtentRef>>(
+        LogicalCachedExtent *, LBAMappingRef, std::vector<remap_entry>)>;
+  using move_mappings_iertr = base_iertr;
+  using move_mappings_ret = move_mappings_iertr::future<lba_pin_list_t>;
+  virtual move_mappings_ret move_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    bool data_only,
+    remap_extent_func_t func) = 0;
+
+  /**
    * Should be called after replay on each cached extent.
    * Implementation must initialize the LBAMapping on any
    * LogicalCachedExtent's and may also read in any dependent
