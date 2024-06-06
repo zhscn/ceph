@@ -343,6 +343,10 @@ public:
       const std::optional<std::string>& start,
       OMapManager::omap_list_config_t config) const;
 
+    struct removed_info_t {
+      laddr_t removed_laddr;
+      local_clone_id_t clone_id;
+    };
     using tm_iertr = TransactionManager::base_iertr;
     using tm_ret = tm_iertr::future<>;
     tm_ret _do_transaction_step(
@@ -350,6 +354,7 @@ public:
       CollectionRef &col,
       std::vector<OnodeRef> &onodes,
       std::vector<OnodeRef> &d_onodes,
+      std::map<ghobject_t, removed_info_t> &removed_info,
       ceph::os::Transaction::iterator &i);
 
     tm_ret _remove_omaps(
@@ -361,7 +366,8 @@ public:
       OnodeRef &onode);
     tm_ret _touch(
       internal_context_t &ctx,
-      OnodeRef &onode);
+      OnodeRef &onode,
+      laddr_t hint);
     tm_ret _write(
       internal_context_t &ctx,
       OnodeRef &onode,
@@ -464,6 +470,16 @@ public:
       lat.sample_count++;
       lat.sample_sum += std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
      }
+
+    using process_touch_hint_iertr = tm_iertr;
+    using process_touch_hint_ret = process_touch_hint_iertr::future<laddr_t>;
+    process_touch_hint_ret process_touch_hint(
+      internal_context_t &ctx,
+      std::vector<OnodeRef> &onodes,
+      std::vector<OnodeRef> &d_onodes,
+      std::map<ghobject_t, removed_info_t> &removed_info,
+      ceph::os::Transaction::iterator &i,
+      ceph::os::Transaction::Op *op) const;
 
   private:
     std::string root;
