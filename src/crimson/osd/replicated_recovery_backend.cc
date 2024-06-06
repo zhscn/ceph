@@ -1166,7 +1166,13 @@ ReplicatedRecoveryBackend::prep_push_target(
     auto it = iter->second.cbegin();
     decode(clone_id, it);
     t->remove(coll->get_cid(), target_oid);
-    t->touch(coll->get_cid(), target_oid);
+    t->touch(
+      coll->get_cid(),
+      target_oid,
+      complete
+      ? std::nullopt
+      : std::make_optional<ghobject_t>(recovery_info.soid),
+      std::make_optional<local_clone_id_t>(clone_id));
     object_info_t oi;
     oi.decode_no_oid(attrs.at(OI_ATTR));
     t->set_alloc_hint(coll->get_cid(), target_oid,
