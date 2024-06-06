@@ -1472,14 +1472,15 @@ seastar::future<> SeaStore::Shard::do_transaction_no_callbacks(
         return seastar::do_with(
 	  std::vector<OnodeRef>(ctx.iter.objects.size()),
           std::vector<OnodeRef>(ctx.iter.objects.size()),
-          [this, &ctx](auto& onodes, auto& d_onodes) mutable {
+	  std::map<ghobject_t, removed_info_t>(),
+          [this, &ctx](auto& onodes, auto& d_onodes, auto& removed_info) mutable {
           return trans_intr::repeat(
-            [this, &ctx, &onodes, &d_onodes]() mutable
+            [this, &ctx, &onodes, &d_onodes, &removed_info]() mutable
             -> tm_iertr::future<seastar::stop_iteration>
             {
               if (ctx.iter.have_op()) {
                 return _do_transaction_step(
-                  ctx, ctx.ch, onodes, d_onodes, ctx.iter
+                  ctx, ctx.ch, onodes, d_onodes, removed_info, ctx.iter
                 ).si_then([] {
                   return seastar::make_ready_future<seastar::stop_iteration>(
                     seastar::stop_iteration::no);
@@ -1529,6 +1530,7 @@ SeaStore::Shard::_do_transaction_step(
   CollectionRef &col,
   std::vector<OnodeRef> &onodes,
   std::vector<OnodeRef> &d_onodes,
+  std::map<ghobject_t, removed_info_t> &removed_info,
   ceph::os::Transaction::iterator &i)
 {
   LOG_PREFIX(SeaStore::Shard::_do_transaction_step);
@@ -1576,13 +1578,16 @@ SeaStore::Shard::_do_transaction_step(
         *ctx.transaction, i.get_oid(op->oid));
     }
   }
-  return fut.si_then([&, op](auto get_onode) {
+  return fut.si_then([&, op](auto get_onode)
+		      -> OnodeManager::get_or_create_onode_iertr::future<> {
     OnodeRef &o = onodes[op->oid];
     if (!o) {
       assert(get_onode);
       o = get_onode;
       d_onodes[op->oid] = get_onode;
     }
+    bool is_temp_obj = i.get_oid(op->oid).hobj.oid.name.starts_with(
+      TEMP_RECOVERING_OBJ_PREFIX);
     if ((op->op == Transaction::OP_CLONE
 	  || op->op == Transaction::OP_COLL_MOVE_RENAME)
 	&& !d_onodes[op->dest_oid]) {
@@ -1599,6 +1604,21 @@ SeaStore::Shard::_do_transaction_step(
 	d_onodes[op->dest_oid] = dest_onode;
 	return seastar::now();
       });
+    } else if (op->op == Transaction::OP_TOUCH && is_temp_obj) {
+      return onode_manager->get_onode(*ctx.transaction, i.get_oid(op->dest_oid)
+      ).si_then([&, op](auto dest_onode) {
+	if (dest_onode) {
+	  auto &d_o = onodes[op->dest_oid];
+	  assert(!d_o);
+	  assert(!d_onodes[op->dest_oid]);
+	  d_o = dest_onode;
+	  d_onodes[op->dest_oid] = dest_onode;
+	}
+	return seastar::now();
+      }).handle_error_interruptible(
+	crimson::ct_error::enoent::handle([] { return seastar::now(); }),
+	crimson::ct_error::input_output_error::pass_further{}
+      );
     } else {
       return OnodeManager::get_or_create_onode_iertr::now();
     }
@@ -1609,6 +1629,10 @@ SeaStore::Shard::_do_transaction_step(
       case Transaction::OP_REMOVE:
       {
 	TRACET("removing {}", *ctx.transaction, i.get_oid(op->oid));
+	auto &layout = onodes[op->oid]->get_layout();
+	auto laddr = layout.object_data.get().get_reserved_data_base();
+	auto id = layout.local_clone_id;
+	removed_info.emplace(i.get_oid(op->oid), removed_info_t{laddr, id});
         return _remove(ctx, onodes[op->oid]
 	).si_then([&onodes, &d_onodes, op] {
 	  onodes[op->oid].reset();
@@ -1618,7 +1642,10 @@ SeaStore::Shard::_do_transaction_step(
       case Transaction::OP_CREATE:
       case Transaction::OP_TOUCH:
       {
-        return _touch(ctx, onodes[op->oid]);
+	return process_touch_hint(ctx, onodes, d_onodes, removed_info, i, op
+	).si_then([&ctx, &onodes, op, this](auto hint) {
+	  return _touch(ctx, onodes[op->oid], hint);
+	});
       }
       case Transaction::OP_WRITE:
       {
@@ -1858,11 +1885,33 @@ SeaStore::Shard::_remove(
 SeaStore::Shard::tm_ret
 SeaStore::Shard::_touch(
   internal_context_t &ctx,
-  OnodeRef &onode)
+  OnodeRef &onode,
+  laddr_t hint)
 {
   LOG_PREFIX(SeaStore::_touch);
-  DEBUGT("onode={}", *ctx.transaction, *onode);
-  return tm_iertr::now();
+  DEBUGT("onode={}, hint={}", *ctx.transaction, *onode, hint);
+  if (!onode->get_layout().object_data.get().is_null()) {
+    return tm_iertr::now();
+  }
+
+  bool determinsitic = (hint != L_ADDR_NULL);
+  if (hint == L_ADDR_NULL) {
+    hint = onode->get_data_hint();
+  }
+
+  return seastar::do_with(
+    ObjectDataHandler(max_object_size),
+    [this, &ctx, &onode, hint, determinsitic](auto &objhandler) {
+      return objhandler.touch(
+	ObjectDataHandler::context_t{
+	  *transaction_manager,
+	  *ctx.transaction,
+	  *onode,
+	  nullptr,
+	  hint,
+	  determinsitic
+	});
+    });
 }
 
 SeaStore::Shard::tm_ret
@@ -1875,7 +1924,14 @@ SeaStore::Shard::_write(
 {
   LOG_PREFIX(SeaStore::_write);
   DEBUGT("onode={} {}~{}", *ctx.transaction, *onode, offset, len);
-  const auto &object_size = onode->get_layout().size;
+
+  auto &layout = onode->get_layout();
+  if (local_clone_id_t(layout.local_clone_id) ==
+      LOCAL_CLONE_ID_NULL) {
+    assert(layout.object_data.get().is_null());
+    onode->update_local_clone_id(*ctx.transaction, 0);
+  }
+  const auto &object_size = layout.size;
   if (offset + len > object_size) {
     onode->update_onode_size(
       *ctx.transaction,
@@ -2465,6 +2521,113 @@ boost::intrusive_ptr<SeastoreCollection>
 SeaStore::Shard::_get_collection(const coll_t& cid)
 {
   return new SeastoreCollection{cid};
+}
+
+SeaStore::Shard::process_touch_hint_ret
+SeaStore::Shard::process_touch_hint(
+  internal_context_t &ctx,
+  std::vector<OnodeRef> &onodes,
+  std::vector<OnodeRef> &d_onodes,
+  std::map<ghobject_t, removed_info_t> &removed_info,
+  ceph::os::Transaction::iterator &i,
+  ceph::os::Transaction::Op *op) const
+{
+  LOG_PREFIX(SeaStore::process_touch_hint);
+  auto &ghobj = i.get_oid(op->oid);
+  auto &onode = onodes[op->oid];
+  const auto &layout = onode->get_layout();
+  auto input_id = LOCAL_CLONE_ID_NULL;
+  if (op->op == ceph::os::Transaction::OP_TOUCH) {
+    ceph_le32 input_id_le;
+    i.decode_u32(input_id_le);
+    input_id = input_id_le;
+  } else {
+    ceph_assert(op->op == ceph::os::Transaction::OP_CREATE);
+  }
+  DEBUGT("input clone id: {}", *ctx.transaction, input_id);
+
+  if (input_id == LOCAL_CLONE_ID_NULL) {
+    // issued from clients, not from recover
+    ceph_assert(ghobj.hobj.is_head());
+    if (local_clone_id_t(layout.local_clone_id) != LOCAL_CLONE_ID_NULL) {
+      assert(!layout.object_data.get().is_null());
+      // onode extents, return directly
+      return tm_iertr::make_ready_future<laddr_t>(L_ADDR_NULL);
+    } else if (auto iter = removed_info.find(ghobj);
+	       iter != removed_info.end()) {
+      auto &info = iter->second;
+      onode->update_local_clone_id(*ctx.transaction, info.clone_id);
+      ceph_assert(info.removed_laddr != L_ADDR_NULL);
+      return tm_iertr::make_ready_future<laddr_t>(info.removed_laddr);
+    } else {
+      onode->update_local_clone_id(*ctx.transaction, 0);
+      return tm_iertr::make_ready_future<laddr_t>(L_ADDR_NULL);
+    }
+  } else {
+    // issued from other OSD
+    onode->update_local_clone_id(*ctx.transaction, input_id);
+    bool is_temp_obj =
+      ghobj.hobj.oid.name.starts_with(TEMP_RECOVERING_OBJ_PREFIX);
+    bool target_is_head = ghobj.hobj.is_head();
+    auto p_ghobj = &ghobj;
+    if (is_temp_obj) {
+      auto &d_onode = d_onodes[op->dest_oid];
+      auto &dst_ghobj = i.get_oid(op->dest_oid);
+      p_ghobj = &dst_ghobj;
+      target_is_head = dst_ghobj.hobj.is_head();
+      if (d_onode) {
+	DEBUGT("temp_recovering obj, target oid {}", *ctx.transaction, dst_ghobj);
+	auto hint = L_ADDR_NULL;
+	auto d_object_data = d_onode->get_layout().object_data.get();
+	assert(!d_object_data.is_null());
+	hint = d_object_data.get_reserved_data_base();
+	hint = hint.with_recover();
+	if (target_is_head) {
+	  hint = hint.with_local_clone_id(0);
+	}
+	return tm_iertr::make_ready_future<laddr_t>(hint);
+      }
+    }
+    return seastar::do_with(
+      *p_ghobj,
+      [this, &ctx, &onode, target_is_head, FNAME,
+      input_id, is_temp_obj](auto &src_ghobj) {
+	src_ghobj.hobj.snap = CEPH_NOSNAP;
+	return onode_manager->get_latest_snap_and_head(
+	  *ctx.transaction, src_ghobj
+	).si_then([&onode, target_is_head, &ctx,
+		  FNAME, input_id, is_temp_obj](auto res) {
+	  auto [latest, head] = std::move(res);
+	  auto get_onode_base = [](const OnodeRef &onode) {
+	    auto obj_data = onode->get_layout().object_data.get();
+	    return obj_data.is_null()
+	      ? L_ADDR_NULL
+	      : obj_data.get_reserved_data_base();
+	  };
+
+	  auto hint = L_ADDR_NULL;
+	  if (head && get_onode_base(head).has_valid_prefix()) {
+	    hint = get_onode_base(head).with_local_clone_id(input_id);
+	    DEBUGT("head: {:d}", *ctx.transaction, get_onode_base(head));
+	  } else if (latest && get_onode_base(latest).has_valid_prefix()) {
+	    hint = get_onode_base(latest).with_local_clone_id(input_id);
+	    DEBUGT("latest: {:d}", *ctx.transaction, get_onode_base(latest));
+	  }
+	  if (hint == L_ADDR_NULL) {
+	    hint = onode->get_data_hint();
+	    assert(hint.get_local_clone_id() == input_id);
+	  }
+	  if (target_is_head) {
+	    hint = hint.with_local_clone_id(0);
+	  }
+	  if (is_temp_obj) {
+	    hint = hint.with_recover();
+	  }
+	  ceph_assert(hint.without_local_clone_id() != L_ADDR_NULL);
+	  return tm_iertr::make_ready_future<laddr_t>(hint);
+	});
+      });
+  }
 }
 
 seastar::future<> SeaStore::Shard::write_meta(
