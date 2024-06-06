@@ -182,6 +182,10 @@ public:
     bool determinsitic = true;
   };
 
+  using touch_iertr = base_iertr;
+  using touch_ret = touch_iertr::future<>;
+  touch_ret touch(context_t ctx);
+
   /// Writes bl to [offset, offset + bl.length())
   using write_iertr = base_iertr;
   using write_ret = write_iertr::future<>;
