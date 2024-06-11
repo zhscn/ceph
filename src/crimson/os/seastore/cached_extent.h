@@ -644,6 +644,13 @@ public:
     return is_pending() && pending_for_transaction == id;
   }
 
+  bool is_paddr_reclaimed() const {
+    return poffset_reclaimed;
+  }
+
+  void reclaim_paddr() {
+    poffset_reclaimed = true;
+  }
 private:
   template <typename T>
   friend class read_set_item_t;
@@ -733,6 +740,17 @@ private:
   // the target rewrite generation for the followup rewrite
   // or the rewrite generation for the fresh write
   rewrite_gen_t rewrite_generation = NULL_GENERATION;
+
+  // This is field is dedicated to address the following scenario:
+  // 1. an initial pending extent on an RBM device is created
+  // 2. that initial pending extent is remapped
+  //
+  // In this scenario, in Cache::complete_commit, the space overlapped
+  // in phase 1 and 2 would be wrongly marked free.
+  //
+  // We add this field which is only set when the extent is mutable and
+  // is remapped to tell Cache not mark the extent's space free
+  bool poffset_reclaimed = false;
 
 protected:
   trans_view_set_t mutation_pendings;

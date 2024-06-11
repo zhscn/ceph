@@ -902,7 +902,9 @@ void Cache::mark_transaction_conflicted(
     efforts.mutate_delta_bytes += delta_stat.bytes;
 
     for (auto &i: t.pre_alloc_list) {
-      epm.mark_space_free(i->get_paddr(), i->get_length());
+      if (!i->is_paddr_reclaimed()) {
+	epm.mark_space_free(i->get_paddr(), i->get_length());
+      }
     }
 
     auto& ool_stats = t.get_ool_write_stats();
@@ -1697,7 +1699,7 @@ void Cache::complete_commit(
   }
 
   for (auto &i: t.pre_alloc_list) {
-    if (!i->is_valid()) {
+    if (!i->is_valid() && !i->is_paddr_reclaimed()) {
       epm.mark_space_free(i->get_paddr(), i->get_length());
     }
   }
