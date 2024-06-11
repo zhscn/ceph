@@ -2320,6 +2320,12 @@ void KStore::_txc_add_transaction(TransContext *txc, Transaction *t)
 
     switch (op->op) {
     case Transaction::OP_TOUCH:
+      {
+	ceph_le32 local_clone_id; // only used in SeaStore
+	i.decode_u32(local_clone_id);
+	r = _touch(txc, c, o);
+      }
+      break;
     case Transaction::OP_CREATE:
 	r = _touch(txc, c, o);
       break;
