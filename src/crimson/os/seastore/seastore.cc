@@ -1730,11 +1730,43 @@ SeaStore::Shard::_do_transaction_step(
       }
       case Transaction::OP_CLONE:
       {
-	TRACET("cloning {} to {}",
-	  *ctx.transaction,
-	  i.get_oid(op->oid),
-	  i.get_oid(op->dest_oid));
-	return _clone(ctx, onodes[op->oid], d_onodes[op->dest_oid]);
+	auto &src_ghobj = i.get_oid(op->oid);
+	auto &dest_ghobj = i.get_oid(op->dest_oid);
+	auto &src_onode = onodes[op->oid];
+	auto &dest_onode = d_onodes[op->dest_oid];
+	TRACET("cloning {} to {}", *ctx.transaction, src_ghobj, dest_ghobj);
+	bool is_rollback = dest_ghobj.hobj.is_head();
+
+	auto data_hint = L_ADDR_NULL;
+
+	auto &src_layout = src_onode->get_layout();
+	auto obj_data = src_layout.object_data.get();
+	auto length = obj_data.get_reserved_data_len();
+	if (!is_rollback) {
+	  assert(!obj_data.is_null());
+	  local_clone_id_t clone_id = src_layout.local_clone_id;
+	  auto base = obj_data.get_reserved_data_base();
+	  assert(base.get_local_clone_id() == 0);
+
+	  // move data to hint
+	  clone_id++;
+	  data_hint = base.with_local_clone_id(clone_id);
+
+	  // update max local clone id of an object, create indirect mapping to hint
+	  clone_id++;
+	  src_onode->update_local_clone_id(*ctx.transaction, clone_id);
+	  dest_onode->update_local_clone_id(*ctx.transaction, clone_id);
+	  obj_data.update_reserved(base.with_local_clone_id(clone_id), length);
+	  dest_onode->update_object_data(*ctx.transaction, obj_data);
+	} else {
+	  auto iter = removed_info.find(dest_ghobj);
+	  assert(iter != removed_info.end());
+	  auto &r = iter->second;
+	  obj_data.update_reserved(r.removed_laddr, length);
+	  dest_onode->update_local_clone_id(*ctx.transaction, r.clone_id);
+	  dest_onode->update_object_data(*ctx.transaction, obj_data);
+	}
+	return _clone(ctx, onodes[op->oid], d_onodes[op->dest_oid], data_hint);
       }
       case Transaction::OP_COLL_MOVE_RENAME:
       {
@@ -2030,13 +2062,15 @@ SeaStore::Shard::tm_ret
 SeaStore::Shard::_clone(
   internal_context_t &ctx,
   OnodeRef &onode,
-  OnodeRef &d_onode)
+  OnodeRef &d_onode,
+  laddr_t data_hint)
 {
   LOG_PREFIX(SeaStore::_clone);
-  DEBUGT("onode={} d_onode={}", *ctx.transaction, *onode, *d_onode);
+  DEBUGT("onode={} d_onode={} data_hint={}",
+	 *ctx.transaction, *onode, *d_onode, data_hint);
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
-    [this, &ctx, &onode, &d_onode](auto &objHandler) {
+    [this, &ctx, &onode, &d_onode, data_hint](auto &objHandler) {
     auto &object_size = onode->get_layout().size;
     d_onode->update_onode_size(*ctx.transaction, object_size);
     return objHandler.clone(
@@ -2044,7 +2078,9 @@ SeaStore::Shard::_clone(
 	*transaction_manager,
 	*ctx.transaction,
 	*onode,
-	d_onode.get()});
+	d_onode.get(),
+	data_hint
+      });
   }).si_then([&ctx, &onode, &d_onode, this] {
     return _clone_omaps(ctx, onode, d_onode, omap_type_t::XATTR);
   }).si_then([&ctx, &onode, &d_onode, this] {
