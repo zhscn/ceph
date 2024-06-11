@@ -86,7 +86,8 @@ public:
     Transaction &t,
     laddr_t hint,
     LogicalCachedExtent &nextent,
-    extent_ref_count_t refcount = EXTENT_DEFAULT_REF_COUNT) = 0;
+    extent_ref_count_t refcount,
+    bool determinsitic) = 0;
 
   using alloc_extents_ret = alloc_extent_iertr::future<
     std::vector<LBAMappingRef>>;
@@ -94,7 +95,8 @@ public:
     Transaction &t,
     laddr_t hint,
     std::vector<LogicalCachedExtentRef> extents,
-    extent_ref_count_t refcount) = 0;
+    extent_ref_count_t refcount,
+    bool determinsitic) = 0;
 
   virtual alloc_extent_ret clone_mapping(
     Transaction &t,
@@ -106,7 +108,8 @@ public:
   virtual alloc_extent_ret reserve_region(
     Transaction &t,
     laddr_t hint,
-    extent_len_t len) = 0;
+    extent_len_t len,
+    bool determinsitic) = 0;
 
   struct ref_update_result_t {
     extent_ref_count_t refcount = 0;
