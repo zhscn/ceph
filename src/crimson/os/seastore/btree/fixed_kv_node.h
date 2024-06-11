@@ -88,6 +88,7 @@ struct FixedKVNode : ChildableCachedExtent {
   uint16_t capacity = 0;
   parent_tracker_t* my_tracker = nullptr;
   RootBlockRef root_block;
+  uint64_t version = 0;
 
   bool is_linked() {
     assert(!has_parent_tracker() || !(bool)root_block);
@@ -102,7 +103,12 @@ struct FixedKVNode : ChildableCachedExtent {
     : ChildableCachedExtent(rhs),
       range(rhs.range),
       children(rhs.capacity, nullptr),
-      capacity(rhs.capacity) {}
+      capacity(rhs.capacity),
+      version(rhs.version) {}
+
+  void on_modify() {
+    version++;
+  }
 
   virtual fixed_kv_node_meta_t<node_key_t> get_node_meta() const = 0;
   virtual uint16_t get_node_size() const = 0;
@@ -267,6 +273,11 @@ struct FixedKVNode : ChildableCachedExtent {
 
   virtual bool is_child_stable(op_context_t<node_key_t>, uint16_t pos) const = 0;
   virtual bool is_child_data_stable(op_context_t<node_key_t>, uint16_t pos) const = 0;
+
+  bool modified_since(uint64_t v) const {
+    ceph_assert(v >= version);
+    return v != version;
+  }
 
   template <typename T>
   get_child_ret_t<T> get_child(
@@ -744,6 +755,7 @@ struct FixedKVInternalNode
       this->pending_for_transaction,
       iter.get_offset(),
       *nextent);
+    this->on_modify();
     this->update_child_ptr(iter, nextent);
     return this->journal_update(
       iter,
@@ -762,6 +774,7 @@ struct FixedKVInternalNode
       iter.get_offset(),
       pivot,
       *nextent);
+    this->on_modify();
     this->insert_child_ptr(iter, nextent);
     return this->journal_insert(
       iter,
@@ -776,6 +789,7 @@ struct FixedKVInternalNode
       this->pending_for_transaction,
       iter.get_offset(),
       iter.get_key());
+    this->on_modify();
     this->remove_child_ptr(iter);
     return this->journal_remove(
       iter,
@@ -794,6 +808,7 @@ struct FixedKVInternalNode
       iter.get_key(),
       pivot,
       *nextent);
+    this->on_modify();
     this->update_child_ptr(iter, nextent);
     return this->journal_replace(
       iter,
