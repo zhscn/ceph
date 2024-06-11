@@ -387,7 +387,8 @@ public:
     tm_ret _clone(
       internal_context_t &ctx,
       OnodeRef &onode,
-      OnodeRef &d_onode);
+      OnodeRef &d_onode,
+      laddr_t data_hint);
     tm_ret _rename(
       internal_context_t &ctx,
       OnodeRef &onode,
