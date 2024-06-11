@@ -260,9 +260,10 @@ private:
 
   clone_ret clone_extents(
     context_t ctx,
-    object_data_t &object_data,
     lba_pin_list_t &pins,
-    laddr_t data_base);
+    laddr_t from,
+    laddr_t to,
+    extent_len_t length);
 
 private:
   /**
