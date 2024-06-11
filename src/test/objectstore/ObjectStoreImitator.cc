@@ -435,8 +435,13 @@ void ObjectStoreImitator::_add_transaction(Transaction *t) {
     }
 
     switch (op->op) {
-    case Transaction::OP_CREATE:
+    case Transaction::OP_CREATE: {
+      _assign_nid(o);
+      r = 0;
+    } break;
     case Transaction::OP_TOUCH: {
+      ceph_le32 local_clone_id; // only used in SeaStore
+      i.decode_u32(local_clone_id);
       _assign_nid(o);
       r = 0;
     } break;
