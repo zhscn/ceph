@@ -516,12 +516,30 @@ public:
 	      : true);
 	  std::optional<ceph::bufferptr> original_bptr;
 	  if (ext && ext->is_fully_loaded()) {
-	    ceph_assert(!ext->is_mutable());
 	    ceph_assert(ext->get_length() >= original_len);
 	    ceph_assert(ext->get_paddr() == original_paddr);
 	    original_bptr = ext->get_bptr();
 	  }
+	  std::optional<placement_hint_t> orig_hint = std::nullopt;
+	  std::optional<rewrite_gen_t> orig_gen = std::nullopt;
+	  bool rbm_mutable_ext = false;
+	  interval_set<rbm_abs_addr> free_intervals;
+	  paddr_t paddr = P_ADDR_NULL;
 	  if (ext) {
+	    if (ext->is_mutable()) {
+	      assert(ext->is_initial_pending());
+	      orig_gen = ext->get_rewrite_generation();
+	      orig_hint = ext->get_user_hint();
+	      if (ext->get_paddr().get_addr_type() ==
+		  paddr_types_t::RANDOM_BLOCK) {
+		paddr = ext->get_paddr();
+		ext->reclaim_paddr();
+		free_intervals.insert(
+		  paddr.as_blk_paddr().get_device_off(),
+		  ext->get_length());
+		rbm_mutable_ext = true;
+	      }
+	    }
 	    cache->retire_extent(t, ext);
 	  } else {
 	    cache->retire_absent_extent_addr(t, original_paddr, original_len);
@@ -539,14 +557,28 @@ public:
 	    SUBDEBUGT(seastore_tm,
 	      "remap laddr: {}, remap paddr: {}, remap length: {}", t,
 	      remap_laddr, remap_paddr, remap_len);
+	    if (rbm_mutable_ext) {
+	      assert(paddr.get_addr_type() == paddr_types_t::RANDOM_BLOCK);
+	      free_intervals.erase(
+		remap_paddr.as_blk_paddr().get_device_off(),
+		remap_len);
+	    }
 	    auto extent = cache->alloc_remapped_extent<T>(
 	      t,
 	      remap_laddr,
 	      remap_paddr,
 	      remap_len,
 	      original_laddr,
-	      original_bptr);
+	      original_bptr,
+	      std::move(orig_hint),
+	      std::move(orig_gen));
 	    extents.emplace_back(std::move(extent));
+	  }
+	  for (auto [off, len] : free_intervals) {
+	    // We must reclaim the paddr here, otherwise the alloc/free
+	    // order would be lost when commit the transaction
+	    paddr.as_blk_paddr().set_device_off(off);
+	    epm->mark_space_free(paddr, len);
 	  }
 	});
       }
