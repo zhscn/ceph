@@ -62,7 +62,7 @@ public:
     : BtreeNodeMapping(ctx) {}
   BtreeLBAMapping(
     op_context_t<laddr_t> c,
-    CachedExtentRef parent,
+    LBALeafNodeRef parent,
     uint16_t pos,
     lba_map_val_t &val,
     lba_node_meta_t meta)
@@ -78,7 +78,8 @@ public:
       intermediate_key(indirect ? val.pladdr.get_laddr() : L_ADDR_NULL),
       intermediate_length(indirect ? val.len : 0),
       raw_val(val.pladdr),
-      map_val(val)
+      map_val(val),
+      parent_version(parent->version)
   {}
 
   lba_map_val_t get_map_val() const {
@@ -154,6 +155,17 @@ public:
     len = length;
   }
 
+  uint64_t get_parent_version() const {
+    return parent_version;
+  }
+
+  bool parent_modified() const final {
+    ceph_assert(parent);
+    ceph_assert(is_parent_valid());
+    auto &p = static_cast<LBALeafNode&>(*parent);
+    return p.modified_since(parent_version);
+  }
+
 protected:
   std::unique_ptr<BtreeNodeMapping<laddr_t, paddr_t>> _duplicate(
     op_context_t<laddr_t> ctx) const final {
@@ -175,6 +187,7 @@ private:
   extent_len_t intermediate_length = 0;
   pladdr_t raw_val;
   lba_map_val_t map_val;
+  uint64_t parent_version = 0;
 };
 
 using BtreeLBAMappingRef = std::unique_ptr<BtreeLBAMapping>;
