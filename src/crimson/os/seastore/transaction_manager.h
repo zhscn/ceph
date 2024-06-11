@@ -515,12 +515,18 @@ public:
 	      : true);
 	  std::optional<ceph::bufferptr> original_bptr;
 	  if (ext && ext->is_fully_loaded()) {
-	    ceph_assert(!ext->is_mutable());
 	    ceph_assert(ext->get_length() >= original_len);
 	    ceph_assert(ext->get_paddr() == original_paddr);
 	    original_bptr = ext->get_bptr();
 	  }
+	  std::optional<placement_hint_t> orig_hint = std::nullopt;
+	  std::optional<rewrite_gen_t> orig_gen = std::nullopt;
 	  if (ext) {
+	    if (ext->is_mutable()) {
+	      assert(ext->is_initial_pending());
+	      orig_gen = ext->get_rewrite_generation();
+	      orig_hint = ext->get_user_hint();
+	    }
 	    cache->retire_extent(t, ext);
 	  } else {
 	    cache->retire_absent_extent_addr(t, original_paddr, original_len);
@@ -544,7 +550,9 @@ public:
 	      remap_paddr,
 	      remap_len,
 	      original_laddr,
-	      original_bptr);
+	      original_bptr,
+	      std::move(orig_hint),
+	      std::move(orig_gen));
 	    extents.emplace_back(std::move(extent));
 	  }
 	});

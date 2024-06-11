@@ -371,6 +371,20 @@ public:
     return alloc_result_t{addr, std::move(bp), gen};
   }
 
+  paddr_t calc_remap_paddr(
+    const paddr_t &hint,
+    const rewrite_gen_t &gen) const {
+    if (gen == INLINE_GENERATION) {
+      ceph_assert(hint.is_relative());
+      return make_record_relative_paddr(0);
+    } else if (hint.is_delayed()) {
+      return make_delayed_temp_paddr(0);
+    } else {
+      ceph_assert(hint.is_absolute());
+      return hint;
+    }
+  }
+
   std::list<alloc_result_t> alloc_new_data_extents(
     Transaction& t,
     extent_types_t type,
