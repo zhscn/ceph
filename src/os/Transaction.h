@@ -711,6 +711,10 @@ public:
       decode(s, data_bl_p);
       return s;
     }
+    void decode_u32(ceph_le32& value) {
+      using ceph::decode;
+      decode(value, data_bl_p);
+    }
     void decode_bp(ceph::buffer::ptr& bp) {
 	using ceph::decode;
       decode(bp, data_bl_p);
@@ -838,9 +842,7 @@ public:
     if (target_oid) {
       _op->dest_oid = _get_object_id(*target_oid);
     }
-    if (clone_id) {
-      encode(*clone_id, data_bl);
-    }
+    encode(ceph_le32(clone_id.value_or(LOCAL_CLONE_ID_NULL)), data_bl);
     data.ops = data.ops + 1;
   }
   /**

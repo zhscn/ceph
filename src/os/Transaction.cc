@@ -81,9 +81,12 @@ void Transaction::dump(ceph::Formatter *f)
       {
         coll_t cid = i.get_cid(op->cid);
         ghobject_t oid = i.get_oid(op->oid);
+	ceph_le32 input_clone_id;
+	i.decode_u32(input_clone_id);
 	f->dump_string("op_name", "touch");
 	f->dump_stream("collection") << cid;
 	f->dump_stream("oid") << oid;
+	f->dump_stream("input_clone_id") << local_clone_id_t(input_clone_id);
       }
       break;
       
