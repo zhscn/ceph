@@ -319,22 +319,22 @@ std::vector<LBAManager::remap_entry> build_remaps(
     ceph_assert(pin_val.pladdr.is_paddr());
     offset = src_base - pin_key;
     TRACET("remap left at {}~{}", t, 0, offset);
-    remaps.emplace_back(src_base, 0, offset);
+    remaps.emplace_back(pin_key, 0, offset);
   }
 
   auto mid_len = std::min(src_base + length, pin_key + pin_val.len) -
     std::max(src_base, pin_key);
   TRACET("remap or move middle at {}~{}", t, offset, mid_len);
-  auto dst_laddr = pin_key - src_base + dst_base;
-  remaps.emplace_back(dst_laddr + offset, offset, mid_len);
+  auto dst_laddr = pin_key + offset - src_base + dst_base;
+  remaps.emplace_back(dst_laddr, offset, mid_len);
 
   if (split_right) {
     ceph_assert(pin_val.pladdr.is_paddr());
     ceph_assert(pin_key < src_base + length);
     auto offset = src_base + length - pin_key;
-    auto length = pin_val.len - offset;
-    TRACET("remap right at {}~{}", t, offset, length);
-    remaps.emplace_back(src_base + offset, offset, length);
+    auto len = pin_val.len - offset;
+    TRACET("remap right at {}~{}", t, offset, len);
+    remaps.emplace_back(src_base + length, offset, len);
   }
 #ifndef NDEBUG
   auto last_end = 0;
