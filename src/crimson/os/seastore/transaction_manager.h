@@ -534,7 +534,7 @@ public:
 	  for (auto &remap : remaps) {
 	    auto remap_offset = remap.offset;
 	    auto remap_len = remap.len;
-	    auto remap_laddr = original_laddr + remap_offset;
+	    auto remap_laddr = remap.dst_laddr;
 	    auto remap_paddr = original_paddr.add_offset(remap_offset);
 	    ceph_assert(remap_len < original_len);
 	    ceph_assert(remap_offset + remap_len <= original_len);
@@ -548,6 +548,7 @@ public:
 	      t,
 	      remap_laddr,
 	      remap_paddr,
+	      remap_offset,
 	      remap_len,
 	      original_laddr,
 	      original_bptr,
@@ -710,11 +711,12 @@ public:
 			      remaps=std::move(remaps)](auto extent) {
 	  std::list<LogicalCachedExtentRef> res{};
 	  for (auto &remap : remaps) {
-	    auto remap_laddr = laddr + remap.offset;
+	    auto remap_laddr = remap.dst_laddr;
 	    auto ext = cache->alloc_remapped_extent<T>(
                   t,
 		  remap_laddr,
 		  paddr.add_offset(remap.offset),
+		  remap.offset,
 		  remap.len,
                   laddr,
 		  (extent && extent->is_fully_loaded())

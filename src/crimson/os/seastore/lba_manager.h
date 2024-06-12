@@ -138,9 +138,11 @@ public:
     laddr_t addr) = 0;
 
   struct remap_entry {
+    laddr_t dst_laddr = L_ADDR_NULL;
     extent_len_t offset;
     extent_len_t len;
-    remap_entry(extent_len_t _offset, extent_len_t _len) {
+    remap_entry(laddr_t dl, extent_len_t _offset, extent_len_t _len) {
+      dst_laddr = dl;
       offset = _offset;
       len = _len;
     }

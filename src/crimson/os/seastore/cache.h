@@ -928,6 +928,7 @@ public:
     Transaction &t,
     laddr_t remap_laddr,
     paddr_t remap_paddr,
+    extent_len_t remap_offset,
     extent_len_t remap_length,
     laddr_t original_laddr,
     const std::optional<ceph::bufferptr> &original_bptr,
@@ -941,7 +942,7 @@ public:
       // shallow copy the buffer from original extent
       auto nbp = ceph::bufferptr(
         *original_bptr,
-        remap_laddr - original_laddr,
+        remap_offset,
         remap_length);
       // ExtentPlacementManager::alloc_new_extent will make a new
       // (relative/temp) paddr, so make extent directly
