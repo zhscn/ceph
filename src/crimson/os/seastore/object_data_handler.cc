@@ -1955,7 +1955,7 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
     ctx,
     [ctx, this](auto &object_data, auto &d_object_data) {
     ceph_assert(!object_data.is_null());
-    ceph_assert(d_object_data.is_null());
+    ceph_assert(!d_object_data.is_null());
     return _clone_range(
       ctx,
       object_data,
