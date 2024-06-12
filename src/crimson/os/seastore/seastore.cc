@@ -1673,6 +1673,8 @@ SeaStore::Shard::_rename(
   OnodeRef &d_onode)
 {
   auto olayout = onode->get_layout();
+  d_onode->update_local_clone_id(
+    *ctx.transaction, olayout.local_clone_id);
   uint32_t size = olayout.size;
   auto omap_root = olayout.omap_root.get(
     d_onode->get_metadata_hint(device->get_block_size()));
@@ -1689,9 +1691,21 @@ SeaStore::Shard::_rename(
   d_onode->update_onode_size(*ctx.transaction, size);
   d_onode->update_omap_root(*ctx.transaction, omap_root);
   d_onode->update_xattr_root(*ctx.transaction, xattr_root);
-  d_onode->update_object_data(*ctx.transaction, object_data);
   d_onode->update_object_info(*ctx.transaction, oi_bl);
   d_onode->update_snapset(*ctx.transaction, ss_bl);
+  auto fut = TransactionManager::move_mappings_iertr::make_ready_future<
+    lba_pin_list_t>();
+  auto base = object_data.get_reserved_data_base();
+  if (base.is_recover()) {
+    auto obase = base.without_recover();
+    auto olen = object_data.get_reserved_data_len();
+    object_data_t n_object_data(obase, olen);
+    d_onode->update_object_data(*ctx.transaction, n_object_data);
+    fut = transaction_manager->move_mappings<ObjectDataBlock>(
+      *ctx.transaction, base, obase, olen, false);
+  } else {
+    d_onode->update_object_data(*ctx.transaction, object_data);
+  }
   return onode_manager->erase_onode(
     *ctx.transaction, onode
   ).handle_error_interruptible(
