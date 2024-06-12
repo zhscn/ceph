@@ -64,6 +64,10 @@ public:
       hobj(hobj)
   {}
 
+  const hobject_t& get_hobj() const {
+    return hobj;
+  }
+
   bool is_fully_initialized() const {
     return get_layout().object_data.get().get_reserved_data_base()
       != L_ADDR_NULL;
