@@ -138,9 +138,11 @@ public:
     laddr_t addr) = 0;
 
   struct remap_entry {
+    laddr_t dst_laddr = L_ADDR_NULL;
     extent_len_t offset;
     extent_len_t len;
-    remap_entry(extent_len_t _offset, extent_len_t _len) {
+    remap_entry(laddr_t dl, extent_len_t _offset, extent_len_t _len) {
+      dst_laddr = dl;
       offset = _offset;
       len = _len;
     }
@@ -190,6 +192,22 @@ public:
     laddr_t dst_base,
     extent_len_t length,
     bool data_only,
+    remap_extent_func_t func) = 0;
+
+  /**
+   * merge_mappings
+   *
+   * replace indirect mappings with their corresponding intermediate
+   * mappings, if those intermediate mappings are within the range
+   * src_base~length
+   */
+  using merge_mappings_iertr = base_iertr;
+  using merge_mappings_ret = merge_mappings_iertr::future<lba_pin_list_t>;
+  virtual merge_mappings_ret merge_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
     remap_extent_func_t func) = 0;
 
   /**

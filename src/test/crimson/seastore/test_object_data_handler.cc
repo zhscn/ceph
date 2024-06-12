@@ -250,9 +250,10 @@ struct object_data_handler_test_t:
     extent_len_t new_offset,
     extent_len_t new_len) {
     auto pin = with_trans_intr(t, [&](auto& trans) {
+      auto dst_laddr = opin->get_key() + new_offset;
       return tm->remap_pin<ObjectDataBlock>(
         trans, std::move(opin), std::array{
-          remap_entry(new_offset, new_len)}
+          remap_entry(dst_laddr, new_offset, new_len)}
       ).si_then([](auto ret) {
         return std::move(ret[0]);
       });
