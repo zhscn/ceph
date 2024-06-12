@@ -561,35 +561,37 @@ BtreeLBAManager::move_mappings(
 
 	  bool split_left = laddr < state.src_base;
 	  bool split_right = laddr + map_val.len > state.get_src_end();
-	  return load_child_ext(c.trans, iter
-	  ).si_then([c, &state, &iter, laddr,
-		     data_only, map_val, FNAME](auto ext) {
-	    std::vector<remap_entry> remap_entries;
-	    if (!data_only) {
-	      ceph_assert(laddr >= state.src_base);
-	      ceph_assert(laddr + map_val.len <= state.get_src_end());
-	      TRACET("move {} {} to dst", c.trans, laddr, map_val);
-	      remap_entries.emplace_back(L_ADDR_NULL, 0, map_val.len);
-	    } else {
-	      remap_entries = build_remaps(
-	        c.trans,
-		state.src_base,
-		state.length,
-		state.dst_base,
-		laddr,
-		map_val);
-	    }
-	    return state.remap_extent(
-	      ext.get(),
-	      iter.get_pin(c),
-	      std::move(remap_entries));
-	  }).si_then([c, &btree, &state, &iter, FNAME](auto extents) {
-	    std::swap(state.remapped_extents, extents);
-	    TRACET("remove mapping {}", c.trans, iter.get_key());
-            return btree.remove(c, iter);
-          }).si_then([c, data_only, split_left, split_right,
+
+	  if (!data_only) {
+	    ceph_assert(!split_left);
+	    ceph_assert(!split_right);
+	    return btree.remove(c, iter
+	    ).si_then([&state, laddr, map_val](auto iter) {
+	      auto nladdr = state.dst_base + (laddr - state.src_base);
+	      state.mappings.emplace_back(nladdr, map_val, nullptr);
+	      return move_mappings_iertr::make_ready_future<
+		LBABtree::repeat_indicator_t>(
+		  seastar::stop_iteration::no, std::move(iter));
+	    });
+	  } else {
+	    return load_child_ext(c.trans, iter
+	    ).si_then([c, &state, &iter, laddr, map_val](auto ext) {
+	      return state.remap_extent(
+	        ext.get(),
+		iter.get_pin(c),
+		build_remaps(
+		  c.trans,
+		  state.src_base,
+		  state.length,
+		  state.dst_base,
+		  laddr,
+		  map_val));
+	    }).si_then([c, &btree, &state, &iter, FNAME](auto extents) {
+	      std::swap(state.remapped_extents, extents);
+	      TRACET("remove mapping {}", c.trans, iter.get_key());
+	      return btree.remove(c, iter);
+	    }).si_then([c, split_left, split_right,
 		      &btree, &state, FNAME](auto it) {
-	    if (data_only) {
 	      auto handle_left = [split_left, c, &btree, &state, FNAME](auto it)
 	      {
 		if (split_left) {
@@ -684,31 +686,8 @@ BtreeLBAManager::move_mappings(
 		  LBABtree::repeat_indicator_t>(
 		    seastar::stop_iteration::no, std::move(it));
 	      });
-	    } else {
-	      ceph_assert(state.remapped_extents.size() == 1);
-	      auto ext = state.remapped_extents.back();
-	      auto laddr = state.dst_base + (ext->get_laddr() - state.src_base);
-              auto val = lba_map_val_t{
-		ext->get_length(),
-		pladdr_t(ext->get_paddr()),
-		EXTENT_DEFAULT_REF_COUNT,
-		ext->get_last_committed_crc()
-	      };
-
-              TRACET("move mapping from {} to {} {}",
-		     c.trans,
-		     ext->get_laddr(),
-		     laddr,
-		     val);
-	      state.mappings.emplace_back(
-	        laddr,
-		val,
-		ext.get());
-	      return move_mappings_iertr::make_ready_future<
-		LBABtree::repeat_indicator_t>(
-		 seastar::stop_iteration::no, std::move(it));
-	    }
-	  });
+	    });
+	  }
 	}).si_then([c, &state, data_only, this] {
 	  auto fut = alloc_extent_iertr::make_ready_future<
 	    std::vector<LBAMappingRef>>();
