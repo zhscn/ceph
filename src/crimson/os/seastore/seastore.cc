@@ -1838,7 +1838,11 @@ SeaStore::Shard::_rename(
   OnodeRef &onode,
   OnodeRef &d_onode)
 {
+  LOG_PREFIX(SeaStore::_rename);
+  DEBUGT("{} => {}", *ctx.transaction, *onode, *d_onode);
   auto olayout = onode->get_layout();
+  d_onode->update_local_clone_id(
+    *ctx.transaction, olayout.local_clone_id);
   uint32_t size = olayout.size;
   auto omap_root = olayout.omap_root.get(
     d_onode->get_metadata_hint(device->get_block_size()));
@@ -1855,12 +1859,43 @@ SeaStore::Shard::_rename(
   d_onode->update_onode_size(*ctx.transaction, size);
   d_onode->update_omap_root(*ctx.transaction, omap_root);
   d_onode->update_xattr_root(*ctx.transaction, xattr_root);
-  d_onode->update_object_data(*ctx.transaction, object_data);
   d_onode->update_object_info(*ctx.transaction, oi_bl);
   d_onode->update_snapset(*ctx.transaction, ss_bl);
-  return onode_manager->erase_onode(
-    *ctx.transaction, onode
-  ).handle_error_interruptible(
+  auto fut = TransactionManager::move_mappings_iertr::make_ready_future<>();
+  auto base = object_data.get_reserved_data_base();
+  if (base.is_recover()) {
+    laddr_t obase = L_ADDR_NULL;
+    if (hobject_t::is_temp_pool(base.get_pool())) {
+#ifndef NDEBUG
+      auto dlayout = d_onode->get_layout();
+      auto d_object_data = dlayout.object_data.get();
+      assert(d_object_data.get_reserved_data_base() == L_ADDR_NULL);
+#endif
+      obase = d_onode->get_data_hint();
+      if (d_onode->get_hobj().is_head()) {
+	obase = obase.with_local_clone_id(0);
+      }
+    } else {
+      obase = base.without_recover();
+    }
+    auto olen = object_data.get_reserved_data_len();
+    object_data_t n_object_data(obase, olen);
+    d_onode->update_object_data(*ctx.transaction, n_object_data);
+    fut = fut.si_then([&ctx, base, obase, olen, this, &onode, &d_onode] {
+      return transaction_manager->move_mappings<ObjectDataBlock>(
+	*ctx.transaction, base, obase, olen, false
+      ).si_then([&ctx, &onode, &d_onode, this](auto) {
+	return _clone_omaps(ctx, onode, d_onode, omap_type_t::XATTR);
+      }).si_then([&ctx, &onode, &d_onode, this] {
+	return _clone_omaps(ctx, onode, d_onode, omap_type_t::OMAP);
+      });
+    });
+  } else {
+    d_onode->update_object_data(*ctx.transaction, object_data);
+  }
+  return fut.si_then([&ctx, &onode, this] {
+    return onode_manager->erase_onode(*ctx.transaction, onode);
+  }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
     crimson::ct_error::assert_all{
       "Invalid error in SeaStore::_rename"}
