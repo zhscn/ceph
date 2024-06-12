@@ -295,7 +295,8 @@ private:
     object_data_t &object_data,
     object_data_t &d_object_data,
     extent_len_t srcoff,
-    extent_len_t length);
+    extent_len_t length,
+    bool is_clone_range);
 
 private:
   /**

@@ -1817,7 +1817,7 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone_range(
     assert(!d_object_data.is_null());
     return ctx.tm.remove(ctx.t, d_object_data.get_reserved_data_base()
     ).si_then([ctx, this, srcoff, length, &object_data, &d_object_data](auto) {
-      return _clone_range(ctx, object_data, d_object_data, srcoff, length);
+      return _clone_range(ctx, object_data, d_object_data, srcoff, length, true);
     });
   }).handle_error_interruptible(
     ObjectDataHandler::clone_iertr::pass_further{},
@@ -1833,7 +1833,8 @@ ObjectDataHandler::clone_ret ObjectDataHandler::_clone_range(
   object_data_t &object_data,
   object_data_t &d_object_data,
   extent_len_t srcoff,
-  extent_len_t length)
+  extent_len_t length,
+  bool is_clone_range)
 {
   ceph_assert(!object_data.is_null());
   ceph_assert(!d_object_data.is_null());
@@ -1855,23 +1856,27 @@ ObjectDataHandler::clone_ret ObjectDataHandler::_clone_range(
     );
   }
   return fut.si_then([ctx, this, &d_object_data, &object_data,
-		      length, srcoff](auto pin_list) {
+		      length, srcoff, is_clone_range](auto pin_list) {
     assert(!pin_list.empty());
     return seastar::do_with(
       std::move(pin_list),
       [ctx, this, &d_object_data, &object_data,
-      length, srcoff](auto &pin_list) {
+      length, srcoff, is_clone_range](auto &pin_list) {
       return ctx.tm.get_pins(
 	ctx.t,
 	d_object_data.get_reserved_data_base() + srcoff,
 	length
       ).si_then([ctx, this, &d_object_data, &object_data,
-		&pin_list, length, srcoff](auto pins) {
+		&pin_list, length, srcoff, is_clone_range](auto pins) {
 	return seastar::do_with(
 	  std::move(pins),
 	  [ctx, this, &d_object_data, &object_data,
-	  &pin_list, srcoff, length](auto &pins) {
-	  assert(!pins.empty());
+	  &pin_list, srcoff, length, is_clone_range](auto &pins) {
+	  if (pins.empty()) {
+	    ceph_assert(!is_clone_range);
+	    return TransactionManager::ref_iertr::now();
+	  }
+	  ceph_assert(is_clone_range);
 	  auto d_data_base = d_object_data.get_reserved_data_base();
 	  auto d_pin_base = pins.front()->get_key();
 	  auto d_pin_last = pins.back()->get_key();
@@ -1934,9 +1939,11 @@ ObjectDataHandler::clone_ret ObjectDataHandler::_clone_range(
 	    for (auto &pin : pins) {
 	      laddrs.push_back(pin->get_key());
 	    }
-	    return ctx.tm.remove(ctx.t, std::move(laddrs));
-	  }).si_then([ctx, this, &d_object_data, &object_data,
-		      srcoff, length, &pin_list](auto) {
+	    return ctx.tm.remove(ctx.t, std::move(laddrs)
+	    ).discard_result();
+	  });
+	}).si_then([ctx, this, &d_object_data, &object_data,
+		    srcoff, length, &pin_list] {
 	    return clone_extents(
 	      ctx,
 	      d_object_data,
@@ -1945,7 +1952,6 @@ ObjectDataHandler::clone_ret ObjectDataHandler::_clone_range(
 	      srcoff,
 	      length);
 	  });
-	});
       });
     });
   }).handle_error_interruptible(
@@ -1967,7 +1973,8 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone(
       object_data,
       d_object_data,
       0,
-      d_object_data.get_reserved_data_len());
+      d_object_data.get_reserved_data_len(),
+      false);
   });
 }
 
