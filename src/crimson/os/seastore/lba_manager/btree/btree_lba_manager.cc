@@ -303,36 +303,38 @@ BtreeLBAManager::_get_mapping(
 
 std::vector<LBAManager::remap_entry> build_remaps(
   Transaction &t,
-  const laddr_t laddr,
+  const laddr_t src_base,
   const extent_len_t length,
+  const laddr_t dst_base,
   const laddr_t pin_key,
   const lba_map_val_t &pin_val)
 {
   LOG_PREFIX(build_remap_entries);
-  bool split_left = pin_key < laddr;
-  bool split_right = laddr + length < pin_key + pin_val.len;
+  bool split_left = pin_key < src_base;
+  bool split_right = src_base + length < pin_key + pin_val.len;
   std::vector<LBAManager::remap_entry> remaps;
 
   auto offset = 0;
   if (split_left) {
     ceph_assert(pin_val.pladdr.is_paddr());
-    offset = laddr - pin_key;
+    offset = src_base - pin_key;
     TRACET("remap left at {}~{}", t, 0, offset);
-    remaps.emplace_back(0, offset);
+    remaps.emplace_back(src_base, 0, offset);
   }
 
-  auto mid_len = std::min(laddr + length, pin_key + pin_val.len) -
-    std::max(laddr, pin_key);
+  auto mid_len = std::min(src_base + length, pin_key + pin_val.len) -
+    std::max(src_base, pin_key);
   TRACET("remap or move middle at {}~{}", t, offset, mid_len);
-  remaps.emplace_back(offset, mid_len);
+  auto dst_laddr = pin_key - src_base + dst_base;
+  remaps.emplace_back(dst_laddr + offset, offset, mid_len);
 
   if (split_right) {
     ceph_assert(pin_val.pladdr.is_paddr());
-    ceph_assert(pin_key < laddr + length);
-    auto offset = laddr + length - pin_key;
+    ceph_assert(pin_key < src_base + length);
+    auto offset = src_base + length - pin_key;
     auto length = pin_val.len - offset;
     TRACET("remap right at {}~{}", t, offset, length);
-    remaps.emplace_back(offset, length);
+    remaps.emplace_back(src_base + offset, offset, length);
   }
 #ifndef NDEBUG
   auto last_end = 0;
@@ -437,12 +439,13 @@ BtreeLBAManager::move_mappings(
 	      ceph_assert(laddr >= state.src_base);
 	      ceph_assert(laddr + map_val.len <= state.get_src_end());
 	      TRACET("move {} {} to dst", c.trans, laddr, map_val);
-	      remap_entries.emplace_back(0, map_val.len);
+	      remap_entries.emplace_back(L_ADDR_NULL, 0, map_val.len);
 	    } else {
 	      remap_entries = build_remaps(
 	        c.trans,
 		state.src_base,
 		state.length,
+		state.dst_base,
 		laddr,
 		map_val);
 	    }
@@ -505,16 +508,15 @@ BtreeLBAManager::move_mappings(
 		  EXTENT_DEFAULT_REF_COUNT,
 		  ext->get_last_committed_crc()
 		};
-
-		auto laddr = state.dst_base + (ext->get_laddr() - state.src_base);
-		state.mappings.emplace_back(laddr, val, ext.get());
-		val.pladdr = pladdr_t(laddr);
+		state.mappings.emplace_back(ext->get_laddr(), val, ext.get());
+		val.pladdr = ext->get_laddr();
+		auto laddr = state.src_base + (ext->get_laddr() - state.dst_base);
 		TRACET("move mapping from {} to {}, and create indirect mapping {}",
 		       c.trans,
-		       ext->get_laddr(),
 		       laddr,
+		       ext->get_laddr(),
 		       val);
-		return btree.insert(c, std::move(it), ext->get_laddr(), val, nullptr
+		return btree.insert(c, std::move(it), laddr, val, nullptr
 		).si_then([c, &state](auto p) {
 		  state.res.emplace_back(p.first.get_pin(c));
 		  return p.first.next(c);

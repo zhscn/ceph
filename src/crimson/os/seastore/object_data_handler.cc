@@ -132,6 +132,7 @@ struct extent_to_remap_t {
   remap_entry create_remap_entry() {
     assert(is_remap1());
     return remap_entry(
+      pin->get_key() + new_offset,
       new_offset,
       new_len);
   }
@@ -139,6 +140,7 @@ struct extent_to_remap_t {
   remap_entry create_left_remap_entry() {
     assert(is_remap2());
     return remap_entry(
+      pin->get_key(),
       0,
       new_offset);
   }
@@ -146,6 +148,7 @@ struct extent_to_remap_t {
   remap_entry create_right_remap_entry() {
     assert(is_remap2());
     return remap_entry(
+      pin->get_key() + new_offset + new_len,
       new_offset + new_len,
       pin->get_length() - new_offset - new_len);
   }

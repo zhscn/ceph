@@ -1118,9 +1118,10 @@ struct transaction_manager_test_t :
       ? opin->get_intermediate_base()
       : o_laddr;
     auto pin = with_trans_intr(*(t.t), [&](auto& trans) {
+      auto dst_laddr = opin->get_key() + new_offset;
       return tm->remap_pin<TestBlock>(
         trans, std::move(opin), std::array{
-          remap_entry(new_offset, new_len)}
+          remap_entry(dst_laddr, new_offset, new_len)}
       ).si_then([](auto ret) {
         return std::move(ret[0]);
       });
@@ -1173,9 +1174,11 @@ struct transaction_manager_test_t :
         std::move(opin),
         std::array{
           remap_entry(
+           o_laddr,
             0,
             new_offset),
           remap_entry(
+           o_laddr + new_offset + new_len,
             new_offset + new_len,
             o_len - new_offset - new_len)
         }
@@ -1212,6 +1215,7 @@ struct transaction_manager_test_t :
         std::move(opin),
         std::array{
           remap_entry(
+           o_laddr + new_offset + new_len,
             new_offset + new_len,
             o_len - new_offset - new_len)
         }
@@ -1243,6 +1247,7 @@ struct transaction_manager_test_t :
         std::move(opin),
         std::array{
           remap_entry(
+           o_laddr,
             0,
             new_offset)
         }
