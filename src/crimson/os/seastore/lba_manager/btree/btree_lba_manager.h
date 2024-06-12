@@ -452,6 +452,13 @@ public:
     bool data_only,
     remap_extent_func_t func) final;
 
+  merge_mappings_ret merge_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    remap_extent_func_t func) final;
+
   ref_ret decref_extent(
     Transaction &t,
     laddr_t addr) final {
