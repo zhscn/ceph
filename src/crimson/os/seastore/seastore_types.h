@@ -1345,8 +1345,8 @@ private:
   internal128_t value = 0;
 
   struct random_generator_t {
-    // random field uses 32 bits
-    constexpr static uint32_t MAX = std::numeric_limits<uint32_t>::max();
+    // random field uses 31 bits
+    constexpr static uint32_t MAX = (1ULL << RandomSpec::len) - 1;
 
     random_generator_t() : rd(), eng(rd()), dist(0, MAX) {}
     uint32_t operator()() {
