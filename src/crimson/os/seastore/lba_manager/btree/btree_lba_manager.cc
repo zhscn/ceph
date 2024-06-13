@@ -377,7 +377,7 @@ BtreeLBAManager::merge_mappings(
   extent_len_t length,
   remap_extent_func_t func)
 {
-  LOG_PREFIX(BtreeLBAManager::move_mappings);
+  LOG_PREFIX(BtreeLBAManager::merge_mappings);
   DEBUGT("merge {}~{} to {}", t, src_base, length, dst_base);
 
   return get_mappings(t, src_base, length
