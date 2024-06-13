@@ -324,7 +324,10 @@ public:
   ref_ret remove(
     Transaction &t,
     laddr_t offset) {
-    return _dec_ref(t, offset);
+    return _dec_ref(t, offset
+    ).si_then([](auto res) {
+      return res.refcount;
+    });
   }
 
   /// remove refcount for list of offset
@@ -449,7 +452,8 @@ public:
   remap_pin_ret remap_pin(
     Transaction &t,
     LBAMappingRef &&pin,
-    std::array<remap_entry, N> remaps) {
+    std::array<remap_entry, N> remaps,
+    bool check_shadow = false) {
     static_assert(std::is_base_of_v<LogicalCachedExtent, T>);
     ceph_assert(pin->is_parent_valid());
     assert(!pin->is_half_indirect());
@@ -484,10 +488,14 @@ public:
       std::vector<LogicalCachedExtentRef>(),
       std::move(pin),
       std::move(remaps),
-      [&t, this](auto &extents, auto &pin, auto &remaps) {
+      [&t, this, check_shadow](auto &extents, auto &pin, auto &remaps) {
       laddr_t original_laddr = pin->get_key();
       extent_len_t original_len = pin->get_length();
       paddr_t original_paddr = pin->get_val();
+      if (check_shadow) {
+	ceph_assert(!pin->has_shadow_mapping());
+	ceph_assert(original_laddr.is_shadow());
+      }
       LOG_PREFIX(TransactionManager::remap_pin);
       SUBDEBUGT(seastore_tm,
 	"original laddr: {}, original paddr: {}, original length: {},"
@@ -510,8 +518,8 @@ public:
 	  pin->maybe_fix_pos();
 	}
 
-	fut = fut.si_then([this, &t, &pin] {
-	  if (full_extent_integrity_check) {
+	fut = fut.si_then([this, &t, &pin, check_shadow] {
+	  if (full_extent_integrity_check && !check_shadow) {
 	    return read_pin<T>(t, pin->duplicate());
 	  } else {
 	    auto ret = get_extent_if_linked<T>(t, pin->duplicate());
@@ -521,8 +529,8 @@ public:
 	  }
 	  return base_iertr::make_ready_future<TCachedExtentRef<T>>();
 	}).si_then([this, &t, &remaps, original_paddr, original_len,
-			    &extents, FNAME](auto ext) mutable {
-	  ceph_assert(full_extent_integrity_check
+		    check_shadow, &extents, FNAME](auto ext) mutable {
+	  ceph_assert((full_extent_integrity_check && !check_shadow)
 	      ? (ext && ext->is_fully_loaded())
 	      : true);
 	  std::optional<ceph::bufferptr> original_bptr;
@@ -569,15 +577,31 @@ public:
 	  }
 	});
       }
-      return fut.si_then([this, &t, &pin, &remaps, &extents] {
+      return fut.si_then([this, &t, &pin, &remaps, &extents, original_laddr] {
+	bool has_shadow = pin->has_shadow_mapping();
 	return lba_manager->remap_mappings(
 	  t,
 	  std::move(pin),
 	  std::vector<remap_entry>(remaps.begin(), remaps.end()),
 	  std::move(extents)
-	).si_then([](auto ret) {
-	  return Cache::retire_extent_iertr::make_ready_future<
-	    std::vector<LBAMappingRef>>(std::move(ret.remapped_mappings));
+	).si_then([this, &t, original_laddr, &remaps, has_shadow](auto &&res) mutable {
+	  auto fut = remap_pin_iertr::now();
+	  if (has_shadow) {
+	    ceph_assert(res.ruret.shadow_paddr != P_ADDR_NULL);
+	    fut = get_pin(t, original_laddr.with_shadow()
+	    ).handle_error_interruptible(
+	      remap_pin_iertr::pass_further{},
+	      crimson::ct_error::assert_all{
+		"TransactionManager::remap_pin hit invalid error"
+	      }
+	    ).si_then([this, &t, &remaps](auto pin) {
+	      return this->template remap_pin<T, N>(t, std::move(pin), remaps, true).discard_result();
+	    });
+	  }
+	  return fut.si_then([res=std::move(res)]() mutable {
+	    return remap_pin_iertr::make_ready_future<
+	      std::vector<LBAMappingRef>>(std::move(res.remapped_mappings));
+	  });
 	});
       }).handle_error_interruptible(
 	remap_pin_iertr::pass_further{},
@@ -1041,8 +1065,15 @@ private:
     ExtentPlacementManager::dispatch_result_t dispatch_result,
     std::optional<journal_seq_t> seq_to_trim = std::nullopt);
 
+  struct dec_ref_res_t {
+    unsigned refcount = 0;
+    paddr_t shadow_paddr = P_ADDR_NULL;
+    dec_ref_res_t(unsigned r, paddr_t p)
+      : refcount(r), shadow_paddr(p) {}
+  };
+  using dec_ref_ret = ref_iertr::future<dec_ref_res_t>;
   /// Remove refcount for offset
-  ref_ret _dec_ref(
+  dec_ref_ret _dec_ref(
     Transaction &t,
     laddr_t offset);
 

@@ -161,6 +161,10 @@ public:
     return intermediate_length;
   }
 
+  bool has_shadow_mapping() const final {
+    return raw_val.has_shadow;
+  }
+
   bool is_clone() const final {
     return get_map_val().refcount > 1;
   }
@@ -561,8 +565,8 @@ public:
 		imapping->get_intermediate_key());
 	      mappings.emplace_back(std::move(mapping));
 	    }
-	    return seastar::make_ready_future<std::vector<LBAMappingRef>>(
-	      std::move(mappings));
+	    return alloc_extent_iertr::make_ready_future<
+	      std::vector<LBAMappingRef>>(std::move(mappings));
 	  });
 	} else { // !orig_mapping->is_indirect()
 	  fut = alloc_extents(
@@ -570,7 +574,7 @@ public:
 	    remaps.front().offset + orig_laddr,
 	    std::move(extents),
 	    EXTENT_DEFAULT_REF_COUNT,
-	    {.determinsitic=true});
+	    {.determinsitic=true, .has_shadow=(ret.ruret.shadow_paddr != P_ADDR_NULL)});
 	}
 
 	return fut.si_then([&ret, &remaps, &orig_mapping](auto &&refs) {
