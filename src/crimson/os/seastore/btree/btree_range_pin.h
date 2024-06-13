@@ -208,9 +208,14 @@ public:
   bool is_parent_valid() const final {
     assert(parent);
     ceph_assert(parent);
-    assert(ctx.trans.get_extent(parent->get_paddr(), nullptr) ==
-      Transaction::get_extent_ret::PRESENT);
-    return parent->is_valid();
+    assert(ctx.trans.get_extent(parent->get_paddr(), nullptr) !=
+	   Transaction::get_extent_ret::ABSENT);
+    if (parent->is_stable() && ctx.trans.get_extent(parent->get_paddr(), nullptr) ==
+	Transaction::get_extent_ret::RETIRED) {
+      return false;
+    } else {
+      return parent->is_valid();
+    }
   }
 };
 
