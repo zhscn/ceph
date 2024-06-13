@@ -507,8 +507,7 @@ public:
 	    }
 	  }
 	  return base_iertr::make_ready_future<TCachedExtentRef<T>>();
-	}).si_then([this, &t, &remaps, original_paddr,
-			    original_laddr, original_len,
+	}).si_then([this, &t, &remaps, original_paddr, original_len,
 			    &extents, FNAME](auto ext) mutable {
 	  ceph_assert(full_extent_integrity_check
 	      ? (ext && ext->is_fully_loaded())
@@ -550,7 +549,6 @@ public:
 	      remap_paddr,
 	      remap_offset,
 	      remap_len,
-	      original_laddr,
 	      original_bptr,
 	      std::move(orig_hint),
 	      std::move(orig_gen));
@@ -676,7 +674,6 @@ public:
     LogicalCachedExtentRef extent,
     LBAMappingRef mapping,
     std::vector<LBAManager::remap_entry> remaps) {
-    auto laddr = mapping->get_key();
     auto paddr = mapping->get_val();
     auto fut = [this, &t, extent, mapping=std::move(mapping)]() mutable {
       if (extent) {
@@ -699,7 +696,7 @@ public:
 	});
       }
     };
-    return fut().si_then([this, &t, laddr, paddr,
+    return fut().si_then([this, &t, paddr,
 			  remaps=std::move(remaps)](auto extent) {
       std::list<LogicalCachedExtentRef> res{};
       for (auto &remap : remaps) {
@@ -710,7 +707,6 @@ public:
 	      paddr.add_offset(remap.offset),
 	      remap.offset,
 	      remap.len,
-	      laddr,
 	      (extent && extent->is_fully_loaded())
 	      ? std::make_optional(extent->get_bptr())
 	      : std::nullopt);
