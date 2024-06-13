@@ -292,7 +292,7 @@ struct lba_btree_test : btree_test_base {
   }
 
   static auto get_map_val(extent_len_t len) {
-    return lba_map_val_t{0, (pladdr_t)P_ADDR_NULL, len, 0};
+    return lba_map_val_t{0, pladdr_t(P_ADDR_NULL, /*has_shadow=*/false), len, 0};
   }
 
   device_off_t next_off = 0;
@@ -538,7 +538,8 @@ struct btree_lba_manager_test : btree_test_base {
 	  [this, &t, hint, determinsitic](auto &extents) {
 	  return lba_manager->alloc_extents(
 	    t, hint, std::move(extents),
-	    EXTENT_DEFAULT_REF_COUNT, determinsitic);
+	    EXTENT_DEFAULT_REF_COUNT,
+	    {.determinsitic=determinsitic});
 	});
       }).unsafe_get0();
     for (auto &ret : rets) {

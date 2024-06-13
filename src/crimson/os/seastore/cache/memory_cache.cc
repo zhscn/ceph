@@ -93,8 +93,17 @@ class LRUMemoryCache : public MemoryCache {
   }
 
   bool should_promote_extent(const CachedExtent &extent) {
-    return extent.is_fully_loaded() &&
-      epm.is_cold_device(extent.get_paddr().get_device_id());
+    bool ret = false;
+    if (extent.is_fully_loaded() &&
+	epm.is_cold_device(extent.get_paddr().get_device_id())) {
+      if (extent.is_logical()) {
+	auto laddr = extent.cast<LogicalCachedExtent>()->get_laddr();
+	ret = !laddr.is_shadow() && !laddr.is_recover();
+      } else {
+	ret = true;
+      }
+    }
+    return ret;
   }
 
   void remove_impl(CachedExtent &extent, bool need_to_promote) {

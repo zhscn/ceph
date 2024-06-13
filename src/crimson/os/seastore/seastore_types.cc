@@ -111,8 +111,8 @@ std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr)
     // pladdr(local_clone_id=...)
     out << "local_clone_id=" << pladdr.get_local_clone_id();
   } else {
-    // pladdr(paddr=<...>)
-    out << pladdr.get_paddr();
+    // pladdr(paddr=<...>, has_shadow=...)
+    out << pladdr.get_paddr() << ", has_shadow=" << pladdr.has_shadow;
   }
   return out << ")";
 }

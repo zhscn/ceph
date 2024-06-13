@@ -473,7 +473,7 @@ BtreeLBAManager::merge_mappings(
 		key,
 		lba_map_val_t{
 		  val.len,
-		  pladdr_t(s_pin->get_val() + offset),
+		  pladdr_t(s_pin->get_val() + offset, val.pladdr.has_shadow),
 		  EXTENT_DEFAULT_REF_COUNT,
 		  0 // checksum will be updated when submitted the trans
 		},
@@ -590,9 +590,10 @@ BtreeLBAManager::move_mappings(
 	      std::swap(state.remapped_extents, extents);
 	      TRACET("remove mapping {}", c.trans, iter.get_key());
 	      return btree.remove(c, iter);
-	    }).si_then([c, split_left, split_right,
+	    }).si_then([c, split_left, split_right, map_val,
 		      &btree, &state, FNAME](auto it) {
-	      auto handle_left = [split_left, c, &btree, &state, FNAME](auto it)
+	      auto handle_left = [split_left, c, &btree,
+				  &state, map_val, FNAME](auto it)
 	      {
 		if (split_left) {
 		  ceph_assert(state.remapped_extents.size() > 1);
@@ -600,7 +601,7 @@ BtreeLBAManager::move_mappings(
 		  state.remapped_extents.pop_front();
 		  auto val = lba_map_val_t{
 		    ext->get_length(),
-		    pladdr_t(ext->get_paddr()),
+		    pladdr_t(ext->get_paddr(), map_val.pladdr.has_shadow),
 		    EXTENT_DEFAULT_REF_COUNT,
 		    ext->get_last_committed_crc()
 		  };
@@ -628,7 +629,7 @@ BtreeLBAManager::move_mappings(
 		  LBABtree::iterator>(std::move(it));
 	      };
 	      return handle_left(std::move(it)
-	      ).si_then([&state, &btree, c, FNAME](auto it) {
+	      ).si_then([&state, &btree, c, map_val, FNAME](auto it) {
 		ceph_assert(state.remapped_extents.size() >= 1);
 		// insert indirect mapping
 		auto ext = state.remapped_extents.front();
@@ -636,7 +637,7 @@ BtreeLBAManager::move_mappings(
 
 		auto val = lba_map_val_t{
 		  ext->get_length(),
-		  pladdr_t(ext->get_paddr()),
+		  pladdr_t(ext->get_paddr(), map_val.pladdr.has_shadow),
 		  EXTENT_DEFAULT_REF_COUNT,
 		  ext->get_last_committed_crc()
 		};
@@ -654,14 +655,14 @@ BtreeLBAManager::move_mappings(
 		  state.res.emplace_back(p.first.get_pin(c));
 		  return p.first.next(c);
 		});
-	      }).si_then([split_right, c, &btree, &state, FNAME](auto it) {
+	      }).si_then([split_right, c, map_val, &btree, &state, FNAME](auto it) {
                 if (split_right) {
 		  ceph_assert(state.remapped_extents.size() == 1);
 		  auto ext = state.remapped_extents.front();
 		  state.remapped_extents.pop_front();
                   auto val = lba_map_val_t{
                       ext->get_length(),
-		      pladdr_t(ext->get_paddr()),
+		      pladdr_t(ext->get_paddr(), map_val.pladdr.has_shadow),
                       EXTENT_DEFAULT_REF_COUNT,
 		      ext->get_last_committed_crc()
 		  };
@@ -1059,42 +1060,66 @@ BtreeLBAManager::_decref_intermediate(
   laddr_t addr,
   extent_len_t len)
 {
+  LOG_PREFIX(BtreeLBAManager::_decref_intermediate);
+  TRACET("dec_ref: {}~{}", t, addr, len);
   auto c = get_context(t);
   return with_btree<LBABtree>(
     cache,
     c,
-    [c, addr, len](auto &btree) mutable {
+    [c, addr, len, &t, this, FNAME](auto &btree) mutable {
     return btree.upper_bound_right(
       c, addr
-    ).si_then([&btree, addr, len, c](auto iter) {
+    ).si_then([&btree, addr, len, c, &t, this, FNAME](auto iter) {
       return seastar::do_with(
 	std::move(iter),
-	[&btree, addr, len, c](auto &iter) {
+	[&btree, addr, len, c, &t, this, FNAME](auto &iter) {
 	ceph_assert(!iter.is_end());
 	ceph_assert(iter.get_key() <= addr);
-	auto val = iter.get_val();
+	lba_map_val_t val = iter.get_val();
 	ceph_assert(iter.get_key() + val.len >= addr + len);
 	ceph_assert(val.pladdr.is_paddr());
 	ceph_assert(val.refcount >= 1);
 	val.refcount -= 1;
 
-	LOG_PREFIX(BtreeLBAManager::_decref_intermediate);
 	TRACET("decreased refcount of intermediate key {} -- {}",
 	  c.trans,
 	  iter.get_key(),
 	  val);
 
+	laddr_t laddr = iter.get_key();
+	bool has_shadow = val.pladdr.has_shadow;
 	if (!val.refcount) {
 	  return btree.remove(c, iter
-	  ).si_then([val](auto) {
-	    auto res = ref_update_result_t{
-	      val.refcount,
-	      val.pladdr,
-	      val.len
-	    };
-	    return ref_iertr::make_ready_future<
-	      std::optional<ref_update_result_t>>(
-	        std::make_optional<ref_update_result_t>(res));
+	  ).si_then([val, laddr, has_shadow, &t, this, FNAME](auto) {
+	    if (has_shadow) {
+	      auto shadow_key = laddr.with_shadow();
+	      TRACET("dec ref corresponding shadow mapping: {}", t, shadow_key);
+	      return update_refcount(t, shadow_key, -1, false, false
+	      ).si_then([val](auto res) {
+		ref_update_result_t &ref_res = res.ref_update_res;
+		assert(ref_res.refcount == 0);
+		assert(ref_res.shadow_paddr == P_ADDR_NULL);
+		auto r = ref_update_result_t{
+		  val.refcount,
+		  val.pladdr,
+		  ref_res.addr.get_paddr(),
+		  val.len
+		};
+		return ref_iertr::make_ready_future<
+		  std::optional<ref_update_result_t>>(
+	            std::make_optional<ref_update_result_t>(r));
+	      });
+	    } else {
+	      auto res = ref_update_result_t{
+		val.refcount,
+		val.pladdr,
+		P_ADDR_NULL,
+		val.len
+	      };
+	      return ref_iertr::make_ready_future<
+		std::optional<ref_update_result_t>>(
+	          std::make_optional<ref_update_result_t>(res));
+	    }
 	  });
 	} else {
 	  return btree.update(c, iter, val, nullptr
@@ -1107,6 +1132,11 @@ BtreeLBAManager::_decref_intermediate(
     });
   });
 }
+
+struct update_refcount_res_t {
+  std::optional<BtreeLBAManager::ref_update_result_t> intermediate;
+  std::optional<BtreeLBAManager::ref_update_result_t> direct_shadow;
+};
 
 BtreeLBAManager::update_refcount_ret
 BtreeLBAManager::update_refcount(
@@ -1121,7 +1151,11 @@ BtreeLBAManager::update_refcount(
   return _update_mapping(
     t,
     addr,
-    [delta](const lba_map_val_t &in) {
+    [addr, delta](const lba_map_val_t &in) {
+      if (addr.is_shadow()) {
+	ceph_assert(in.refcount == 1);
+	ceph_assert(delta == -1);
+      }
       lba_map_val_t out = in;
       ceph_assert((int)out.refcount + delta >= 0);
       out.refcount += delta;
@@ -1142,19 +1176,45 @@ BtreeLBAManager::update_refcount(
 	map_value.len
       );
     }
-    return fut.si_then([map_value, mapping=std::move(mapping)]
-		       (auto decref_intermediate_res) mutable {
+    return fut.si_then([map_value, this, &t, addr, FNAME]
+		       (std::optional<ref_update_result_t> intermediate_res) {
+      if (map_value.refcount == 0 && map_value.pladdr.has_shadow) {
+	assert(!addr.is_shadow());
+	DEBUGT("removed primary mapping {}, remove its shadow mapping...",
+	       t, addr);
+	return update_refcount(t, addr.with_shadow(), -1, false, false
+	).si_then([intermediate_res=std::move(intermediate_res)](update_refcount_ret_bare_t res) {
+	  return update_refcount_iertr::make_ready_future<
+	    update_refcount_res_t>(update_refcount_res_t{
+		intermediate_res,
+		std::make_optional<ref_update_result_t>(res.ref_update_res)
+	      });
+	});
+      } else {
+	return update_refcount_iertr::make_ready_future<
+	  update_refcount_res_t>(update_refcount_res_t{
+	      intermediate_res,
+	      std::nullopt
+	    });
+      }
+    }).si_then([map_value, mapping=std::move(mapping)]
+	       (update_refcount_res_t res) mutable {
       if (map_value.pladdr.is_laddr()
-	  && decref_intermediate_res) {
+	  && res.intermediate) {
 	return update_refcount_ret_bare_t{
-	  *decref_intermediate_res,
+	  *res.intermediate,
 	  std::move(mapping)
 	};
       } else {
+	auto shadow_paddr = P_ADDR_NULL;
+	if (res.direct_shadow) {
+	  shadow_paddr = res.direct_shadow->addr.get_paddr();
+	}
 	return update_refcount_ret_bare_t{
 	  ref_update_result_t{
 	    map_value.refcount,
 	    map_value.pladdr,
+	    shadow_paddr,
 	    map_value.len
 	  },
 	  std::move(mapping)

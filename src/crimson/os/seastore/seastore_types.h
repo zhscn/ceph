@@ -1522,15 +1522,16 @@ constexpr uint64_t PL_ADDR_NULL = std::numeric_limits<uint64_t>::max();
 
 struct pladdr_t {
   std::variant<local_clone_id_t, paddr_t> pladdr;
+  bool has_shadow = false;
 
   pladdr_t() = default;
   pladdr_t(const pladdr_t &) = default;
   explicit pladdr_t(laddr_t laddr)
-    : pladdr(laddr.get_local_clone_id()) {}
-  explicit pladdr_t(paddr_t paddr)
-    : pladdr(paddr) {}
+    : pladdr(laddr.get_local_clone_id()), has_shadow(false) {}
+  explicit pladdr_t(paddr_t paddr, bool has_shadow)
+    : pladdr(paddr), has_shadow(has_shadow) {}
   explicit pladdr_t(local_clone_id_t local_clone_id)
-    : pladdr(local_clone_id) {}
+    : pladdr(local_clone_id), has_shadow(false) {}
 
   bool is_laddr() const {
     return pladdr.index() == 0;
@@ -1573,9 +1574,10 @@ struct pladdr_t {
 std::ostream &operator<<(std::ostream &out, const pladdr_t &pladdr);
 
 enum class addr_type_t : uint8_t {
-  PADDR=0,
-  LADDR=1,
-  MAX=2	// or NONE
+  PADDR=0,             // direct mapping
+  LADDR=1,             // indirect mapping
+  PADDR_WITH_SHADOW=2, // direct mapping which has an associated shadow mapping
+  MAX=3                // or NONE
 };
 
 struct __attribute((packed)) pladdr_le_t {
@@ -1590,18 +1592,25 @@ struct __attribute((packed)) pladdr_le_t {
 	  addr.is_laddr() ?
 	    std::get<0>(addr.pladdr) :
 	    std::get<1>(addr.pladdr).internal_paddr)),
-      addr_type(
-	addr.is_laddr() ?
-	  addr_type_t::LADDR :
-	  addr_type_t::PADDR)
-  {}
+      addr_type(addr_type_t::MAX)
+  {
+    if (addr.is_paddr()) {
+      if (addr.has_shadow) {
+	addr_type = addr_type_t::PADDR_WITH_SHADOW;
+      } else {
+	addr_type = addr_type_t::PADDR;
+      }
+    } else {
+      addr_type = addr_type_t::LADDR;
+    }
+  }
 
   operator pladdr_t() const {
     if (addr_type == addr_type_t::LADDR) {
       return pladdr_t(static_cast<local_clone_id_t>(pladdr));
     } else {
-      assert(addr_type == addr_type_t::PADDR);
-      return pladdr_t(paddr_t(pladdr));
+      assert(addr_type != addr_type_t::MAX);
+      return pladdr_t(paddr_t(pladdr), addr_type == addr_type_t::PADDR_WITH_SHADOW);
     }
   }
 };

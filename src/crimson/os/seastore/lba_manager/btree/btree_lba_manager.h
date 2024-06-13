@@ -284,7 +284,7 @@ public:
 	L_ADDR_NULL,
 	lba_map_val_t{
 	  len,
-	  pladdr_t(P_ADDR_ZERO),
+	  pladdr_t(P_ADDR_ZERO, false),
 	  EXTENT_DEFAULT_REF_COUNT,
 	  0
 	},
@@ -313,12 +313,16 @@ public:
       paddr_t paddr,
       extent_ref_count_t refcount,
       uint32_t checksum,
-      LogicalCachedExtent *extent) {
+      LogicalCachedExtent *extent,
+      bool has_shadow) {
+      if (laddr.is_shadow()) {
+	assert(!has_shadow);
+      }
       return {
 	laddr,
 	lba_map_val_t{
 	  len,
-	  pladdr_t(paddr),
+	  pladdr_t(paddr, has_shadow),
 	  refcount,
 	  checksum,
 	},
@@ -390,7 +394,7 @@ public:
     laddr_t hint,
     LogicalCachedExtent &ext,
     extent_ref_count_t refcount,
-    bool determinsitic) final
+    alloc_opt_t alloc_opt) final
   {
     // The real checksum will be updated upon transaction commit
     assert(ext.get_last_committed_crc() == 0);
@@ -402,15 +406,16 @@ public:
 	ext.get_paddr(),
 	refcount,
 	ext.get_last_committed_crc(),
-	&ext)};
+	&ext,
+	alloc_opt.has_shadow)};
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint, determinsitic](auto &alloc_infos) {
+      [this, &t, hint, alloc_opt](auto &alloc_infos) {
       return _alloc_extents(
 	t,
 	hint,
 	alloc_infos,
-	determinsitic
+	alloc_opt.determinsitic
       ).si_then([](auto mappings) {
 	assert(mappings.size() == 1);
 	auto mapping = std::move(mappings.front());
@@ -424,7 +429,7 @@ public:
     laddr_t hint,
     std::vector<LogicalCachedExtentRef> extents,
     extent_ref_count_t refcount,
-    bool determinsitic) final
+    alloc_opt_t alloc_opt) final
   {
     std::vector<alloc_mapping_info_t> alloc_infos;
     for (auto &extent : extents) {
@@ -435,12 +440,13 @@ public:
 	  extent->get_paddr(),
 	  refcount,
 	  extent->get_last_committed_crc(),
-	  extent.get()));
+	  extent.get(),
+	  alloc_opt.has_shadow));
     }
     return seastar::do_with(
       std::move(alloc_infos),
-      [this, &t, hint, determinsitic](auto &alloc_infos) {
-      return _alloc_extents(t, hint, alloc_infos, determinsitic);
+      [this, &t, hint, alloc_opt](auto &alloc_infos) {
+      return _alloc_extents(t, hint, alloc_infos, alloc_opt.determinsitic);
     });
   }
 
@@ -560,7 +566,7 @@ public:
 	    remaps.front().offset + orig_laddr,
 	    std::move(extents),
 	    EXTENT_DEFAULT_REF_COUNT,
-	    true);
+	    {.determinsitic=true});
 	}
 
 	return fut.si_then([&ret, &remaps, &orig_mapping](auto &&refs) {
