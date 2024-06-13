@@ -95,7 +95,8 @@ class LRUMemoryCache : public MemoryCache {
   bool should_promote_extent(const CachedExtent &extent) {
     bool ret = false;
     if (extent.is_fully_loaded() &&
-	epm.is_cold_device(extent.get_paddr().get_device_id())) {
+	epm.is_cold_device(extent.get_paddr().get_device_id()) &&
+	extent.get_write_policy() != write_policy_t::WRITE_THROUGH) {
       if (extent.is_logical()) {
 	auto laddr = extent.cast<LogicalCachedExtent>()->get_laddr();
 	ret = !laddr.is_shadow() && !laddr.is_recover();
