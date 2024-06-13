@@ -464,7 +464,7 @@ public:
    * Remap original extent to new extents.
    * Return the pins of new extent.
    */
-  using remap_entry = LBAManager::remap_entry;
+  using remap_entry = LBAManager::remap_entry_t;
   using remap_pin_iertr = base_iertr;
   using remap_pin_ret = remap_pin_iertr::future<std::vector<LBAMappingRef>>;
   template <typename T, std::size_t N>
@@ -729,7 +729,7 @@ public:
     Transaction &t,
     LogicalCachedExtentRef extent,
     LBAMappingRef mapping,
-    std::vector<LBAManager::remap_entry> remaps) {
+    std::vector<LBAManager::remap_entry_t> remaps) {
     auto paddr = mapping->get_val();
     auto fut = [this, &t, extent, mapping=std::move(mapping)]() mutable {
       if (extent) {
@@ -786,7 +786,7 @@ public:
       t, src_base, dst_base, length,
       [this, &t](LogicalCachedExtent* extent,
 		 LBAMappingRef mapping,
-		 std::vector<LBAManager::remap_entry> remaps) {
+		 std::vector<LBAManager::remap_entry_t> remaps) {
       return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
     });
   }
@@ -805,7 +805,7 @@ public:
       t, src_base, dst_base, length, data_only,
       [this, &t](LogicalCachedExtent *extent,
 		 LBAMappingRef mapping,
-		 std::vector<LBAManager::remap_entry> remaps) {
+		 std::vector<LBAManager::remap_entry_t> remaps) {
 	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
       });
   }

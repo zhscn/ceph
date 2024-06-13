@@ -321,7 +321,7 @@ BtreeLBAManager::_get_mapping(
     });
 }
 
-std::vector<LBAManager::remap_entry> build_remaps(
+std::vector<LBAManager::remap_entry_t> build_remaps(
   Transaction &t,
   const laddr_t src_base,
   const extent_len_t length,
@@ -332,7 +332,7 @@ std::vector<LBAManager::remap_entry> build_remaps(
   LOG_PREFIX(build_remap_entries);
   bool split_left = pin_key < src_base;
   bool split_right = src_base + length < pin_key + pin_val.len;
-  std::vector<LBAManager::remap_entry> remaps;
+  std::vector<LBAManager::remap_entry_t> remaps;
 
   auto offset = 0;
   if (split_left) {
@@ -475,7 +475,7 @@ BtreeLBAManager::merge_mappings(
 	ceph_assert(intermediate_key >= s_pin->get_key() &&
 	  intermediate_key + val.len < src_front_end);
 	extent_len_t offset = intermediate_key - s_pin->get_key();
-	std::vector<LBAManager::remap_entry> remaps = {{key, offset, val.len}};
+	std::vector<LBAManager::remap_entry_t> remaps = {{key, offset, val.len}};
 	return load_child_ext(c.trans, iter
 	).si_then([c, iter=std::move(iter), remaps=std::move(remaps), &state,
 		  offset, key, &btree, val, &s_pin](auto ext) mutable {
