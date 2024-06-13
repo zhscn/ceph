@@ -877,7 +877,8 @@ BtreeLBAManager::update_refcount(
   Transaction &t,
   laddr_t addr,
   int delta,
-  bool cascade_remove)
+  bool cascade_remove,
+  bool proceed_shadow)
 {
   LOG_PREFIX(BtreeLBAManager::update_refcount);
   TRACET("laddr={}, delta={}", t, addr, delta);
@@ -895,7 +896,7 @@ BtreeLBAManager::update_refcount(
       return out;
     },
     nullptr
-  ).si_then([&t, addr, delta, FNAME, this, cascade_remove]
+  ).si_then([&t, addr, delta, FNAME, this, cascade_remove, proceed_shadow]
 	    (update_mapping_ret_bare_t res) {
     auto &map_value = res.map_value;
     auto &mapping = res.mapping;
@@ -909,9 +910,10 @@ BtreeLBAManager::update_refcount(
 	map_value.len
       );
     }
-    return fut.si_then([map_value, this, &t, addr, FNAME]
+    return fut.si_then([map_value, this, &t, addr, FNAME, proceed_shadow]
 		       (std::optional<ref_update_result_t> intermediate_res) {
-      if (map_value.refcount == 0 && map_value.pladdr.has_shadow_mapping()) {
+      if (map_value.refcount == 0 && map_value.pladdr.has_shadow_mapping()
+	  && proceed_shadow) {
 	assert(!addr.is_shadow());
 	DEBUGT("removed primary mapping {}, remove its shadow mapping...",
 	       t, addr);

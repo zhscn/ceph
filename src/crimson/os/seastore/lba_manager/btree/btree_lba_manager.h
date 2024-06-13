@@ -138,6 +138,10 @@ public:
     return intermediate_length;
   }
 
+  bool has_shadow_mapping() const final {
+    return !indirect && raw_val.has_shadow;
+  }
+
   bool is_clone() const final {
     return get_map_val().refcount > 1;
   }
@@ -374,7 +378,7 @@ public:
       std::move(orig_mapping),
       [&t, FNAME, this](auto &ret, auto &remaps,
 			auto &extents, auto &orig_mapping) {
-      return update_refcount(t, orig_mapping->get_key(), -1, false
+      return update_refcount(t, orig_mapping->get_key(), -1, false, false
       ).si_then([&ret, this, &extents, &remaps,
 		&t, &orig_mapping, FNAME](auto r) {
 	ret.ruret = std::move(r.ref_update_res);
@@ -547,7 +551,8 @@ private:
     Transaction &t,
     laddr_t addr,
     int delta,
-    bool cascade_remove);
+    bool cascade_remove,
+    bool proceed_shadow = true);
 
   /**
    * _update_mapping
