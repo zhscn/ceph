@@ -792,7 +792,7 @@ public:
   }
 
   using move_mappings_iertr = LBAManager::move_mappings_iertr;
-  using move_mappings_ret = LBAManager::move_mappings_ret;
+  using move_mappings_ret = move_mappings_iertr::future<lba_pin_list_t>;
   template <typename T>
   move_mappings_ret move_mappings(
     Transaction &t,
@@ -807,6 +807,39 @@ public:
 		 LBAMappingRef mapping,
 		 std::vector<LBAManager::remap_entry_t> remaps) {
 	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
+      }).si_then([&t, src_base, dst_base, length, data_only, this]
+		 (LBAManager::move_mappings_res_t res) {
+	if (res.dual_mappings.empty()) {
+	  return move_mappings_iertr::make_ready_future<
+	    lba_pin_list_t>(std::move(res.pins));
+	} else {
+	  return lba_manager->move_mappings(
+	    t,
+	    src_base.with_shadow(),
+	    dst_base.with_shadow(),
+	    length,
+	    data_only,
+	    [this, &t](LogicalCachedExtent *extent,
+		       LBAMappingRef mapping,
+		       std::vector<LBAManager::remap_entry_t> remaps) {
+	      return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
+	    }).si_then([res=std::move(res)](LBAManager::move_mappings_res_t shadow_res) mutable {
+#ifndef NDEBUG
+	      assert(shadow_res.dual_mappings.empty());
+	      assert(res.dual_mappings.size() == shadow_res.pins.size());
+	      auto iter = res.dual_mappings.begin();
+	      auto shadow_iter = shadow_res.pins.begin();
+	      while (iter != res.dual_mappings.end()) {
+		auto &pin = *shadow_iter;
+		assert(*iter == pin->get_key());
+		iter++;
+		shadow_iter++;
+	      }
+#endif
+	      return move_mappings_iertr::make_ready_future<
+		lba_pin_list_t>(std::move(res.pins));
+	    });
+	}
       });
   }
 

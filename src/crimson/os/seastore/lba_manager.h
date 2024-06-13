@@ -215,8 +215,19 @@ public:
     base_iertr::future<
       std::list<LogicalCachedExtentRef>>(
         LogicalCachedExtent *, LBAMappingRef, std::vector<remap_entry_t>)>;
+  struct move_mappings_res_t {
+    lba_pin_list_t pins;
+    std::vector<laddr_t> dual_mappings;
+    void push_pin(LBAMappingRef pin) {
+      pins.emplace_back(std::move(pin));
+    }
+    void push_laddr(laddr_t laddr) {
+      dual_mappings.push_back(laddr);
+    }
+  };
   using move_mappings_iertr = base_iertr;
-  using move_mappings_ret = move_mappings_iertr::future<lba_pin_list_t>;
+  using move_mappings_ret = move_mappings_iertr::future<
+    move_mappings_res_t>;
   virtual move_mappings_ret move_mappings(
     Transaction &t,
     laddr_t src_base,

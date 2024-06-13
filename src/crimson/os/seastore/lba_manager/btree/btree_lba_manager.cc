@@ -528,17 +528,20 @@ BtreeLBAManager::move_mappings(
   LOG_PREFIX(BtreeLBAManager::move_mappings);
   DEBUGT("move {}~{} to {}, data_only: {}",
 	 t, src_base, length, dst_base, data_only);
+  assert(src_base.is_shadow() == dst_base.is_shadow());
 
   struct state_t {
     laddr_t src_base;
     laddr_t dst_base;
     extent_len_t length;
     remap_extent_func_t remap_extent;
-    lba_pin_list_t res;
+    move_mappings_res_t res;
     std::vector<alloc_mapping_info_t> mappings;
     std::list<LogicalCachedExtentRef> remapped_extents;
 
     laddr_t get_src_end() const { return src_base + length; }
+
+    bool move_shadow() const { return src_base.is_shadow(); }
 
     state_t(laddr_t src_base, laddr_t dst_base, extent_len_t length,
             remap_extent_func_t func)
@@ -570,11 +573,16 @@ BtreeLBAManager::move_mappings(
 	  ceph_assert(map_val.refcount == EXTENT_DEFAULT_REF_COUNT);
 	  ceph_assert(laddr + map_val.len > state.src_base);
 
+	  if (map_val.pladdr.has_shadow) {
+	    assert(map_val.pladdr.is_paddr());
+	    state.res.push_laddr(laddr);
+	  }
+
 	  if (data_only &&
 	      (map_val.pladdr.is_laddr() ||
 	       map_val.pladdr.get_paddr().is_zero())) {
 	    TRACET("skip {} {}", c.trans, laddr, map_val);
-	    state.res.emplace_back(iter.get_pin(c));
+	    state.res.push_pin(iter.get_pin(c));
 	    return base_iertr::make_ready_future<LBABtree::repeat_indicator_t>(
 	      seastar::stop_iteration::no, std::nullopt);
 	  }
@@ -670,11 +678,16 @@ BtreeLBAManager::move_mappings(
 		       laddr,
 		       ext->get_laddr(),
 		       val);
-		return btree.insert(c, std::move(it), laddr, val, nullptr
-		).si_then([c, &state](auto p) {
-		  state.res.emplace_back(p.first.get_pin(c));
-		  return p.first.next(c);
-		});
+		if (!state.move_shadow()) {
+		  return btree.insert(c, std::move(it), laddr, val, nullptr
+		  ).si_then([c, &state](auto p) {
+		    state.res.push_pin(p.first.get_pin(c));
+		    return p.first.next(c);
+		  });
+		} else {
+		  return move_mappings_iertr::make_ready_future<
+		    LBABtree::iterator>(std::move(it));
+		}
 	      }).si_then([split_right, c, map_val, &btree, &state, FNAME](auto it) {
                 if (split_right) {
 		  ceph_assert(state.remapped_extents.size() == 1);
@@ -717,21 +730,21 @@ BtreeLBAManager::move_mappings(
 	  }
 	  return fut.si_then([&state, data_only](auto mappings) {
 	    if (!data_only) {
-	      ceph_assert(state.res.empty());
+	      ceph_assert(state.res.pins.empty());
 	    }
 	    for (auto &mapping : mappings) {
 	      auto start = mapping->get_key();
 	      auto end = mapping->get_key() + mapping->get_length();
 	      assert(start >= state.dst_base && end <= state.dst_base + state.length);
 	      if (!data_only) {
-		state.res.emplace_back(std::move(mapping));
+		state.res.push_pin(std::move(mapping));
 	      }
 	    }
 	  });
 	});
     }).si_then([](auto state) {
       return move_mappings_iertr::make_ready_future<
-	lba_pin_list_t>(std::move(state.res));
+	move_mappings_res_t>(std::move(state.res));
     });
 }
 
