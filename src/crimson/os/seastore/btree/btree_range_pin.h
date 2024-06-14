@@ -202,6 +202,20 @@ public:
     return parent->has_been_invalidated();
   }
 
+  bool is_extent_retired_by_trans(CachedExtent& extent, Transaction &t) const {
+    auto &pendings = extent.mutation_pendings;
+    auto trans_id = t.get_trans_id();
+    bool retired = (pendings.find(trans_id, trans_spec_view_t::cmp_t()) !=
+		    pendings.end());
+    if (!retired) {
+      auto &trans = extent.retired_transactions;
+      retired = (trans.find(trans_id, trans_spec_view_t::cmp_t()) !=
+		 trans.end());
+      assert(retired == t.is_retired(extent.get_paddr(), extent.get_length()));
+    }
+    return retired;
+  }
+
   get_child_ret_t<LogicalCachedExtent> get_logical_extent(Transaction&) final;
   bool is_stable() const final;
   bool is_data_stable() const final;

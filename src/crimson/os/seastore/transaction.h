@@ -126,14 +126,14 @@ public:
       ref->set_invalid(*this);
       write_set.erase(*ref);
       assert(ref->prior_instance);
-      retired_set.insert(ref->prior_instance);
+      retired_set.emplace(ref->prior_instance, trans_id);
       assert(read_set.count(ref->prior_instance->get_paddr()));
       ref->prior_instance.reset();
     } else {
       // && retired_set.count(ref->get_paddr()) == 0
       // If it's already in the set, insert here will be a noop,
       // which is what we want.
-      retired_set.insert(ref);
+      retired_set.emplace(ref, trans_id);
     }
   }
 
@@ -262,9 +262,9 @@ public:
     {
       auto where = retired_set.find(&placeholder);
       assert(where != retired_set.end());
-      assert(where->get() == &placeholder);
+      assert(where->extent.get() == &placeholder);
       where = retired_set.erase(where);
-      retired_set.emplace_hint(where, &extent);
+      retired_set.emplace_hint(where, &extent, trans_id);
     }
   }
 
@@ -321,13 +321,14 @@ public:
       return false;
     }
     auto iter = retired_set.lower_bound(paddr);
+    auto &extent = iter->extent;
     if (iter == retired_set.end() ||
-	(*iter)->get_paddr() > paddr) {
+	extent->get_paddr() > paddr) {
       assert(iter != retired_set.begin());
       --iter;
     }
-    auto retired_paddr = (*iter)->get_paddr();
-    auto retired_length = (*iter)->get_length();
+    auto retired_paddr = extent->get_paddr();
+    auto retired_length = extent->get_length();
     return retired_paddr <= paddr &&
       retired_paddr.add_offset(retired_length) >= paddr.add_offset(len);
   }
