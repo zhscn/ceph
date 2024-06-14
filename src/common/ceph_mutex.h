@@ -14,11 +14,11 @@
 // and make_recursive_mutex() factory methods, which take a string
 // naming the mutex for the purposes of the lockdep debug variant.
 
+#include "include/ceph_assert.h"
 #if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
 #include <seastar/core/condition-variable.hh>
 
 #include "crimson/common/log.h"
-#include "include/ceph_assert.h"
 
 #ifndef NDEBUG
 #define FUT_DEBUG(FMT_MSG, ...) crimson::get_logger(ceph_subsys_).trace(FMT_MSG, ##__VA_ARGS__)
