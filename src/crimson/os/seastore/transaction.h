@@ -321,12 +321,14 @@ public:
       return false;
     }
     auto iter = retired_set.lower_bound(paddr);
-    auto &extent = iter->extent;
     if (iter == retired_set.end() ||
-	extent->get_paddr() > paddr) {
-      assert(iter != retired_set.begin());
+	iter->extent->get_paddr() > paddr) {
+      if (iter == retired_set.begin()) {
+	return false;
+      }
       --iter;
     }
+    auto &extent = iter->extent;
     auto retired_paddr = extent->get_paddr();
     auto retired_length = extent->get_length();
     return retired_paddr <= paddr &&
