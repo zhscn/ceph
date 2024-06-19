@@ -76,8 +76,6 @@ struct rbm_metadata_header_t {
 		  shard_infos[i].start_offset % block_size == 0);
     }
     ceph_assert(config.spec.magic != 0);
-    ceph_assert(get_default_backend_of_device(config.spec.dtype) ==
-		backend_type_t::RANDOM_BLOCK);
     ceph_assert(config.spec.id <= DEVICE_ID_MAX_VALID);
   }
 };
