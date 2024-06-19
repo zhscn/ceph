@@ -1600,6 +1600,7 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
 #endif
               assert(e_key == extent->get_laddr());
               assert(e_len == extent->get_length());
+	      extent->reset_write_policy();
               ret.append(
                 bufferptr(
                   extent->get_bptr(),
