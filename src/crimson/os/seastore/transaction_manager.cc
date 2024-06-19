@@ -730,9 +730,23 @@ TransactionManager::demote_region(
   laddr_t prefix,
   extent_len_t max_demote_size)
 {
-  // TODO
-  return demote_region_iertr::make_ready_future<demote_region_res_t>(
-    demote_region_res_t{0, false});
+  return lba_manager->demote_region(
+    t,
+    prefix,
+    max_demote_size
+  ).si_then([&t, this](LBAManager::demote_region_result_t res) {
+    for (auto &i : res.retired_info) {
+      if (i.extent) {
+	cache->retire_extent(t, i.extent);
+      } else {
+	cache->retire_absent_extent_addr(t, i.paddr, i.length);
+      }
+    }
+    return demote_region_res_t{
+      res.demoted_size,
+      res.completed
+    };
+  });
 }
 
 TransactionManager::get_extents_if_live_ret
