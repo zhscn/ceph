@@ -175,9 +175,12 @@ seastar::future<> TMDriver::mkfs()
     return device->mkfs(
       device_config_t{
         true,
-        (magic_t)std::rand(),
-        device_type_t::SSD,
-        0,
+	device_spec_t{
+	  (magic_t)std::rand(),
+	  device_type_t::SSD,
+	  backend_type_t::SEGMENTED,
+	  0
+	},
         meta,
         secondary_device_set_t()});
   }).safe_then([this] {
