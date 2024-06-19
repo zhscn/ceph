@@ -702,6 +702,12 @@ TransactionManager::get_extents_if_live(
               LBAMappingRef &pin) -> Cache::get_extent_iertr::future<>
           {
             auto pin_paddr = pin->get_val();
+	    if (pin_paddr.get_device_id() != paddr.get_device_id()) {
+	      // FIXME: currently only support SSD as segment device
+	      // and HDD as RBM device.
+	      ceph_assert(!pin->has_shadow_mapping());
+	      return seastar::now();
+	    }
             auto &pin_seg_paddr = pin_paddr.as_seg_paddr();
             auto pin_paddr_seg_id = pin_seg_paddr.get_segment_id();
             auto pin_len = pin->get_length();
