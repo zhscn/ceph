@@ -721,7 +721,7 @@ struct transaction_manager_test_t :
 	  t,
 	  laddr_t::get_hint_from_offset(0),
 	  L_ADDR_MAX,
-	  [iter=overlay.begin(), &overlay](auto l, auto p, auto len) mutable {
+	  [iter=overlay.begin(), &overlay](auto l, auto p, auto s, auto len) mutable {
 	    EXPECT_NE(iter, overlay.end());
 	    logger().debug(
 	      "check_mappings: scan {}",
@@ -1769,7 +1769,7 @@ TEST_P(tm_random_block_device_test_t, scatter_allocation)
     laddr_t ADDR = laddr_t::get_hint_from_offset(0xFF * 4096);
     epm->prefill_fragmented_devices();
     auto t = create_transaction();
-    for (int i = 0; i < 1975; i++) {
+    for (int i = 0; i < 1958; i++) {
       auto extents = alloc_extents(t, ADDR + i * 16384, 16384, 'a');
     }
     alloc_extents_deemed_fail(t, ADDR + 1991 * 16384, 16384, 'a');

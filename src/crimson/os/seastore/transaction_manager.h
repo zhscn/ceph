@@ -473,7 +473,7 @@ public:
 	  }
 	}
 	fut = fut2.si_then([this, &t, &remaps, original_paddr,
-			    original_laddr, original_len,
+			    original_laddr, original_len, &pin,
 			    &extents, FNAME](auto ext) mutable {
 	  ceph_assert(full_extent_integrity_check
 	      ? (ext && ext->is_fully_loaded())
@@ -490,11 +490,19 @@ public:
 	  } else {
 	    cache->retire_absent_extent_addr(t, original_paddr, original_len);
 	  }
+	  if (pin->has_shadow_mapping()) {
+	    cache->retire_absent_extent_addr(t, pin->get_shadow_val(), original_len);
+	  }
 	  for (auto &remap : remaps) {
 	    auto remap_offset = remap.offset;
 	    auto remap_len = remap.len;
 	    auto remap_laddr = original_laddr + remap_offset;
 	    auto remap_paddr = original_paddr.add_offset(remap_offset);
+	    auto shadow_paddr = P_ADDR_NULL;
+	    if (pin->has_shadow_mapping()) {
+	      assert(pin->get_shadow_val() != P_ADDR_NULL);
+	      shadow_paddr = pin->get_shadow_val().add_offset(remap_offset);
+	    }
 	    ceph_assert(remap_len < original_len);
 	    ceph_assert(remap_offset + remap_len <= original_len);
 	    ceph_assert(remap_len != 0);
@@ -511,8 +519,20 @@ public:
 	      original_laddr,
 	      original_bptr);
 	    extents.emplace_back(std::move(extent));
+	    if (shadow_paddr != P_ADDR_NULL) {
+	      auto cold_ext = cache->alloc_remapped_extent<T>(
+	        t,
+		remap_laddr,
+		shadow_paddr,
+		remap_len,
+		original_laddr,
+		std::nullopt);
+	      boost::ignore_unused(cold_ext);
+	    }
 	  }
 	});
+      } else { // pin->is_indirect()
+	ceph_assert(!pin->has_shadow_mapping());
       }
       return fut.si_then([this, &t, &pin, &remaps, &extents] {
 	return lba_manager->remap_mappings(

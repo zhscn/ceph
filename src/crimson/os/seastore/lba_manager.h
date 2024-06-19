@@ -115,6 +115,7 @@ public:
     extent_ref_count_t refcount = 0;
     pladdr_t addr;
     extent_len_t length = 0;
+    paddr_t shadow_paddr;
   };
   using ref_iertr = base_iertr::extend<
     crimson::ct_error::enoent>;
@@ -190,7 +191,7 @@ public:
   using scan_mappings_iertr = base_iertr;
   using scan_mappings_ret = scan_mappings_iertr::future<>;
   using scan_mappings_func_t = std::function<
-    void(laddr_t, paddr_t, extent_len_t)>;
+    void(laddr_t, paddr_t, paddr_t, extent_len_t)>;
   virtual scan_mappings_ret scan_mappings(
     Transaction &t,
     laddr_t begin,

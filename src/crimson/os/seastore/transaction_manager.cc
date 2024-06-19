@@ -222,8 +222,15 @@ TransactionManager::ref_ret TransactionManager::remove(
            t, result.refcount, *ref);
     if (result.refcount == 0) {
       cache->retire_extent(t, ref);
+      if (result.shadow_paddr != P_ADDR_NULL) {
+	return cache->retire_extent_addr(
+	  t, result.shadow_paddr, ref->get_length()
+	).si_then([rc=result.refcount] {
+	  return ref_iertr::make_ready_future<extent_ref_count_t>(rc);
+	});
+      }
     }
-    return result.refcount;
+    return ref_iertr::make_ready_future<extent_ref_count_t>(result.refcount);
   });
 }
 
@@ -246,8 +253,16 @@ TransactionManager::ref_ret TransactionManager::_dec_ref(
       }
     }
 
-    return fut.si_then([result=std::move(result)] {
-      return result.refcount;
+    return fut.si_then([result=std::move(result), &t, this] {
+      if (result.shadow_paddr != P_ADDR_NULL &&
+	  result.refcount == 0) {
+	return cache->retire_extent_addr(
+	  t, result.shadow_paddr, result.length
+	).si_then([rc=result.refcount] {
+	  return ref_iertr::make_ready_future<extent_ref_count_t>(rc);
+	});
+      }
+      return ref_iertr::make_ready_future<extent_ref_count_t>(result.refcount);
     });
   });
 }

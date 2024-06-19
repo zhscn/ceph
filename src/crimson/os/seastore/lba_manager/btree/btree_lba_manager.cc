@@ -281,6 +281,7 @@ BtreeLBAManager::_get_mapping(
 	}
       }).si_then([this, c](auto pin) -> _get_mapping_ret {
 	if (pin->get_raw_val().is_laddr()) {
+	  ceph_assert(!pin->has_shadow_mapping());
 	  return seastar::do_with(
 	    std::move(pin),
 	    [this, c](auto &pin) {
@@ -375,7 +376,9 @@ BtreeLBAManager::_alloc_extents(
 	      alloc_info.len,
 	      pladdr_t(alloc_info.val),
 	      refcount,
-	      alloc_info.checksum},
+	      alloc_info.checksum,
+	      alloc_info.shadow_paddr
+	    },
 	    alloc_info.extent
 	  ).si_then([&state, c, addr, total_len, hint, FNAME,
 		    &alloc_info, &rets](auto &&p) {
@@ -511,7 +514,10 @@ BtreeLBAManager::scan_mappings(
 	  }
 	  ceph_assert((pos.get_key() + pos.get_val().len) > begin);
 	  if (pos.get_val().pladdr.is_paddr()) {
-	    f(pos.get_key(), pos.get_val().pladdr.get_paddr(), pos.get_val().len);
+	    f(pos.get_key(),
+	      pos.get_val().pladdr.get_paddr(),
+	      pos.get_val().shadow_paddr,
+	      pos.get_val().len);
 	  }
 	  return LBABtree::iterate_repeat_ret_inner(
 	    interruptible::ready_future_marker{},
@@ -568,11 +574,15 @@ BtreeLBAManager::update_mapping(
       assert(!addr.is_null());
       lba_map_val_t ret = in;
       ceph_assert(in.pladdr.is_paddr());
-      ceph_assert(in.pladdr.get_paddr() == prev_addr);
       ceph_assert(in.len == prev_len);
-      ret.pladdr = addr;
-      ret.len = len;
-      ret.checksum = checksum;
+      if (prev_addr == in.pladdr.get_paddr()) {
+	ret.pladdr = addr;
+	ret.len = len;
+	ret.checksum = checksum;
+      } else {
+	ceph_assert(in.shadow_paddr == prev_addr);
+	ret.shadow_paddr = addr;
+      }
       return ret;
     },
     nextent
@@ -678,7 +688,8 @@ BtreeLBAManager::_decref_intermediate(
 	    auto res = ref_update_result_t{
 	      val.refcount,
 	      val.pladdr,
-	      val.len
+	      val.len,
+	      val.shadow_paddr
 	    };
 	    return ref_iertr::make_ready_future<
 	      std::optional<ref_update_result_t>>(
@@ -741,7 +752,8 @@ BtreeLBAManager::update_refcount(
 	  ref_update_result_t{
 	    map_value.refcount,
 	    map_value.pladdr,
-	    map_value.len
+	    map_value.len,
+	    map_value.shadow_paddr
 	  },
 	  std::move(mapping)
 	};
