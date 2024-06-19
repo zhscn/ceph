@@ -1122,13 +1122,27 @@ seastar::future<> OSD::committed_osd_maps(
   ceph_assert(seastar::this_shard_id() == PRIMARY_CORE);
   INFO("osd.{} ({}, {})", whoami, first, last);
   // advance through the new maps
+  auto old_map = osdmap;
   return seastar::do_for_each(boost::make_counting_iterator(first),
                               boost::make_counting_iterator(last + 1),
-                              [this](epoch_t cur) {
+                              [this, old_map, FNAME](epoch_t cur) {
     return pg_shard_manager.get_local_map(
       cur
-    ).then([this](OSDMapService::local_cached_map_t&& o) {
+    ).then([this, old_map, FNAME](OSDMapService::local_cached_map_t&& o) {
       osdmap = make_local_shared_foreign(OSDMapService::local_cached_map_t(o));
+      std::set<int> old_osds;
+      old_map->get_all_osds(old_osds);
+      for (auto osd_id : old_osds) {
+	DEBUG("osd.{}: whoami ? {}, old up ? {} , now down ? {}",
+	  osd_id, osd_id != whoami,
+	  old_map->is_up(osd_id), osdmap->is_down(osd_id));
+	if (osd_id != whoami &&
+	    old_map->is_up(osd_id) &&
+	    osdmap->is_down(osd_id)) {
+	  DEBUG("osd.{}: mark osd.{} down", whoami, osd_id);
+	  cluster_msgr->mark_down(osdmap->get_cluster_addrs(osd_id).front());
+	}
+      }
       return pg_shard_manager.update_map(std::move(o));
     }).then([this] {
       if (get_shard_services().get_up_epoch() == 0 &&
@@ -1170,7 +1184,9 @@ seastar::future<> OSD::committed_osd_maps(
 	return seastar::now();
       }
     }
-    return fut.then([FNAME, this] {
+    return fut.then([this] {
+      return update_heartbeat_peers();
+    }).then([FNAME, this] {
       return check_osdmap_features().then([FNAME, this] {
         // yay!
         INFO("osd.{}: committed_osd_maps: broadcasting osdmaps up"
