@@ -18,7 +18,7 @@ void AvlAllocator::mark_extent_used(rbm_abs_addr addr, size_t size)
 void AvlAllocator::init(rbm_abs_addr addr, size_t size, size_t b_size) 
 {
   LOG_PREFIX(AvlAllocator::init);
-  DEBUG("addr: {}, size: {}", addr, size);
+  DEBUG("addr: {}, size: {}, node_size: {}", addr, size, sizeof(extent_range_t));
   auto r = new extent_range_t{ addr, addr + size };
   extent_tree.insert(*r);
   extent_size_tree.insert(*r);
@@ -192,7 +192,8 @@ std::optional<interval_set<rbm_abs_addr>> AvlAllocator::alloc_extent(
   assert(!result.empty());
   assert(result.num_intervals() == 1);
   for (auto p : result) {
-    DEBUG("result start: {}, end: {}", p.first, p.first + p.second);
+    DEBUG("result start: {}, end: {}, extent_tree_size: {}, extent_size_tree_size: {}",
+	 p.first, p.first + p.second, extent_tree.size(), extent_size_tree.size());
     if (detailed) {
       assert(!reserved_extent_tracker.contains(p.first, p.second));
       reserved_extent_tracker.insert(p.first, p.second);
