@@ -302,6 +302,83 @@ BtreeLBAManager::_get_mapping(
     });
 }
 
+BtreeLBAManager::promote_extent_ret
+BtreeLBAManager::promote_extent(
+  Transaction &t,
+  laddr_t laddr,
+  std::vector<LogicalCachedExtentRef> extents)
+{
+  LOG_PREFIX(BtreeLBAManager::promote_extent);
+  ceph_assert(!extents.empty());
+  ceph_assert(laddr == extents.front()->get_laddr());
+  DEBUGT("promote mapping {} with {} extents",
+	 t, laddr, extents.size());
+  struct state_t {
+    laddr_t laddr;
+    std::vector<LogicalCachedExtentRef> extents;
+    lba_map_val_t orig_val;
+    std::optional<LBABtree::iterator> iter;
+
+    state_t(laddr_t laddr, std::vector<LogicalCachedExtentRef> extents)
+      : laddr(laddr), extents(std::move(extents)),
+	orig_val(), iter(std::nullopt) {}
+  };
+  auto c = get_context(t);
+  return with_btree_state<LBABtree, state_t>(
+    cache,
+    c,
+    state_t(laddr, std::move(extents)),
+    [c, FNAME](LBABtree &btree, state_t &state) {
+      return btree.lower_bound(
+        c, state.laddr
+      ).si_then([c, &btree, &state, FNAME](LBABtree::iterator iter) {
+	ceph_assert(iter.get_key() == state.laddr);
+	state.orig_val = iter.get_val();
+	if (state.extents.size() == 1) {
+	  auto val = state.orig_val;
+	  ceph_assert(val.pladdr.is_paddr());
+	  val.shadow_paddr = val.pladdr.get_paddr();
+	  val.pladdr = pladdr_t(state.extents.front()->get_paddr());
+	  TRACET("promote {} from {} to {}",
+		 c.trans, iter.get_key(), state.orig_val, val);
+	  return btree.update(
+	    c,
+	    iter,
+	    val,
+	    state.extents.front().get()
+	  ).discard_result();
+	} else {
+	  TRACET("remove original mapping {} {}",
+		 c.trans, state.laddr, state.orig_val);
+	  return btree.remove(c, iter
+	  ).si_then([c, &btree, &state, FNAME](auto iter) {
+	    state.iter.emplace(std::move(iter));
+	    return trans_intr::do_for_each(
+	      state.extents,
+	      [c, &btree, &state, FNAME](LogicalCachedExtentRef &extent) {
+		auto offset = extent->get_laddr() - state.laddr;
+		auto val = state.orig_val;
+		val.shadow_paddr = val.pladdr.get_paddr().add_offset(offset);
+		val.pladdr = pladdr_t(extent->get_paddr());
+		val.len = extent->get_length();
+		val.checksum = extent->get_last_committed_crc();
+		TRACET("insert promoted mapping {} {}",
+		       c.trans, extent->get_laddr(), val);
+		return btree.insert(
+		  c, *state.iter, extent->get_laddr(), val, extent.get()
+	        ).si_then([c, &state](auto p) {
+		  ceph_assert(p.second);
+		  return p.first.next(c).si_then([&state](auto iter) {
+		    state.iter.emplace(iter);
+		  });
+		});
+	      });
+	  });
+	}
+      });
+    }).discard_result();
+}
+
 BtreeLBAManager::alloc_extents_ret
 BtreeLBAManager::_alloc_extents(
   Transaction &t,

@@ -105,6 +105,13 @@ public:
     laddr_t intermediate_key,
     laddr_t intermediate_base) = 0;
 
+  using promote_extent_iertr = base_iertr;
+  using promote_extent_ret = promote_extent_iertr::future<>;
+  virtual promote_extent_ret promote_extent(
+    Transaction &t,
+    laddr_t laddr,
+    std::vector<LogicalCachedExtentRef> extents) = 0;
+
   virtual alloc_extent_ret reserve_region(
     Transaction &t,
     laddr_t hint,

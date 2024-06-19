@@ -1634,6 +1634,10 @@ constexpr size_t BACKREF_NODE_SIZE = 4096;
 
 std::ostream &operator<<(std::ostream &out, extent_types_t t);
 
+constexpr bool support_shadow_extent(extent_types_t type) {
+  return type == extent_types_t::OBJECT_DATA_BLOCK;
+}
+
 constexpr bool is_logical_type(extent_types_t type) {
   switch (type) {
   case extent_types_t::ROOT:

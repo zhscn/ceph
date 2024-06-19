@@ -273,6 +273,11 @@ public:
     }
   };
 
+  promote_extent_ret promote_extent(
+    Transaction &t,
+    laddr_t laddr,
+    std::vector<LogicalCachedExtentRef> extents) final;
+
   alloc_extent_ret reserve_region(
     Transaction &t,
     laddr_t hint,
