@@ -118,6 +118,38 @@ public:
     extent_len_t len,
     bool determinsitic) = 0;
 
+  struct demote_region_result_t {
+    struct retired_info_t {
+      LogicalCachedExtent *extent;
+      laddr_t laddr;
+      paddr_t paddr;
+      extent_len_t length;
+
+      retired_info_t(
+        LogicalCachedExtent *extent,
+	laddr_t laddr,
+	paddr_t paddr,
+	extent_len_t length)
+	: extent(extent),
+	  laddr(laddr),
+	  paddr(paddr),
+	  length(length) {}
+    };
+
+    std::vector<retired_info_t> retired_info;
+    extent_len_t demoted_size = 0;
+    extent_len_t proceed_size = 0;
+    bool completed = false;
+  };
+
+  using demote_region_iertr = base_iertr;
+  using demote_region_ret = demote_region_iertr::future<
+    demote_region_result_t>;
+  virtual demote_region_ret demote_region(
+    Transaction &t,
+    laddr_t prefix,
+    extent_len_t max_demote_size) = 0;
+
   struct ref_update_result_t {
     extent_ref_count_t refcount = 0;
     pladdr_t addr;

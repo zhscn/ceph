@@ -591,6 +591,10 @@ public:
 private:
   Cache &cache;
 
+  demote_region_ret demote_region(
+    Transaction &t,
+    laddr_t prefix,
+    extent_len_t max_discard_size) final;
 
   struct {
     uint64_t num_alloc_extents = 0;
