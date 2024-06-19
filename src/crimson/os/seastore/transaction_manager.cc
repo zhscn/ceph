@@ -624,6 +624,21 @@ TransactionManager::rewrite_logical_extent(
   }
 }
 
+TransactionManager::maybe_load_onode_ret
+TransactionManager::maybe_load_onode(
+  Transaction &t,
+  laddr_t laddr,
+  extent_types_t type)
+{
+  return lba_manager->prefix_contains_shadow_mapping(t, laddr
+  ).si_then([this, laddr, type](auto res) {
+    if (res) {
+      nv_cache->move_to_top(laddr, type, true);
+    }
+    return seastar::now();
+  });
+}
+
 TransactionManager::rewrite_extent_ret TransactionManager::rewrite_extent(
   Transaction &t,
   CachedExtentRef extent,

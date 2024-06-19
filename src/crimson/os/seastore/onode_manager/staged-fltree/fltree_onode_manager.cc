@@ -339,6 +339,61 @@ FLTreeOnodeManager::get_latest_snap_ret FLTreeOnodeManager::get_latest_snap(
     });
 }
 
+FLTreeOnodeManager::scan_onodes_ret FLTreeOnodeManager::scan_onodes(
+  Transaction &trans,
+  const ghobject_t &marker,
+  int limit,
+  scan_onodes_func_t &&func)
+{
+  return tree.lower_bound(trans, marker
+  ).si_then([this, limit, &trans, func=std::move(func)](auto &&cursor) mutable {
+    return seastar::do_with(
+      std::move(cursor),
+      std::vector<laddr_t>(),
+      std::move(func),
+      std::optional<ghobject_t>(std::nullopt),
+      [this, limit, &trans](auto &cursor,
+                            auto &laddrs,
+                            auto &func,
+                            auto &res) {
+        return trans_intr::repeat([this, limit, &trans, &cursor, &laddrs, &res] {
+          if (cursor.is_end()) {
+            res.reset();
+            return scan_onodes_iertr::make_ready_future<
+              seastar::stop_iteration>(seastar::stop_iteration::yes);
+          } else if (laddrs.size() >= limit) {
+            res.emplace(cursor.get_ghobj());
+            return scan_onodes_iertr::make_ready_future<
+              seastar::stop_iteration>(seastar::stop_iteration::yes);
+          }
+          auto onode = FLTreeOnode(default_data_reservation, cursor.value());
+          const auto &obj_data = onode.get_layout().object_data.get();
+          if (obj_data.is_null()) {
+            return scan_onodes_iertr::make_ready_future<
+              seastar::stop_iteration>(seastar::stop_iteration::no);
+          }
+          auto laddr = obj_data.get_reserved_data_base();
+          if (laddrs.empty() || laddrs.back() != laddr) {
+            laddrs.push_back(laddr);
+          }
+          return tree.get_next(trans, cursor
+          ).si_then([&cursor](auto &&next) {
+            cursor = next;
+            return scan_onodes_iertr::make_ready_future<
+              seastar::stop_iteration>(seastar::stop_iteration::no);
+          });
+        }).si_then([&laddrs, &func] {
+          return trans_intr::parallel_for_each(laddrs, [&func](auto &laddr) {
+            return func(laddr);
+          });
+        }).si_then([&res] {
+          return scan_onodes_iertr::make_ready_future<
+            std::optional<ghobject_t>>(std::move(res));
+        });
+      });
+  });
+}
+
 FLTreeOnodeManager::~FLTreeOnodeManager() {}
 
 }
