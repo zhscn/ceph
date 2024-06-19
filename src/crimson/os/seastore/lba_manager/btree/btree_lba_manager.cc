@@ -240,6 +240,40 @@ BtreeLBAManager::get_mappings(
     });
 }
 
+BtreeLBAManager::base_iertr::future<bool>
+BtreeLBAManager::prefix_contains_shadow_mapping(
+  Transaction &t,
+  laddr_t laddr)
+{
+  auto c = get_context(t);
+  return with_btree_state<LBABtree, bool>(
+    cache,
+    c,
+    false,
+    [c, laddr](LBABtree &btree, bool &res) {
+      return LBABtree::iterate_repeat(
+        c,
+	btree.lower_bound(c, laddr),
+	[laddr, &res](LBABtree::iterator iter) {
+	  if (iter.is_end() ||
+	      iter.get_key().get_object_prefix() != laddr.get_object_prefix()) {
+	    return base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+	        seastar::stop_iteration::yes, std::nullopt);
+	  } else if (iter.get_val().shadow_paddr != P_ADDR_NULL) {
+	    res = true;
+	    return base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+	        seastar::stop_iteration::yes, std::nullopt);
+	  } else {
+	    return base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+	        seastar::stop_iteration::no, std::nullopt);
+	  }
+	});
+    });
+}
+
 BtreeLBAManager::get_mapping_ret
 BtreeLBAManager::get_mapping(
   Transaction &t,
