@@ -291,6 +291,37 @@ seastar::future<> SeaStore::Shard::mount_managers()
   init_managers();
   return transaction_manager->mount(
   ).safe_then([this] {
+    if (transaction_manager->hash_multiple_tiers()) {
+      return seastar::do_with(
+        ghobject_t(),
+	[this](ghobject_t &marker) {
+	  return crimson::repeat([this, &marker] {
+	    return transaction_manager->with_transaction_weak(
+	      "scan_onode_tree",
+	      [this, &marker](auto &t) {
+		return onode_manager->scan_onodes(
+		  t,
+		  marker,
+		  10,
+		  [this, &t](laddr_t prefix) {
+		    return transaction_manager->maybe_load_onode(
+		      t, prefix, extent_types_t::OBJECT_DATA_BLOCK);
+		  });
+	      }).safe_then([&marker](auto res) {
+		if (res) {
+		  marker = *res;
+		  return seastar::make_ready_future<
+		    seastar::stop_iteration>(seastar::stop_iteration::no);
+		} else {
+		  return seastar::make_ready_future<
+		    seastar::stop_iteration>(seastar::stop_iteration::yes);
+		}
+	      });
+	  });
+	});
+    }
+    return TransactionManager::base_ertr::make_ready_future();
+  }).safe_then([this] {
     transaction_manager->start_background();
   }).handle_error(
     crimson::ct_error::assert_all{

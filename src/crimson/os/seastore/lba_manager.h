@@ -73,6 +73,10 @@ public:
     Transaction &t,
     laddr_t offset) = 0;
 
+  virtual base_iertr::future<bool> prefix_contains_shadow_mapping(
+    Transaction &t,
+    laddr_t prefix) = 0;
+
   /**
    * Allocates a new mapping referenced by LBARef
    *
