@@ -415,7 +415,8 @@ public:
     assert(gen == INIT_GENERATION || hint == placement_hint_t::REWRITE);
 
     data_category_t category = get_extent_category(type);
-    gen = adjust_generation(category, type, hint, gen, is_tracked);
+    auto policy = write_policy_t::WRITE_BACK;
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
 
     paddr_t addr;
 #ifdef UNIT_TESTS_BUILT
@@ -465,6 +466,7 @@ public:
     extent_types_t type,
     extent_len_t length,
     placement_hint_t hint,
+    write_policy_t policy,
 #ifdef UNIT_TESTS_BUILT
     rewrite_gen_t gen,
     std::optional<paddr_t> external_paddr = std::nullopt,
@@ -479,7 +481,7 @@ public:
     assert(gen == INIT_GENERATION || hint == placement_hint_t::REWRITE);
 
     data_category_t category = get_extent_category(type);
-    gen = adjust_generation(category, type, hint, gen, is_tracked);
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
     assert(gen != INLINE_GENERATION);
 
     // XXX: bp might be extended to point to different memory (e.g. PMem)
@@ -543,6 +545,7 @@ public:
       get_extent_category(type),
       type,
       extent.get_user_hint(),
+      extent.get_write_policy(),
       extent.get_rewrite_generation(),
       false);
     return gen >= MIN_COLD_GENERATION;
@@ -666,6 +669,7 @@ private:
       data_category_t category,
       extent_types_t type,
       placement_hint_t hint,
+      write_policy_t policy,
       rewrite_gen_t gen,
       bool is_tracked) {
     if (type == extent_types_t::ROOT) {
@@ -695,17 +699,28 @@ private:
         }
       } else {
         assert(category == data_category_t::DATA);
-        gen = OOL_GENERATION;
+        if (background_process.has_cold_tier() &&
+            policy == write_policy_t::WRITE_THROUGH) {
+          gen = MIN_COLD_GENERATION;
+        } else {
+          gen = OOL_GENERATION;
+        }
       }
     } else if (background_process.has_cold_tier()) {
-      gen = background_process.adjust_generation(gen);
+      if (category == data_category_t::DATA &&
+          policy == write_policy_t::WRITE_THROUGH) {
+        gen = MIN_COLD_GENERATION;
+      } else {
+        gen = background_process.adjust_generation(gen);
+      }
     }
 
     if (gen > dynamic_max_rewrite_generation) {
       gen = dynamic_max_rewrite_generation;
     }
 
-    if (is_tracked && gen >= MIN_COLD_GENERATION) {
+    if (is_tracked && gen >= MIN_COLD_GENERATION
+        && policy != write_policy_t::WRITE_THROUGH) {
       gen = MIN_COLD_GENERATION - 1;
     }
 

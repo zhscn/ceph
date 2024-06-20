@@ -196,13 +196,15 @@ public:
             paddr_t paddr,
             placement_hint_t hint,
             rewrite_gen_t gen,
-	    transaction_id_t trans_id) {
+	    transaction_id_t trans_id,
+	    write_policy_t policy) {
     assert(gen == NULL_GENERATION || is_rewrite_generation(gen));
     state = _state;
     set_paddr(paddr);
     user_hint = hint;
     rewrite_generation = gen;
     pending_for_transaction = trans_id;
+    write_policy = policy;
   }
 
   void set_modify_time(sea_time_point t) {
@@ -350,6 +352,7 @@ public:
 	<< ", last_committed_crc=" << last_committed_crc
 	<< ", refcount=" << use_count()
 	<< ", user_hint=" << user_hint
+	<< ", write_policy=" << write_policy
 	<< ", fully_loaded=" << is_fully_loaded()
 	<< ", rewrite_gen=" << rewrite_gen_printer_t{rewrite_generation};
     if (state != extent_state_t::INVALID &&
@@ -660,6 +663,18 @@ public:
     cache_state = state;
   }
 
+  write_policy_t get_write_policy() const {
+    return write_policy;
+  }
+
+  void set_write_policy(write_policy_t w) {
+    write_policy = w;
+  }
+
+  void reset_write_policy() {
+    write_policy = write_policy_t::WRITE_BACK;
+  }
+
 private:
   template <typename T>
   friend class read_set_item_t;
@@ -745,6 +760,8 @@ private:
   read_set_item_t<Transaction>::trans_set_t transactions;
 
   placement_hint_t user_hint = PLACEMENT_HINT_NULL;
+
+  write_policy_t write_policy = write_policy_t::WRITE_BACK;
 
   // the target rewrite generation for the followup rewrite
   // or the rewrite generation for the fresh write
