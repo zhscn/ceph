@@ -1638,8 +1638,8 @@ SeaStore::Shard::_do_transaction_step(
 	auto &layout = onodes[op->oid]->get_layout();
 	auto laddr = layout.object_data.get().get_reserved_data_base();
 	auto id = layout.local_clone_id;
-	removed_info.emplace(i.get_oid(op->oid), removed_info_t{laddr, id});
-        return _remove(ctx, onodes[op->oid]
+	auto p = removed_info.emplace(i.get_oid(op->oid), removed_info_t{laddr, id});
+        return _remove(ctx, p.first->first, onodes[op->oid]
 	).si_then([&onodes, &d_onodes, op] {
 	  onodes[op->oid].reset();
 	  d_onodes[op->oid].reset();
@@ -1935,10 +1935,13 @@ SeaStore::Shard::_remove_omaps(
 SeaStore::Shard::tm_ret
 SeaStore::Shard::_remove(
   internal_context_t &ctx,
+  const ghobject_t &hobj,
   OnodeRef &onode)
 {
   LOG_PREFIX(SeaStore::_remove);
   DEBUGT("onode={}", *ctx.transaction, *onode);
+  auto prefix = onode->get_layout().object_data.get()
+    .get_reserved_data_base().get_object_prefix();
   return _remove_omaps(
     ctx,
     onode,
@@ -1961,8 +1964,28 @@ SeaStore::Shard::_remove(
 	    *onode,
 	  });
     });
-  }).si_then([this, &ctx, onode]() mutable {
-    return onode_manager->erase_onode(*ctx.transaction, onode);
+  }).si_then([this, &ctx, &hobj, onode, prefix]() mutable {
+    return onode_manager->erase_onode(*ctx.transaction, onode
+    ).si_then([this, &ctx, &hobj, prefix] {
+      return seastar::do_with(
+        hobj, hobj,
+	[this, &ctx, prefix](auto &start, auto &end) {
+	  start.hobj.snap = 0;
+	  end.hobj.snap = CEPH_SNAPDIR;
+	  return onode_manager->contains_onode(
+	    *ctx.transaction,
+	    start,
+	    end
+	  ).si_then([&ctx, prefix](auto result) {
+	    if (!result) {
+	      ctx.transaction->update_obj_info(
+	        prefix,
+		extent_types_t::OBJECT_DATA_BLOCK,
+		Transaction::obj_op_t::REMOVE);
+	    }
+	  });
+	});
+    });
   }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
     crimson::ct_error::assert_all(
