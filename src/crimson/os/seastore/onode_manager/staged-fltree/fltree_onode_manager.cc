@@ -146,6 +146,21 @@ FLTreeOnodeManager::contains_onode_ret FLTreeOnodeManager::contains_onode(
   return tree.contains(trans, hoid);
 }
 
+FLTreeOnodeManager::contains_onode_ret FLTreeOnodeManager::contains_onode(
+  Transaction &trans,
+  const ghobject_t &start,
+  const ghobject_t &end)
+{
+  return tree.lower_bound(trans, start
+  ).si_then([&start, &end](auto cursor) {
+    if (cursor.is_end()) {
+      return false;
+    }
+    const auto &hobj = cursor.get_ghobj();
+    return hobj >= start && hobj <= end;
+  });
+}
+
 FLTreeOnodeManager::get_onode_ret FLTreeOnodeManager::get_onode(
   Transaction &trans,
   const ghobject_t &hoid)

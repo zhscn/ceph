@@ -1085,6 +1085,9 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
 {
   ceph_assert(!object_data.is_null());
   ceph_assert(size <= object_data.get_reserved_data_len());
+  ctx.t.update_obj_info(
+    object_data.get_reserved_data_base().get_object_prefix(),
+    extent_types_t::OBJECT_DATA_BLOCK);
   return seastar::do_with(
     lba_pin_list_t(),
     extent_to_write_list_t(),
@@ -1406,6 +1409,9 @@ ObjectDataHandler::zero_ret ObjectDataHandler::zero(
 	ctx.hint,
 	p2roundup(offset + len, ctx.tm.get_block_size())
       ).si_then([this, ctx, offset, len, &object_data] {
+	ctx.t.update_obj_info(
+	  object_data.get_reserved_data_base().get_object_prefix(),
+	  extent_types_t::OBJECT_DATA_BLOCK);
 	auto [logical_offset, length] = laddr_t::get_aligned_range(
 	  object_data.get_reserved_data_base(), offset, len);
 	return ctx.tm.get_pins(
@@ -1506,6 +1512,20 @@ ObjectDataHandler::read_ret ObjectDataHandler::read(
         // offset~len falls within reserved region and len > 0
         ceph_assert(_pins.size() >= 1);
         ceph_assert((*_pins.begin())->get_key() <= l_start);
+
+	if (ctx.tm.support_non_volatile_cache()) {
+	  auto prefix = l_start.get_base().get_object_prefix();
+	  bool all_cold = true;
+	  for (auto &pin : _pins) {
+	    if (!pin->get_val().is_absolute()) {
+	      continue;
+	    }
+	    all_cold &= ctx.tm.is_cold_device(pin->get_val().get_device_id());
+	  }
+	  ctx.tm.update_non_volatile_cache(
+	    prefix, extent_types_t::OBJECT_DATA_BLOCK, all_cold);
+	}
+
         auto l_end = l_start + len;
         return seastar::do_with(
           std::move(_pins),
