@@ -182,7 +182,8 @@ struct object_data_handler_test_t:
 	      nullptr,
 	      onode->get_data_hint()
 	    },
-	    offset);
+	    offset,
+	    true);
 	});
       }).unsafe_get0();
     }
