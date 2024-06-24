@@ -222,7 +222,8 @@ public:
   using truncate_ret = truncate_iertr::future<>;
   truncate_ret truncate(
     context_t ctx,
-    objaddr_t offset);
+    objaddr_t offset,
+    bool clear_object_data);
 
   /// Clears data and reservation
   using clear_iertr = base_iertr;
