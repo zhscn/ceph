@@ -1688,11 +1688,12 @@ ObjectDataHandler::fiemap_ret ObjectDataHandler::fiemap(
 
 ObjectDataHandler::truncate_ret ObjectDataHandler::truncate(
   context_t ctx,
-  objaddr_t offset)
+  objaddr_t offset,
+  bool clear_object_data)
 {
   return with_object_data(
     ctx,
-    [this, ctx, offset](auto &object_data) {
+    [this, ctx, offset, clear_object_data](auto &object_data) {
       LOG_PREFIX(ObjectDataHandler::truncate);
       DEBUGT("truncating {}~{} offset: {}",
 	     ctx.t,
@@ -1700,7 +1701,17 @@ ObjectDataHandler::truncate_ret ObjectDataHandler::truncate(
 	     object_data.get_reserved_data_len(),
 	     offset);
       if (offset < object_data.get_reserved_data_len()) {
-	return trim_data_reservation(ctx, object_data, offset);
+	auto hint = object_data.get_reserved_data_base();
+	auto length = object_data.get_reserved_data_len();
+	return trim_data_reservation(ctx, object_data, offset
+	).si_then([this, ctx, offset, clear_object_data, hint, length, &object_data]() mutable {
+	  if (offset == 0 && !clear_object_data) {
+	    ctx.determinsitic = true;
+	    return prepare_data_reservation(ctx, object_data, hint, length);
+	  } else {
+	    return truncate_iertr::now();
+	  }
+	});
       } else if (offset > object_data.get_reserved_data_len()) {
 	return prepare_data_reservation(
 	  ctx,

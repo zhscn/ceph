@@ -2249,6 +2249,9 @@ SeaStore::Shard::_truncate(
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
     [=, this, &ctx, &onode](auto &objhandler) {
+    // only clear the onode base when  this object doesn't have snapshots
+    bool clear_object_data = size == 0 &&
+      onode->get_layout().local_snap_id == 0;
     return objhandler.truncate(
       ObjectDataHandler::context_t{
         *transaction_manager,
@@ -2257,7 +2260,8 @@ SeaStore::Shard::_truncate(
 	nullptr,
 	onode->get_data_hint()
       },
-      size);
+      size,
+      clear_object_data);
   });
 }
 
