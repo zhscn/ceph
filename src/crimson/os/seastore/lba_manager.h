@@ -195,6 +195,22 @@ public:
     remap_extent_func_t func) = 0;
 
   /**
+   * merge_mappings
+   *
+   * replace indirect mappings within the range dst_base~length
+   * with their corresponding intermediate mappings within the
+   * range src_base~length.
+   */
+  using merge_mappings_iertr = base_iertr;
+  using merge_mappings_ret = merge_mappings_iertr::future<lba_pin_list_t>;
+  virtual merge_mappings_ret merge_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    remap_extent_func_t func) = 0;
+
+  /**
    * Should be called after replay on each cached extent.
    * Implementation must initialize the LBAMapping on any
    * LogicalCachedExtent's and may also read in any dependent
