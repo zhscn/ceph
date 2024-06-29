@@ -517,8 +517,7 @@ public:
 	    }
 	  }
 	  return base_iertr::make_ready_future<TCachedExtentRef<T>>();
-	}).si_then([this, &t, &remaps, original_paddr,
-			    original_laddr, original_len,
+	}).si_then([this, &t, &remaps, original_paddr, original_len,
 			    &extents, FNAME](auto ext) mutable {
 	  ceph_assert(full_extent_integrity_check
 	      ? (ext && ext->is_fully_loaded())
@@ -556,7 +555,7 @@ public:
 	  for (auto &remap : remaps) {
 	    auto remap_offset = remap.offset;
 	    auto remap_len = remap.len;
-	    auto remap_laddr = original_laddr + remap_offset;
+	    auto remap_laddr = remap.dst_laddr;
 	    auto remap_paddr = original_paddr.add_offset(remap_offset);
 	    ceph_assert(remap_len < original_len);
 	    ceph_assert(remap_offset + remap_len <= original_len);
@@ -576,8 +575,8 @@ public:
 	      t,
 	      remap_laddr,
 	      remap_paddr,
+	      remap_offset,
 	      remap_len,
-	      original_laddr,
 	      original_bptr,
 	      std::move(orig_hint),
 	      std::move(orig_gen));
