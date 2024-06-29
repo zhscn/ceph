@@ -700,6 +700,105 @@ public:
       intermediate_key);
   }
 
+  using remap_extent_iertr = base_iertr;
+  template <typename T>
+  remap_extent_iertr::future<std::list<LogicalCachedExtentRef>>
+  remap_extent(
+    Transaction &t,
+    LogicalCachedExtentRef extent,
+    LBAMappingRef mapping,
+    std::vector<LBAManager::remap_entry> remaps) {
+    auto paddr = mapping->get_val();
+    std::optional<placement_hint_t> orig_hint = std::nullopt;
+    std::optional<rewrite_gen_t> orig_gen = std::nullopt;
+    auto fut = base_iertr::make_ready_future<TCachedExtentRef<T>>();
+    bool rbm_mutable_ext = false;
+    interval_set<rbm_abs_addr> free_intervals;
+    if (extent) {
+      if (extent->is_mutable()) {
+	orig_gen = extent->get_rewrite_generation();
+	orig_hint = extent->get_user_hint();
+	if (extent->get_paddr().get_addr_type() ==
+	    paddr_types_t::RANDOM_BLOCK) {
+	  extent->reclaim_paddr();
+	  free_intervals.insert(
+	    paddr.as_blk_paddr().get_device_off(),
+	    extent->get_length());
+	  rbm_mutable_ext = true;
+	}
+      }
+      cache->retire_extent(t, extent);
+      fut = remap_extent_iertr::make_ready_future<
+	TCachedExtentRef<T>>(extent->template cast<T>());
+    } else if (full_extent_integrity_check) {
+      fut =  read_pin<T>(t, std::move(mapping)
+      ).si_then([this, &t](auto ext) {
+	cache->retire_extent(t, ext);
+	return remap_extent_iertr::make_ready_future<
+	  TCachedExtentRef<T>>(ext);
+      });
+    } else {
+      fut = cache->retire_extent_addr(
+	t, mapping->get_val(), mapping->get_length()
+      ).si_then([] {
+	return remap_extent_iertr::make_ready_future<
+	  TCachedExtentRef<T>>();
+      });
+    }
+    return fut.si_then([this, &t, paddr, orig_gen, orig_hint, rbm_mutable_ext,
+			free_intervals, remaps=std::move(remaps)]
+			(auto extent) mutable {
+      std::list<LogicalCachedExtentRef> res{};
+      for (auto &remap : remaps) {
+	auto remap_laddr = remap.dst_laddr;
+	auto remap_paddr = paddr.add_offset(remap.offset);
+	auto ext = cache->alloc_remapped_extent<T>(
+	      t,
+	      remap_laddr,
+	      remap_paddr,
+	      remap.offset,
+	      remap.len,
+	      (extent && extent->is_fully_loaded())
+	      ? std::make_optional(extent->get_bptr())
+	      : std::nullopt,
+	      std::move(orig_hint),
+	      std::move(orig_gen));
+	res.emplace_back(std::move(ext));
+	if (rbm_mutable_ext) {
+	  free_intervals.erase(
+	    remap_paddr.as_blk_paddr().get_device_off(),
+	    remap.len);
+	}
+      }
+      for (auto [off, len] : free_intervals) {
+	// We must reclaim the paddr here, otherwise the alloc/free
+	// order would be lost when commit the transaction
+	paddr.as_blk_paddr().set_device_off(off);
+	epm->mark_space_free(paddr, len);
+      }
+      return remap_extent_iertr::make_ready_future<
+	std::list<LogicalCachedExtentRef>>(std::move(res));
+    });
+  }
+
+  using merge_mappings_iertr = LBAManager::merge_mappings_iertr;
+  using merge_mappings_ret = LBAManager::merge_mappings_ret;
+  template <typename T>
+  merge_mappings_ret merge_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length)
+  {
+    return lba_manager->merge_mappings(
+      t, src_base, dst_base, length,
+      [this, &t](LogicalCachedExtent* extent,
+		 LBAMappingRef mapping,
+		 std::vector<LBAManager::remap_entry> remaps) {
+      return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
+    });
+  }
+
   using move_mappings_iertr = LBAManager::move_mappings_iertr;
   using move_mappings_ret = LBAManager::move_mappings_ret;
   template <typename T>
@@ -714,50 +813,8 @@ public:
       t, src_base, dst_base, length, data_only,
       [this, &t](LogicalCachedExtent *extent,
 		 LBAMappingRef mapping,
-		 std::vector<LBAManager::remap_entry> remaps)
-            -> move_mappings_iertr::future<std::list<LogicalCachedExtentRef>> {
-	auto laddr = mapping->get_key();
-	auto paddr = mapping->get_val();
-	auto fut = [this, &t, extent, mapping=std::move(mapping)]() mutable {
-	  if (extent) {
-	    cache->retire_extent(t, extent);
-	    return move_mappings_iertr::make_ready_future<
-	      TCachedExtentRef<T>>(extent->template cast<T>());
-	  } else if (full_extent_integrity_check) {
-	    return read_pin<T>(t, std::move(mapping)
-	    ).si_then([this, &t](auto ext) {
-	      cache->retire_extent(t, ext);
-	      return move_mappings_iertr::make_ready_future<
-		TCachedExtentRef<T>>(ext);
-	    });
-	  } else {
-	    return cache->retire_extent_addr(
-	      t, mapping->get_val(), mapping->get_length()
-	    ).si_then([] {
-	      return move_mappings_iertr::make_ready_future<
-		TCachedExtentRef<T>>();
-	    });
-	  }
-	};
-	return fut().si_then([this, &t, laddr, paddr,
-			      remaps=std::move(remaps)](auto extent) {
-	  std::list<LogicalCachedExtentRef> res{};
-	  for (auto &remap : remaps) {
-	    auto remap_laddr = laddr + remap.offset;
-	    auto ext = cache->alloc_remapped_extent<T>(
-                  t,
-		  remap_laddr,
-		  paddr.add_offset(remap.offset),
-		  remap.len,
-                  laddr,
-		  (extent && extent->is_fully_loaded())
-		  ? std::make_optional(extent->get_bptr())
-		  : std::nullopt);
-	    res.emplace_back(std::move(ext));
-	  }
-	  return move_mappings_iertr::make_ready_future<
-	    std::list<LogicalCachedExtentRef>>(std::move(res));
-	});
+		 std::vector<LBAManager::remap_entry> remaps) {
+	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
       });
   }
 
