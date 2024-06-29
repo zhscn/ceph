@@ -456,6 +456,13 @@ public:
     bool direct_mapping_only,
     remap_extent_func_t func) final;
 
+  merge_mappings_ret merge_mappings(
+    Transaction &t,
+    laddr_t src_base,
+    laddr_t dst_base,
+    extent_len_t length,
+    remap_extent_func_t func) final;
+
   ref_ret decref_extent(
     Transaction &t,
     laddr_t addr) final {
@@ -664,7 +671,6 @@ private:
 	remap_extent(std::move(func)), res(), mappings(), remapped_extents()
     {}
   };
-
   move_mappings_iertr::future<LBABtree::iterator>
   _move_mapping_without_remap(
     op_context_t<laddr_t> c,
@@ -690,6 +696,46 @@ private:
     BtreeLBAManager::move_mapping_state_t &state,
     LBABtree::iterator it,
     bool left);
+
+  struct merge_mapping_state_t {
+    laddr_t src_base;
+    laddr_t dst_base;
+    extent_len_t length;
+    remap_extent_func_t remap_extent;
+    lba_pin_list_t src_pins;
+    lba_pin_list_t res;
+    lba_pin_list_t::const_iterator src_it;
+    std::list<LogicalCachedExtentRef> remapped_extents;
+
+    laddr_t get_src_end() const { return src_base + length; }
+    laddr_t get_dst_end() const { return dst_base + length; }
+
+    merge_mapping_state_t(
+      laddr_t src_base, laddr_t dst_base, extent_len_t length,
+      remap_extent_func_t func, lba_pin_list_t src_pins)
+      : src_base(src_base), dst_base(dst_base), length(length),
+	remap_extent(std::move(func)),
+	src_pins(std::move(src_pins)),
+	src_it(this->src_pins.begin())
+    {}
+  };
+
+  merge_mappings_iertr::future<>
+  _force_remove_mappings_on_merge(
+    op_context_t<laddr_t> c,
+    merge_mapping_state_t &state,
+    LBABtree &btree);
+
+  merge_mappings_iertr::future<LBABtree::iterator>
+  _merge_mapping(
+    op_context_t<laddr_t> c,
+    LBABtree::iterator &&iter,
+    merge_mapping_state_t &state,
+    laddr_t key,
+    lba_map_val_t val,
+    laddr_t intermediate_key,
+    LBABtree &btree);
+
 
   seastar::metrics::metric_group metrics;
   void register_metrics();
