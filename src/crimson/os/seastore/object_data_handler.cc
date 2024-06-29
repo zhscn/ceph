@@ -132,6 +132,7 @@ struct extent_to_remap_t {
   remap_entry create_remap_entry() {
     assert(is_remap1());
     return remap_entry(
+      pin->get_key() + new_offset,
       new_offset,
       new_len);
   }
@@ -139,6 +140,7 @@ struct extent_to_remap_t {
   remap_entry create_left_remap_entry() {
     assert(is_remap2());
     return remap_entry(
+      pin->get_key(),
       0,
       new_offset);
   }
@@ -146,6 +148,7 @@ struct extent_to_remap_t {
   remap_entry create_right_remap_entry() {
     assert(is_remap2());
     return remap_entry(
+      pin->get_key() + new_offset + new_len,
       new_offset + new_len,
       pin->get_length() - new_offset - new_len);
   }
@@ -1888,12 +1891,15 @@ ObjectDataHandler::clone_ret ObjectDataHandler::_clone_range(
 	  ceph_assert(srcoff >= s_pin_base - s_data_base);
 	  ceph_assert(srcoff + length <= d_pin_end - d_data_base);
 	  ceph_assert(srcoff + length <= s_pin_end - s_data_base);
-	  TransactionManager::remap_entry left(0, 0), right(0, 0);
+	  TransactionManager::remap_entry left(L_ADDR_NULL, 0, 0),
+					  right(L_ADDR_NULL, 0, 0);
 	  if (clone_start > d_pin_base) {
+	    left.dst_laddr = d_pin_base;
 	    left.len = clone_start - d_pin_base;
 	  }
 	  if (clone_end < d_pin_end) {
 	    right.offset = clone_end - d_pin_last;
+	    right.dst_laddr = d_pin_last + right.offset;
 	    right.len = d_pin_end - clone_end;
 	  }
 	  auto fut = TransactionManager::remap_pin_iertr::now();

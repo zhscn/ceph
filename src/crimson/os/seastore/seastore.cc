@@ -1877,6 +1877,10 @@ SeaStore::Shard::_rename(
     auto olen = object_data.get_reserved_data_len();
     object_data_t n_object_data(obase, olen);
     d_onode->update_object_data(*ctx.transaction, n_object_data);
+    if (!hobject_t::is_temp_pool(base.get_pool())) {
+      fut = transaction_manager->merge_mappings<ObjectDataBlock>(
+	*ctx.transaction, obase, base, olen).discard_result();
+    }
     fut = fut.si_then([&ctx, base, obase, olen, this, &onode, &d_onode] {
       return transaction_manager->move_mappings<ObjectDataBlock>(
 	*ctx.transaction, base, obase, olen, false
