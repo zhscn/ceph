@@ -1701,14 +1701,18 @@ SeaStore::Shard::_rename(
     auto olen = object_data.get_reserved_data_len();
     object_data_t n_object_data(obase, olen);
     d_onode->update_object_data(*ctx.transaction, n_object_data);
-    fut = transaction_manager->move_mappings<ObjectDataBlock>(
-      *ctx.transaction, base, obase, olen, false);
+    fut = transaction_manager->merge_mappings<ObjectDataBlock>(
+      *ctx.transaction, obase, base, olen
+    ).si_then([&ctx, base, obase, olen, this](auto) {
+      return transaction_manager->move_mappings<ObjectDataBlock>(
+	*ctx.transaction, base, obase, olen, false);
+    });
   } else {
     d_onode->update_object_data(*ctx.transaction, object_data);
   }
-  return onode_manager->erase_onode(
-    *ctx.transaction, onode
-  ).handle_error_interruptible(
+  return fut.si_then([&ctx, onode, this](auto) mutable {
+    return onode_manager->erase_onode(*ctx.transaction, onode);
+  }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
     crimson::ct_error::assert_all{
       "Invalid error in SeaStore::_rename"}

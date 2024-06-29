@@ -515,7 +515,7 @@ public:
 	      : L_ADDR_NULL;
 	    auto remap_offset = remap.offset;
 	    auto remap_len = remap.len;
-	    auto remap_laddr = orig_laddr + remap_offset;
+	    auto remap_laddr = remap.dst_laddr;
 	    ceph_assert(intermediate_base != L_ADDR_NULL);
 	    ceph_assert(intermediate_key != L_ADDR_NULL);
 	    ceph_assert(remap_len < orig_len);

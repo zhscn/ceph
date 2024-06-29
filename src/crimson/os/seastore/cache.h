@@ -928,20 +928,19 @@ public:
     Transaction &t,
     laddr_t remap_laddr,
     paddr_t remap_paddr,
+    extent_len_t remap_offset,
     extent_len_t remap_length,
-    laddr_t original_laddr,
     const std::optional<ceph::bufferptr> &original_bptr,
     std::optional<placement_hint_t> hint = std::nullopt,
     std::optional<rewrite_gen_t> gen = std::nullopt) {
     LOG_PREFIX(Cache::alloc_remapped_extent);
-    assert(remap_laddr >= original_laddr);
     assert((bool)hint == (bool)gen);
     TCachedExtentRef<T> ext;
     if (original_bptr.has_value()) {
       // shallow copy the buffer from original extent
       auto nbp = ceph::bufferptr(
         *original_bptr,
-        remap_laddr - original_laddr,
+        remap_offset,
         remap_length);
       // ExtentPlacementManager::alloc_new_extent will make a new
       // (relative/temp) paddr, so make extent directly
