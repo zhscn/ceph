@@ -24,6 +24,7 @@ std::ostream& operator<<(std::ostream& out, const lba_map_val_t& v)
              << "~" << v.len
              << ", refcount=" << v.refcount
              << ", checksum=" << v.checksum
+	     << ", shadow_paddr=" << v.shadow_paddr
              << ")";
 }
 

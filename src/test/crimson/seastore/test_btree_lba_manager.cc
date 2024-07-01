@@ -292,7 +292,7 @@ struct lba_btree_test : btree_test_base {
   }
 
   static auto get_map_val(extent_len_t len) {
-    return lba_map_val_t{0, (pladdr_t)P_ADDR_NULL, len, 0};
+    return lba_map_val_t{0, (pladdr_t)P_ADDR_NULL, len, 0, P_ADDR_NULL};
   }
 
   device_off_t next_off = 0;
@@ -675,7 +675,7 @@ struct btree_lba_manager_test : btree_test_base {
 	  *t.t,
 	  laddr_t::get_hint_from_offset(0),
 	  L_ADDR_MAX,
-	  [iter=t.mappings.begin(), &t](auto l, auto p, auto len) mutable {
+	  [iter=t.mappings.begin(), &t](auto l, auto p, auto s, auto len) mutable {
 	    EXPECT_NE(iter, t.mappings.end());
 	    EXPECT_EQ(l, iter->first);
 	    EXPECT_EQ(p, iter->second.addr);

@@ -508,7 +508,7 @@ public:
 	  }
 	  return base_iertr::make_ready_future<TCachedExtentRef<T>>();
 	}).si_then([this, &t, &remaps, original_paddr, original_len,
-			    &extents, FNAME](auto ext) mutable {
+		    &pin, &extents, FNAME](auto ext) mutable {
 	  ceph_assert(full_extent_integrity_check
 	      ? (ext && ext->is_fully_loaded())
 	      : true);
@@ -530,11 +530,19 @@ public:
 	  } else {
 	    cache->retire_absent_extent_addr(t, original_paddr, original_len);
 	  }
+	  if (pin->has_shadow_mapping()) {
+	    cache->retire_absent_extent_addr(t, pin->get_shadow_val(), original_len);
+	  }
 	  for (auto &remap : remaps) {
 	    auto remap_offset = remap.offset;
 	    auto remap_len = remap.len;
 	    auto remap_laddr = remap.dst_laddr;
 	    auto remap_paddr = original_paddr.add_offset(remap_offset);
+	    auto shadow_paddr = P_ADDR_NULL;
+	    if (pin->has_shadow_mapping()) {
+	      assert(pin->get_shadow_val() != P_ADDR_NULL);
+	      shadow_paddr = pin->get_shadow_val().add_offset(remap_offset);
+	    }
 	    ceph_assert(remap_len < original_len);
 	    ceph_assert(remap_offset + remap_len <= original_len);
 	    ceph_assert(remap_len != 0);
@@ -553,8 +561,20 @@ public:
 	      std::move(orig_hint),
 	      std::move(orig_gen));
 	    extents.emplace_back(std::move(extent));
+	    if (shadow_paddr != P_ADDR_NULL) {
+	      auto cold_ext = cache->alloc_remapped_extent<T>(
+	        t,
+		remap_laddr,
+		shadow_paddr,
+		remap_len,
+		remap_offset,
+		std::nullopt);
+	      boost::ignore_unused(cold_ext);
+	    }
 	  }
 	});
+      } else { // pin->is_indirect()
+	ceph_assert(!pin->has_shadow_mapping());
       }
       return fut.si_then([this, &t, &pin, &remaps, &extents] {
 	return lba_manager->remap_mappings(
@@ -668,37 +688,51 @@ public:
 
   using remap_extent_iertr = base_iertr;
   template <typename T>
-  remap_extent_iertr::future<std::list<LogicalCachedExtentRef>>
+  remap_extent_iertr::future<LBAManager::remap_extent_ret_t>
   remap_extent(
     Transaction &t,
     LogicalCachedExtentRef extent,
     LBAMappingRef mapping,
     std::vector<LBAManager::remap_entry> remaps) {
     auto paddr = mapping->get_val();
-    auto fut = [this, &t, extent, mapping=std::move(mapping)]() mutable {
-      if (extent) {
-	cache->retire_extent(t, extent);
-	return remap_extent_iertr::make_ready_future<
-	  TCachedExtentRef<T>>(extent->template cast<T>());
-      } else if (full_extent_integrity_check) {
-	return read_pin<T>(t, std::move(mapping)
-	).si_then([this, &t](auto ext) {
-	  cache->retire_extent(t, ext);
-	  return remap_extent_iertr::make_ready_future<
-	    TCachedExtentRef<T>>(ext);
-	});
-      } else {
-	return cache->retire_extent_addr(
-	  t, mapping->get_val(), mapping->get_length()
-	).si_then([] {
-	  return remap_extent_iertr::make_ready_future<
-	    TCachedExtentRef<T>>();
-	});
+    auto shadow_paddr = P_ADDR_NULL;
+    if (mapping->has_shadow_mapping()) {
+      shadow_paddr = mapping->get_shadow_val();
+    }
+    auto fut = [this, &t, extent, shadow_paddr,
+		mapping=std::move(mapping)]() mutable {
+      auto shadow_fut = base_iertr::make_ready_future();
+      if (shadow_paddr != P_ADDR_NULL) {
+	shadow_fut = cache->retire_extent_addr(
+	  t, shadow_paddr, mapping->get_length());
       }
+      return shadow_fut.si_then([this, &t, extent,
+				 mapping=std::move(mapping)]() mutable {
+	if (extent) {
+	  cache->retire_extent(t, extent);
+	  return remap_extent_iertr::make_ready_future<
+	    TCachedExtentRef<T>>(extent->template cast<T>());
+	} else if (full_extent_integrity_check) {
+	  return read_pin<T>(t, std::move(mapping)
+	  ).si_then([this, &t](auto ext) {
+	    cache->retire_extent(t, ext);
+	    return remap_extent_iertr::make_ready_future<
+	      TCachedExtentRef<T>>(ext);
+	  });
+	} else {
+	  return cache->retire_extent_addr(
+	    t, mapping->get_val(), mapping->get_length()
+	  ).si_then([] {
+	    return remap_extent_iertr::make_ready_future<
+	      TCachedExtentRef<T>>();
+	  });
+	}
+      });
     };
-    return fut().si_then([this, &t, paddr,
+    return fut().si_then([this, &t, paddr, shadow_paddr,
 			  remaps=std::move(remaps)](auto extent) {
       std::list<LogicalCachedExtentRef> res{};
+      std::list<LogicalCachedExtentRef> shadow_res{};
       for (auto &remap : remaps) {
 	auto remap_laddr = remap.dst_laddr;
 	auto ext = cache->alloc_remapped_extent<T>(
@@ -711,9 +745,19 @@ public:
 	      ? std::make_optional(extent->get_bptr())
 	      : std::nullopt);
 	res.emplace_back(std::move(ext));
+	if (shadow_paddr != P_ADDR_NULL) {
+	  auto ext = cache->alloc_remapped_extent<T>(
+	      t,
+	      remap_laddr,
+	      shadow_paddr.add_offset(remap.offset),
+	      remap.offset,
+	      remap.len,
+	      std::nullopt);
+	  shadow_res.emplace_back(std::move(ext));
+	}
       }
       return remap_extent_iertr::make_ready_future<
-	std::list<LogicalCachedExtentRef>>(std::move(res));
+	LBAManager::remap_extent_ret_t>(std::move(res), std::move(shadow_res));
     });
   }
 
@@ -731,7 +775,8 @@ public:
       [this, &t](LogicalCachedExtent* extent,
 		 LBAMappingRef mapping,
 		 std::vector<LBAManager::remap_entry> remaps) {
-      return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
+	ceph_assert(!mapping->is_indirect());
+	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
     });
   }
 
@@ -750,6 +795,7 @@ public:
       [this, &t](LogicalCachedExtent *extent,
 		 LBAMappingRef mapping,
 		 std::vector<LBAManager::remap_entry> remaps) {
+	ceph_assert(!mapping->is_indirect());
 	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
       });
   }

@@ -39,14 +39,17 @@ struct lba_map_val_t {
 			   //	laddr of a physical lba mapping(see btree_lba_manager.h)
   extent_ref_count_t refcount = 0; ///< refcount
   uint32_t checksum = 0; ///< checksum of original block written at paddr (TODO)
+  paddr_t shadow_paddr;
 
   lba_map_val_t() = default;
   lba_map_val_t(
     extent_len_t len,
     pladdr_t pladdr,
     extent_ref_count_t refcount,
-    uint32_t checksum)
-    : len(len), pladdr(pladdr), refcount(refcount), checksum(checksum) {}
+    uint32_t checksum,
+    paddr_t shadow_paddr)
+    : len(len), pladdr(pladdr), refcount(refcount), checksum(checksum),
+      shadow_paddr(shadow_paddr) {}
   bool operator==(const lba_map_val_t&) const = default;
 };
 
@@ -106,14 +109,14 @@ using LBAInternalNodeRef = LBAInternalNode::Ref;
  *   checksum   :                            4b
  *   size       : uint32_t[1]                4b
  *   meta       : lba_node_meta_le_t[3]      (1*40)b
- *   keys       : laddr_t[109]               (109*16)b
- *   values     : lba_map_val_t[109]         (109*21)b
- *                                           = 4081
+ *   keys       : laddr_t[89]                (89*16)b
+ *   values     : lba_map_val_t[89]          (89*29)b
+ *                                           = 4053
  *
  * TODO: update FixedKVNodeLayout to handle the above calculation
  * TODO: the above alignment probably isn't portable without further work
  */
-constexpr size_t LEAF_NODE_CAPACITY = 109;
+constexpr size_t LEAF_NODE_CAPACITY = 89;
 
 /**
  * lba_map_val_le_t
@@ -125,6 +128,7 @@ struct lba_map_val_le_t {
   pladdr_le_t pladdr;
   extent_ref_count_le_t refcount{0};
   ceph_le32 checksum{0};
+  paddr_le_t shadow_paddr;
 
   lba_map_val_le_t() = default;
   lba_map_val_le_t(const lba_map_val_le_t &) = default;
@@ -132,10 +136,11 @@ struct lba_map_val_le_t {
     : len(init_extent_len_le(val.len)),
       pladdr(pladdr_le_t(val.pladdr)),
       refcount(val.refcount),
-      checksum(val.checksum) {}
+      checksum(val.checksum),
+      shadow_paddr(val.shadow_paddr) {}
 
   operator lba_map_val_t() const {
-    return lba_map_val_t{ len, pladdr, refcount, checksum };
+    return lba_map_val_t{ len, pladdr, refcount, checksum, shadow_paddr };
   }
 };
 
