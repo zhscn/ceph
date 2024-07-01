@@ -200,6 +200,14 @@ public:
     auto &p = static_cast<LBALeafNode&>(*parent);
     p.maybe_fix_mapping_pos(*this);
   }
+
+  bool has_shadow_mapping() const final {
+    return !is_indirect() && map_val.shadow_paddr != P_ADDR_NULL;
+  }
+
+  paddr_t get_shadow_val() const final {
+    return map_val.shadow_paddr;
+  }
 protected:
   std::unique_ptr<BtreeNodeMapping<laddr_t, paddr_t>> _duplicate(
     op_context_t<laddr_t> ctx) const final {
@@ -290,7 +298,8 @@ public:
 	  len,
 	  pladdr_t(P_ADDR_ZERO),
 	  EXTENT_DEFAULT_REF_COUNT,
-	  0
+	  0,
+	  P_ADDR_NULL
 	},
 	nullptr
       };
@@ -305,8 +314,9 @@ public:
 	  len,
 	  pladdr_t(intermediate_key),
 	  EXTENT_DEFAULT_REF_COUNT,
-	  0	// crc will only be used and checked with LBA direct mappings
+	  0,    // crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
+	  P_ADDR_NULL
 	},
 	nullptr
       };
@@ -317,7 +327,8 @@ public:
       paddr_t paddr,
       extent_ref_count_t refcount,
       uint32_t checksum,
-      LogicalCachedExtent *extent) {
+      LogicalCachedExtent *extent,
+      paddr_t shadow_paddr) {
       return {
 	laddr,
 	lba_map_val_t{
@@ -325,6 +336,7 @@ public:
 	  pladdr_t(paddr),
 	  refcount,
 	  checksum,
+	  shadow_paddr
 	},
 	extent
       };
@@ -406,7 +418,8 @@ public:
 	ext.get_paddr(),
 	refcount,
 	ext.get_last_committed_crc(),
-	&ext)};
+	&ext,
+	P_ADDR_NULL)};
     return seastar::do_with(
       std::move(alloc_infos),
       [this, &t, hint, determinsitic](auto &alloc_infos) {
@@ -439,7 +452,8 @@ public:
 	  extent->get_paddr(),
 	  refcount,
 	  extent->get_last_committed_crc(),
-	  extent.get()));
+	  extent.get(),
+	  P_ADDR_NULL));
     }
     return seastar::do_with(
       std::move(alloc_infos),
@@ -559,12 +573,29 @@ public:
 	      std::move(mappings));
 	  });
 	} else { // !orig_mapping->is_indirect()
-	  fut = alloc_extents(
-	    t,
-	    remaps.front().offset + orig_laddr,
-	    std::move(extents),
-	    EXTENT_DEFAULT_REF_COUNT,
-	    true);
+	  assert(remaps.size() == extents.size());
+	  std::vector<alloc_mapping_info_t> alloc_infos;
+	  for (auto i = 0; i < extents.size(); i++) {
+	    auto &extent = extents[i];
+	    auto &remap = remaps[i];
+	    assert(extent->has_laddr());
+	    assert(extent->get_laddr() - orig_mapping->get_key() == remap.offset);
+	    assert(extent->get_length() == remap.len);
+	    alloc_infos.emplace_back(alloc_mapping_info_t::create_direct(
+	      extent->get_laddr(),
+	      extent->get_length(),
+	      extent->get_paddr(),
+	      EXTENT_DEFAULT_REF_COUNT,
+	      extent->get_last_committed_crc(),
+	      extent.get(),
+	      orig_mapping->has_shadow_mapping()
+	      ? orig_mapping->get_shadow_val().add_offset(remap.offset)
+	      : P_ADDR_NULL));
+	  }
+	  auto hint = remaps.front().offset + orig_laddr;
+	  fut = seastar::do_with(std::move(alloc_infos), [this, &t, hint](auto &infos) {
+	    return _alloc_extents(t, hint, infos, true);
+	  });
 	}
 
 	return fut.si_then([&ret, &remaps, &orig_mapping](auto &&refs) {
@@ -659,6 +690,7 @@ private:
     lba_pin_list_t res;
     std::vector<alloc_mapping_info_t> mappings;
     std::list<LogicalCachedExtentRef> remapped_extents;
+    std::list<LogicalCachedExtentRef> remapped_shadow_extents;
 
     laddr_t get_src_end() const { return src_base + length; }
 
