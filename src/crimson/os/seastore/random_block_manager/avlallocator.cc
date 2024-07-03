@@ -249,8 +249,13 @@ void AvlAllocator::free_extent(rbm_abs_addr addr, size_t size)
   assert(total_size);
   assert(total_size > available_size);
   _add_to_tree(addr, size);
-  if (detailed && reserved_extent_tracker.contains(addr, size)) {
-    reserved_extent_tracker.erase(addr, size);
+  auto res = reserved_extent_tracker.contains(addr, size);
+  if (detailed) {
+    if (res) {
+      reserved_extent_tracker.erase(addr, size);
+    } else {
+      ceph_assert(!reserved_extent_tracker.intersects(addr, size));
+    }
   }
 }
 
