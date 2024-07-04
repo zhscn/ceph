@@ -226,7 +226,10 @@ public:
   }
 
   bool should_promote() const final {
-    return promote_contents >= promotion_size / 2;
+    return promote_contents >= promotion_size / 2 ||
+      (crimson::common::get_conf<bool>("seastore_lbc_test_workload") &&
+       promotion_list.size() >=
+       crimson::common::get_conf<uint64_t>("seastore_lbc_workload_promote_extent_count"));
   }
 
   seastar::future<> promote() {

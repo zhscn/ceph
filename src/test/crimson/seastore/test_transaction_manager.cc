@@ -1046,6 +1046,7 @@ struct transaction_manager_test_t :
               placement_hint_t::HOT,
 	      write_policy_t::WRITE_BACK,
               gen,
+	      false,
 	      false);
             if (expected_generations[t][gen] != epm_gen) {
               logger().error("caller: {}, extent type: {}, input generation: {}, "

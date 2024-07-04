@@ -63,6 +63,12 @@ public:
     INFO("init memory_capacity={}, demote_size_per_cycle={}",
 	 memory_capacity, demote_size_per_cycle);
     register_metrics();
+
+    if (crimson::common::get_conf<bool>("seastore_lbc_test_workload")) {
+      timer.set_callback([this] { wake_half_life(); });
+      timer.arm(std::chrono::minutes(crimson::common::get_conf<uint64_t>(
+          "seastore_lbc_workload_demote_half_life_period")));
+    }
   }
 
   ~LogicalBucketCache() {
@@ -156,7 +162,7 @@ public:
     // estimate memory usage
     auto rbtree_internal_node_size = sizeof(boost::intrusive::set_member_hook<>);
     auto average = bucket_size + rbtree_internal_node_size;
-    return (average * buckets_set.size()) > memory_capacity;
+    return (average * buckets_set.size()) > memory_capacity || force_demote_half_life;
   }
 
   seastar::future<> demote() final {
@@ -197,6 +203,9 @@ public:
          }).si_then([this] {
 	   LOG_PREFIX(LogicalBucketCache::demote);
 	   DEBUG("demote {} bytes in the hot tier", s.demoted_size);
+	   if (force_demote_half_life) {
+	     half_life_finished += s.completed_buckets.size();
+	   }
 	   stat.demoted_bucket_count += s.completed_buckets.size();
 	   stat.demoted_size += s.demoted_size;
            for (auto &p : s.completed_buckets) {
@@ -213,10 +222,29 @@ public:
 	     make_ready_future();
          });
        });
-    }).handle_error(crimson::ct_error::assert_all{ "impossible" });
+    }).handle_error(
+      crimson::ct_error::assert_all{ "impossible" }
+    ).finally([this] {
+      if (force_demote_half_life && half_life_finished == half_life_target) {
+	force_demote_half_life = false;
+	timer.arm(std::chrono::minutes(crimson::common::get_conf<uint64_t>(
+	  "seastore_lbc_workload_demote_half_life_period")));
+      }
+    });
   }
 
 private:
+  void wake_half_life() {
+    if (!lru.empty()) {
+      force_demote_half_life = true;
+      half_life_target = (lru.size() + 1) / 2;
+      half_life_finished = 0;
+    } else {
+      timer.arm(std::chrono::minutes(crimson::common::get_conf<uint64_t>(
+	"seastore_lbc_workload_demote_half_life_period")));
+    }
+  }
+
   laddr_bucket_ref_t create_bucket(
     laddr_t laddr,
     extent_types_t type) {
@@ -254,6 +282,9 @@ private:
       lru.erase(lru.s_iterator_to(bucket));
     }
     lru.push_back(bucket);
+    if (should_demote()) {
+      listener->maybe_wake_background();
+    }
   }
 
   struct demote_state_t {
@@ -288,9 +319,15 @@ private:
   void init_state() {
     s.reset();
     int count = 0;
-    assert(s.init_buckets_count > 0);
+    auto required_count = s.init_buckets_count;
+    if (force_demote_half_life) {
+      ceph_assert(half_life_target != 0);
+      ceph_assert(half_life_finished < half_life_target);
+      required_count = half_life_target - half_life_finished;
+    }
+    assert(required_count > 0);
     for (auto &b : lru) {
-      if (count >= s.init_buckets_count) {
+      if (count >= required_count) {
 	break;
       }
       s.cold_buckets.push_back(&b);
@@ -320,7 +357,13 @@ private:
       });
   }
 
+  seastar::timer<seastar::steady_clock_type> timer;
+
   demote_state_t s;
+
+  bool force_demote_half_life = false;
+  std::size_t half_life_target = 0;
+  std::size_t half_life_finished = 0;
 
   struct {
     uint64_t demoted_size = 0;

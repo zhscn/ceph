@@ -416,7 +416,8 @@ public:
 
     data_category_t category = get_extent_category(type);
     auto policy = write_policy_t::WRITE_BACK;
-    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked,
+                            is_background_transaction(t.get_src()));
 
     paddr_t addr;
 #ifdef UNIT_TESTS_BUILT
@@ -481,7 +482,8 @@ public:
     assert(gen == INIT_GENERATION || hint == placement_hint_t::REWRITE);
 
     data_category_t category = get_extent_category(type);
-    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked,
+                            is_background_transaction(t.get_src()));
     assert(gen != INLINE_GENERATION);
 
     // XXX: bp might be extended to point to different memory (e.g. PMem)
@@ -547,7 +549,8 @@ public:
       extent.get_user_hint(),
       extent.get_write_policy(),
       extent.get_rewrite_generation(),
-      false);
+      false,
+      true);
     return gen >= MIN_COLD_GENERATION;
   }
 
@@ -671,7 +674,8 @@ private:
       placement_hint_t hint,
       write_policy_t policy,
       rewrite_gen_t gen,
-      bool is_tracked) {
+      bool is_tracked,
+      bool is_background_transaction) {
     if (type == extent_types_t::ROOT) {
       gen = INLINE_GENERATION;
     } else if (get_main_backend_type() == backend_type_t::SEGMENTED &&
@@ -723,6 +727,16 @@ private:
         && gen >= MIN_COLD_GENERATION
         && policy != write_policy_t::WRITE_THROUGH) {
       gen = MIN_COLD_GENERATION - 1;
+    }
+
+    if (gen < MIN_COLD_GENERATION &&
+        is_background_transaction &&
+        category == data_category_t::DATA &&
+        (crimson::common::get_conf<bool>("seastore_lbc_test_workload") &&
+         (double(std::rand() % 10) / 10.0) <=
+             crimson::common::get_conf<double>(
+                 "seastore_lbc_workload_evict_probability"))) {
+      gen = MIN_COLD_GENERATION;
     }
 
     return gen;

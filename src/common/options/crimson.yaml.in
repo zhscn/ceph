@@ -204,3 +204,28 @@ options:
   level: dev
   desc: select write through policy when data length is greater than this value.
   default: 512_K
+- name: seastore_lbc_test_workload
+  type: bool
+  level: dev
+  desc: enable test workload for lbc
+  default: false
+- name: seastore_lbc_workload_write_through_probability
+  type: float
+  level: dev
+  desc: the probability of write the incoming data to slow devices
+  default: 0.2
+- name: seastore_lbc_workload_evict_probability
+  type: float
+  level: dev
+  desc: the probability of evicting data during GC
+  default: 0.3
+- name: seastore_lbc_workload_promote_extent_count
+  type: uint
+  level: dev
+  desc: start promote when the count of pending extents exceeds the value
+  default: 10
+- name: seastore_lbc_workload_demote_half_life_period
+  type: uint
+  level: dev
+  desc: the minutes of half-life period for demotion
+  default: 5

@@ -914,7 +914,13 @@ public:
     auto policy = write_policy_t::WRITE_BACK;
     auto write_through_size = crimson::common::get_conf<
       Option::size_t>("seastore_write_through_size");
-    if (length >= write_through_size && T::TYPE == extent_types_t::OBJECT_DATA_BLOCK) {
+    if (T::TYPE == extent_types_t::OBJECT_DATA_BLOCK &&
+	!is_background_transaction(t.get_src()) &&
+        (length >= write_through_size ||
+         (crimson::common::get_conf<bool>("seastore_lbc_test_workload") &&
+          (double(std::rand() % 10) / 10.0) <=
+              crimson::common::get_conf<double>(
+                  "seastore_lbc_workload_write_through_probability")))) {
       policy = write_policy_t::WRITE_THROUGH;
     }
 #ifdef UNIT_TESTS_BUILT
