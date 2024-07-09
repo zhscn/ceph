@@ -19,6 +19,13 @@ install(TARGETS
   ceph_test_rados
   DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+# test_rados
+add_executable(ceph_test_rados_compose RadosCompose.cc)
+target_link_libraries(ceph_test_rados_compose librados)
+install(TARGETS
+  ceph_test_rados_compose
+  DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 # test_stale_read
 add_executable(ceph_test_osd_stale_read
   ceph_test_osd_stale_read.cc
