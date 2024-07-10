@@ -94,7 +94,8 @@ Cache::retire_extent_ret Cache::retire_extent_addr(
               addr,
               PLACEMENT_HINT_NULL,
               NULL_GENERATION,
-	      TRANS_ID_NULL);
+	      TRANS_ID_NULL,
+	      write_policy_t::WRITE_BACK);
     DEBUGT("retire {}~{} as placeholder, add extent -- {}",
            t, addr, length, *ext);
     const auto t_src = t.get_src();
@@ -123,7 +124,8 @@ void Cache::retire_absent_extent_addr(
 	    addr,
 	    PLACEMENT_HINT_NULL,
 	    NULL_GENERATION,
-	    TRANS_ID_NULL);
+	    TRANS_ID_NULL,
+	    write_policy_t::WRITE_BACK);
   DEBUGT("retire {}~{} as placeholder, add extent -- {}",
 	 t, addr, length, *ext);
   const auto t_src = t.get_src();
@@ -1770,7 +1772,8 @@ void Cache::init()
              P_ADDR_ROOT,
              PLACEMENT_HINT_NULL,
              NULL_GENERATION,
-	     TRANS_ID_NULL);
+	     TRANS_ID_NULL,
+	     write_policy_t::WRITE_BACK);
   INFO("init root -- {}", *root);
   extents.insert(*root);
 }
