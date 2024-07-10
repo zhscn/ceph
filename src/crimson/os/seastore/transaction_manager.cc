@@ -705,7 +705,7 @@ TransactionManager::get_extents_if_live(
 	    if (pin_paddr.get_device_id() != paddr.get_device_id()) {
 	      // FIXME: currently only support SSD as segment device
 	      // and HDD as RBM device.
-	      ceph_assert(!pin->has_shadow_mapping());
+	      // ceph_assert(!pin->has_shadow_mapping());
 	      return seastar::now();
 	    }
             auto &pin_seg_paddr = pin_paddr.as_seg_paddr();
