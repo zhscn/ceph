@@ -551,7 +551,8 @@ private:
                 offset,
                 PLACEMENT_HINT_NULL,
                 NULL_GENERATION,
-		TRANS_ID_NULL);
+		TRANS_ID_NULL,
+		write_policy_t::WRITE_BACK);
       SUBDEBUG(seastore_cache,
           "{} {}~{} is absent, add extent and reading ... -- {}",
           T::TYPE, offset, length, *ret);
@@ -571,7 +572,8 @@ private:
                 offset,
                 PLACEMENT_HINT_NULL,
                 NULL_GENERATION,
-		TRANS_ID_NULL);
+		TRANS_ID_NULL,
+		write_policy_t::WRITE_BACK);
       SUBDEBUG(seastore_cache,
           "{} {}~{} is absent(placeholder), reading ... -- {}",
           T::TYPE, offset, length, *ret);
@@ -872,7 +874,8 @@ public:
               result->paddr,
               hint,
               result->gen,
-	      t.get_trans_id());
+	      t.get_trans_id(),
+	      write_policy_t::WRITE_BACK);
     t.add_fresh_extent(ret);
     SUBDEBUGT(seastore_cache,
               "allocated {} {}B extent at {}, hint={}, gen={} -- {}",
@@ -901,10 +904,16 @@ public:
     LOG_PREFIX(Cache::alloc_new_data_extents);
     SUBTRACET(seastore_cache, "allocate {} {}B, hint={}, gen={}",
               t, T::TYPE, length, hint, rewrite_gen_printer_t{gen});
+    auto policy = write_policy_t::WRITE_BACK;
+    auto write_through_size = crimson::common::get_conf<
+      Option::size_t>("seastore_write_through_size");
+    if (length >= write_through_size && T::TYPE == extent_types_t::OBJECT_DATA_BLOCK) {
+      policy = write_policy_t::WRITE_THROUGH;
+    }
 #ifdef UNIT_TESTS_BUILT
-    auto results = epm.alloc_new_data_extents(t, T::TYPE, length, hint, gen, epaddr);
+    auto results = epm.alloc_new_data_extents(t, T::TYPE, length, hint, policy, gen, epaddr);
 #else
-    auto results = epm.alloc_new_data_extents(t, T::TYPE, length, hint, gen);
+    auto results = epm.alloc_new_data_extents(t, T::TYPE, length, hint, policy, gen);
 #endif
     std::vector<TCachedExtentRef<T>> extents;
     for (auto &result : results) {
@@ -913,7 +922,8 @@ public:
                 result.paddr,
                 hint,
                 result.gen,
-                t.get_trans_id());
+                t.get_trans_id(),
+		policy);
       t.add_fresh_extent(ret);
       SUBDEBUGT(seastore_cache,
                 "allocated {} {}B extent at {}, hint={}, gen={} -- {}",
@@ -962,7 +972,8 @@ public:
 	      epm.calc_remap_paddr(remap_paddr, generation),
 	      hint ? *hint : PLACEMENT_HINT_NULL,
 	      generation,
-              t.get_trans_id());
+              t.get_trans_id(),
+	      write_policy_t::WRITE_BACK);
 
     auto extent = ext->template cast<T>();
     extent->set_laddr(remap_laddr);
