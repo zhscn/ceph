@@ -1395,6 +1395,11 @@ public:
     p->reset();
   }
 
+  void update_read_ratio(Transaction &t) {
+    stats.read_hit_hot += t.read_hit_hot;
+    stats.read_hit_cold += t.read_hit_cold;
+  }
+
 private:
   struct gc_trans_info_t {
     Transaction *t = nullptr;
@@ -1677,6 +1682,11 @@ private:
 
     version_stat_t committed_dirty_version;
     version_stat_t committed_reclaim_version;
+
+    uint64_t write_hit_hot;
+    uint64_t write_hit_cold;
+    uint64_t read_hit_hot;
+    uint64_t read_hit_cold;
   } stats;
 
   template <typename CounterT>
