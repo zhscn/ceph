@@ -184,3 +184,8 @@ options:
   level: dev
   desc: overwrite the existing data block based on delta if the overwrite size is equal to or less than the value, otherwise do overwrite based on remapping, set to 0 to enforce the remap-based overwrite.
   default: 0
+- name: seastore_write_through_size
+  type: size
+  level: dev
+  desc: select write through policy when data length is greater than this value.
+  default: 512_K
