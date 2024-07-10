@@ -191,3 +191,8 @@ options:
         internal checksum feature without using sever CPU then enable if available,
         set to true to disable unconditionally.
   default: true
+- name: seastore_write_through_size
+  type: size
+  level: dev
+  desc: select write through policy when data length is greater than this value.
+  default: 512_K
