@@ -693,6 +693,11 @@ private:
       }
     }
 
+    if (category == data_category_t::METADATA &&
+        gen >= MIN_COLD_GENERATION) {
+      gen = MIN_COLD_GENERATION - 1;
+    }
+
     if (gen > dynamic_max_rewrite_generation) {
       gen = dynamic_max_rewrite_generation;
     }
