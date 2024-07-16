@@ -427,6 +427,10 @@ TransactionManager::do_submit_transaction(
       cache->trim_backref_bufs(*trim_alloc_to);
     }
 
+    if (is_clean_transaction(tref.get_src())) {
+      cache->unregister_relcaim_range(tref);
+    }
+
     auto record = cache->prepare_record(
       tref,
       journal->get_trimmer().get_journal_head(),
