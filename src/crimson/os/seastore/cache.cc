@@ -1250,6 +1250,7 @@ record_t Cache::prepare_record(
   std::vector<alloc_delta_t> alloc_deltas;
   alloc_delta_t rel_delta;
   rel_delta.op = alloc_delta_t::op_types_t::CLEAR;
+  std::vector<backref_entry_ref> backref_list;
   for (auto &i: t.retired_set) {
     auto &extent = i.extent;
     get_by_ext(efforts.retire_by_ext,
@@ -1264,6 +1265,26 @@ record_t Cache::prepare_record(
 	L_ADDR_NULL,
 	extent->get_length(),
 	extent->get_type());
+    }
+
+    if (is_backref_mapped_extent_node(extent)
+	  || is_retired_placeholder(extent->get_type())) {
+      DEBUGT("backref_list free {} len {}",
+	     t,
+	     extent->get_paddr(),
+	     extent->get_length());
+      backref_list.emplace_back(
+	std::make_unique<backref_entry_t>(
+	  extent->get_paddr(),
+	  L_ADDR_NULL,
+	  extent->get_length(),
+	  extent->get_type(),
+	  JOURNAL_SEQ_NULL)); // will update in complete_commit
+    } else if (is_backref_node(extent->get_type())) {
+      remove_backref_extent(extent->get_paddr());
+    } else {
+      ERRORT("{}", t, *extent);
+      ceph_abort("not possible");
     }
   }
   alloc_deltas.emplace_back(std::move(rel_delta));
@@ -1367,6 +1388,17 @@ record_t Cache::prepare_record(
 	i->cast<LogicalCachedExtent>()->get_laddr(),
 	i->get_length(),
 	i->get_type());
+      DEBUGT("backref_list new existing {} len {}",
+	     t,
+	     i->get_paddr(),
+	     i->get_length());
+      backref_list.emplace_back(
+        std::make_unique<backref_entry_t>(
+	  i->get_paddr(),
+	  i->cast<LogicalCachedExtent>()->get_laddr(),
+	  i->get_length(),
+	  i->get_type(),
+	  JOURNAL_SEQ_NULL));
     }
   }
   alloc_deltas.emplace_back(std::move(alloc_delta));
@@ -1420,6 +1452,11 @@ record_t Cache::prepare_record(
     delta.type = extent_types_t::JOURNAL_TAIL;
     delta.bl = bl;
     record.push_back(std::move(delta));
+  }
+
+  if (!backref_list.empty()) {
+    prepare_remapped_backref_entries(
+      t.get_trans_id(), std::move(backref_list));
   }
 
   ceph_assert(t.get_fresh_block_stats().num ==
@@ -1521,7 +1558,20 @@ record_t Cache::prepare_record(
   return record;
 }
 
+void Cache::prepare_remapped_backref_entries(
+  transaction_id_t id,
+  std::vector<backref_entry_ref> list)
+{
+  assert(id != TRANS_ID_NULL);
+  assert(!backref_entryrefs_by_trans_id.contains(id));
+  for (auto &ent : list) {
+    backref_entry_mset.insert(*ent);
+  }
+  backref_entryrefs_by_trans_id[id] = std::move(list);
+}
+
 void Cache::backref_batch_update(
+  transaction_id_t id,
   std::vector<backref_entry_ref> &&list,
   const journal_seq_t &seq)
 {
@@ -1533,14 +1583,33 @@ void Cache::backref_batch_update(
     backref_entry_mset.insert(*ent);
   }
 
-  auto iter = backref_entryrefs_by_seq.find(seq);
-  if (iter == backref_entryrefs_by_seq.end()) {
-    backref_entryrefs_by_seq.emplace(seq, std::move(list));
-  } else {
-    iter->second.insert(
-      iter->second.end(),
-      std::make_move_iterator(list.begin()),
-      std::make_move_iterator(list.end()));
+  if (id != TRANS_ID_NULL) {
+    auto iter = backref_entryrefs_by_trans_id.find(id);
+    if (iter != backref_entryrefs_by_trans_id.end()) {
+      auto &cached_refs = iter->second;
+      for (backref_entry_ref &e : cached_refs) {
+	e->seq = seq;
+      }
+
+      list.insert(
+        list.end(),
+	std::make_move_iterator(cached_refs.begin()),
+	std::make_move_iterator(cached_refs.end()));
+      backref_entryrefs_by_trans_id.erase(iter);
+    }
+  }
+
+
+  if (!list.empty()) {
+    auto iter = backref_entryrefs_by_seq.find(seq);
+    if (iter == backref_entryrefs_by_seq.end()) {
+      backref_entryrefs_by_seq.emplace(seq, std::move(list));
+    } else {
+      iter->second.insert(
+        iter->second.end(),
+	std::make_move_iterator(list.begin()),
+	std::make_move_iterator(list.end()));
+    }
   }
 }
 
@@ -1644,25 +1713,6 @@ void Cache::complete_commit(
   for (auto &i: t.retired_set) {
     auto &extent = i.extent;
     extent->dirty_from_or_retired_at = start_seq;
-    if (is_backref_mapped_extent_node(extent)
-	  || is_retired_placeholder(extent->get_type())) {
-      DEBUGT("backref_list free {} len {}",
-	     t,
-	     extent->get_paddr(),
-	     extent->get_length());
-      backref_list.emplace_back(
-	std::make_unique<backref_entry_t>(
-	  extent->get_paddr(),
-	  L_ADDR_NULL,
-	  extent->get_length(),
-	  extent->get_type(),
-	  start_seq));
-    } else if (is_backref_node(extent->get_type())) {
-      remove_backref_extent(extent->get_paddr());
-    } else {
-      ERRORT("{}", t, *extent);
-      ceph_abort("not possible");
-    }
   }
 
   auto existing_stats = t.get_existing_block_stats();
@@ -1679,24 +1729,11 @@ void Cache::complete_commit(
       } else {
 	assert(i->state == CachedExtent::extent_state_t::DIRTY);
       }
-      DEBUGT("backref_list new existing {} len {}",
-	     t,
-	     i->get_paddr(),
-	     i->get_length());
-      backref_list.emplace_back(
-        std::make_unique<backref_entry_t>(
-	  i->get_paddr(),
-	  i->cast<LogicalCachedExtent>()->get_laddr(),
-	  i->get_length(),
-	  i->get_type(),
-	  start_seq));
       const auto t_src = t.get_src();
       add_extent(i, &t_src);
     }
   }
-  if (!backref_list.empty()) {
-    backref_batch_update(std::move(backref_list), start_seq);
-  }
+  backref_batch_update(t.get_trans_id(), std::move(backref_list), start_seq);
 
   for (auto &i: t.pre_alloc_list) {
     if (!i->is_valid() && !i->is_paddr_reclaimed()) {
@@ -1842,7 +1879,7 @@ Cache::replay_delta(
 	  journal_seq));
     }
     if (!backref_list.empty()) {
-      backref_batch_update(std::move(backref_list), journal_seq);
+      backref_batch_update(TRANS_ID_NULL, std::move(backref_list), journal_seq);
     }
     return replay_delta_ertr::make_ready_future<std::pair<bool, CachedExtentRef>>(
       std::make_pair(true, nullptr));
