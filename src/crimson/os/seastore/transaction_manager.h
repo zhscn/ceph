@@ -878,6 +878,13 @@ public:
     Transaction &t,
     std::optional<journal_seq_t> seq_to_trim = std::nullopt) final;
 
+  void register_relcaim_range(
+    Transaction &t,
+    paddr_t start,
+    paddr_t end) final {
+    cache->register_relcaim_range(t, start, end);
+  }
+
   using ExtentCallbackInterface::get_next_dirty_extents_ret;
   get_next_dirty_extents_ret get_next_dirty_extents(
     Transaction &t,
