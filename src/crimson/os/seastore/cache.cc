@@ -794,7 +794,8 @@ void Cache::commit_retire_extent(
   remove_extent(ref);
 
   ref->dirty_from_or_retired_at = JOURNAL_SEQ_NULL;
-  invalidate_extent(t, *ref);
+  auto gc_t = get_conflicted_gc_trans(ref->get_paddr(), ref->get_length());
+  invalidate_extent(t, *ref, gc_t);
 }
 
 void Cache::commit_replace_extent(
@@ -830,12 +831,13 @@ void Cache::commit_replace_extent(
   }
 
   next->on_replace_prior();
-  invalidate_extent(t, *prev);
+  invalidate_extent(t, *prev, nullptr);
 }
 
 void Cache::invalidate_extent(
     Transaction& t,
-    CachedExtent& extent)
+    CachedExtent& extent,
+    Transaction *gc_trans)
 {
   if (!extent.may_conflict()) {
     assert(extent.transactions.empty());
@@ -857,6 +859,10 @@ void Cache::invalidate_extent(
     }
   }
   extent.set_invalid(t);
+  if (gc_trans && !gc_trans->conflicted) {
+    account_conflict(t.get_src(), gc_trans->get_src());
+    mark_transaction_conflicted(*gc_trans, extent);
+  }
 }
 
 void Cache::mark_transaction_conflicted(
@@ -1288,6 +1294,8 @@ record_t Cache::prepare_record(
     }
   }
   alloc_deltas.emplace_back(std::move(rel_delta));
+
+  maybe_update_gc_info();
 
   record.extents.reserve(t.inline_block_list.size());
   io_stat_t fresh_stat;
