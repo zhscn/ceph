@@ -397,10 +397,11 @@ public:
     placement_hint_t hint,
 #ifdef UNIT_TESTS_BUILT
     rewrite_gen_t gen,
-    std::optional<paddr_t> external_paddr = std::nullopt
+    std::optional<paddr_t> external_paddr = std::nullopt,
 #else
-    rewrite_gen_t gen
+    rewrite_gen_t gen,
 #endif
+    bool is_tracked = false
   ) {
     assert(hint < placement_hint_t::NUM_HINTS);
     assert(is_target_rewrite_generation(gen));
@@ -408,7 +409,7 @@ public:
 
     data_category_t category = get_extent_category(type);
     auto policy = write_policy_t::WRITE_BACK;
-    gen = adjust_generation(category, type, hint, policy, gen);
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
 
     paddr_t addr;
 #ifdef UNIT_TESTS_BUILT
@@ -461,10 +462,11 @@ public:
     write_policy_t policy,
 #ifdef UNIT_TESTS_BUILT
     rewrite_gen_t gen,
-    std::optional<paddr_t> external_paddr = std::nullopt
+    std::optional<paddr_t> external_paddr = std::nullopt,
 #else
-    rewrite_gen_t gen
+    rewrite_gen_t gen,
 #endif
+    bool is_tracked = false
   ) {
     LOG_PREFIX(ExtentPlacementManager::alloc_new_data_extents);
     assert(hint < placement_hint_t::NUM_HINTS);
@@ -472,7 +474,7 @@ public:
     assert(gen == INIT_GENERATION || hint == placement_hint_t::REWRITE);
 
     data_category_t category = get_extent_category(type);
-    gen = adjust_generation(category, type, hint, policy, gen);
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
     assert(gen != INLINE_GENERATION);
 
     // XXX: bp might be extended to point to different memory (e.g. PMem)
@@ -528,6 +530,19 @@ public:
     return max_data_allocation_size;
   }
 #endif
+
+
+  bool is_going_to_evict(const LogicalCachedExtent &extent) {
+    auto type = extent.get_type();
+    auto gen = adjust_generation(
+      get_extent_category(type),
+      type,
+      extent.get_user_hint(),
+      extent.get_write_policy(),
+      extent.get_rewrite_generation(),
+      false);
+    return gen >= MIN_COLD_GENERATION;
+  }
 
   /**
    * dispatch_result_t
@@ -657,7 +672,8 @@ private:
       extent_types_t type,
       placement_hint_t hint,
       write_policy_t policy,
-      rewrite_gen_t gen) {
+      rewrite_gen_t gen,
+      bool is_tracked) {
     if (type == extent_types_t::ROOT) {
       gen = INLINE_GENERATION;
     } else if (get_main_backend_type() == backend_type_t::SEGMENTED &&
@@ -706,14 +722,15 @@ private:
       gen = MIN_COLD_GENERATION - 1;
     }
 
+    if (is_tracked && gen >= MIN_COLD_GENERATION
+        && policy != write_policy_t::WRITE_THROUGH) {
+      gen = MIN_COLD_GENERATION - 1;
+    }
+
     if (gen > dynamic_max_rewrite_generation) {
       gen = dynamic_max_rewrite_generation;
     }
 
-    // if (is_tracked && gen >= MIN_COLD_GENERATION
-    //     && policy != write_policy_t::WRITE_THROUGH) {
-    //   gen = MIN_COLD_GENERATION - 1;
-    // }
     return gen;
   }
 
