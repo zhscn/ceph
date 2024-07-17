@@ -192,7 +192,8 @@ SegmentedOolWriter::alloc_write_ool_extents(
 void ExtentPlacementManager::init(
     JournalTrimmerImplRef &&trimmer,
     AsyncCleanerRef &&cleaner,
-    AsyncCleanerRef &&cold_cleaner)
+    AsyncCleanerRef &&cold_cleaner,
+    MemoryCache *memory_cache)
 {
   writer_refs.clear();
   dynamic_max_rewrite_generation = MIN_COLD_GENERATION - 1;
@@ -291,7 +292,8 @@ void ExtentPlacementManager::init(
   auto cold_cleaner_ = cold_cleaner.get();
   background_process.init(std::move(trimmer),
                           std::move(cleaner),
-                          std::move(cold_cleaner));
+                          std::move(cold_cleaner),
+                          memory_cache);
   ceph_assert(get_main_backend_type() != backend_type_t::NONE);
   if (cold_cleaner_) {
     ceph_assert(get_main_backend_type() == backend_type_t::SEGMENTED);

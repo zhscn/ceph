@@ -520,6 +520,10 @@ public:
     return epm.get_block_size();
   }
 
+  MemoryCache *get_memory_cache() {
+    return memory_cache.get();
+  }
+
 // Interfaces only for tests.
 public:
   CachedExtentRef test_query_cache(paddr_t offset) {
