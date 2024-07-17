@@ -536,6 +536,27 @@ public:
 	    }
 	  }
 	  return base_iertr::make_ready_future<TCachedExtentRef<T>>();
+	}).si_then([this, &t, original_paddr, original_len, &pin](auto ext) mutable {
+	  // mutate transaction might concurrent with demote transaction,
+	  // use retire_extent_addr to avoid assertion failed on query_cache
+	  auto fut = [this, &t, &pin, original_len]() -> base_iertr::future<> {
+	    if (pin->has_shadow_mapping()) {
+	      return cache->retire_extent_addr(t, pin->get_shadow_val(), original_len);
+	    } else {
+	      return base_iertr::make_ready_future();
+	    }
+	  };
+	  return fut().si_then([this, &t, original_paddr, original_len, ext=std::move(ext)]() {
+	    if (!ext) {
+	      return cache->retire_extent_addr(t, original_paddr, original_len
+	      ).si_then([ext=std::move(ext)] {
+		return base_iertr::make_ready_future<
+		  TCachedExtentRef<T>>(std::move(ext));
+	      });
+	    }
+	    return base_iertr::make_ready_future<
+	      TCachedExtentRef<T>>(std::move(ext));
+	  });
 	}).si_then([this, &t, &remaps, original_paddr, original_len,
 		    &pin, &extents, FNAME](auto ext) mutable {
 	  ceph_assert(full_extent_integrity_check
@@ -568,11 +589,6 @@ public:
 	      }
 	    }
 	    cache->retire_extent(t, ext);
-	  } else {
-	    cache->retire_absent_extent_addr(t, original_paddr, original_len);
-	  }
-	  if (pin->has_shadow_mapping()) {
-	    cache->retire_absent_extent_addr(t, pin->get_shadow_val(), original_len);
 	  }
 	  for (auto &remap : remaps) {
 	    auto remap_offset = remap.offset;
