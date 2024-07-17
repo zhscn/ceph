@@ -833,6 +833,7 @@ protected:
   }
 
   friend class Cache;
+  friend class LRUMemoryCache;
   template <typename T, typename... Args>
   static TCachedExtentRef<T> make_cached_extent_ref(
     Args&&... args) {
