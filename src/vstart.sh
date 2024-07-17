@@ -922,6 +922,10 @@ EOF
         seastore device size = $seastore_size"
       fi
       SEASTORE_OPTS+="
+        seastore_multiple_tiers_stop_evict_ratio=0.2
+        seastore_multiple_tiers_default_evict_ratio=0.3
+        seastore_multiple_tiers_fast_evict_ratio=0.4
+        crimson_test_workload=true
         seastore_main_device_type=$seastore_main_device_type
         seastore_main_backend_type=$seastore_main_backend_type
         seastore_secondary_device_type=$seastore_secondary_device_type
