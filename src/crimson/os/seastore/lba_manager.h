@@ -114,6 +114,7 @@ public:
     extent_ref_count_t refcount = 0;
     pladdr_t addr;
     extent_len_t length = 0;
+    paddr_t shadow_paddr;
   };
   using ref_iertr = base_iertr::extend<
     crimson::ct_error::enoent>;
@@ -180,10 +181,18 @@ public:
    * false: move all mappings(include indirect and zero mappings) to dst
    *    => return all mappings within dst~length
    */
+  struct remap_extent_ret_t {
+    remap_extent_ret_t() = default;
+    remap_extent_ret_t(std::list<LogicalCachedExtentRef> extents,
+                       std::list<LogicalCachedExtentRef> shadow_extents)
+        : extents(std::move(extents)),
+          shadow_extents(std::move(shadow_extents)) {}
+    std::list<LogicalCachedExtentRef> extents;
+    std::list<LogicalCachedExtentRef> shadow_extents;
+  };
   using remap_extent_func_t = std::function<
-    base_iertr::future<
-      std::list<LogicalCachedExtentRef>>(
-        LogicalCachedExtent *, LBAMappingRef, std::vector<remap_entry>)>;
+    base_iertr::future<remap_extent_ret_t>(
+      LogicalCachedExtent *, LBAMappingRef, std::vector<remap_entry>)>;
   using move_mappings_iertr = base_iertr;
   using move_mappings_ret = move_mappings_iertr::future<lba_pin_list_t>;
   virtual move_mappings_ret move_mappings(
@@ -233,7 +242,7 @@ public:
   using scan_mappings_iertr = base_iertr;
   using scan_mappings_ret = scan_mappings_iertr::future<>;
   using scan_mappings_func_t = std::function<
-    void(laddr_t, paddr_t, extent_len_t)>;
+    void(laddr_t, paddr_t, paddr_t, extent_len_t)>;
   virtual scan_mappings_ret scan_mappings(
     Transaction &t,
     laddr_t begin,
