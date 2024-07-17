@@ -1227,6 +1227,7 @@ private:
       uint64_t io_blocked_count_trim = 0;
       uint64_t io_blocked_count_clean = 0;
       uint64_t io_blocked_sum = 0;
+      uint64_t io_blocked_time = 0;
     } stats;
     seastar::metrics::metric_group metrics;
 
