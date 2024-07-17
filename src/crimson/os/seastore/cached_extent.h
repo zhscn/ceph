@@ -1211,6 +1211,14 @@ public:
     ceph_abort("impossible");
   }
 
+  virtual bool has_shadow_mapping() const {
+    return false;
+  }
+
+  virtual val_t get_shadow_val() const {
+    return min_max_t<val_t>::null;
+  }
+
   virtual ~PhysicalNodeMapping() {}
 protected:
   std::optional<child_pos_t> child_pos = std::nullopt;
