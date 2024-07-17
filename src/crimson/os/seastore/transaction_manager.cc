@@ -36,6 +36,7 @@ TransactionManager::TransactionManager(
     journal(std::move(_journal)),
     epm(std::move(_epm)),
     backref_manager(std::move(_backref_manager)),
+    nv_cache(nullptr),
     full_extent_integrity_check(
       crimson::common::get_conf<bool>(
         "seastore_full_integrity_check")),
@@ -537,6 +538,17 @@ TransactionManager::rewrite_logical_extent(
   TRACET("rewriting extent -- {}", t, *extent);
 
   auto lextent = extent->cast<LogicalCachedExtent>();
+  bool is_tracked =
+    support_non_volatile_cache() &&
+    // lextent is from hot tier
+    !epm->is_cold_device(lextent->get_paddr().get_device_id()) &&
+    // lextent will be evicted to the cold tier
+    epm->is_going_to_evict(*lextent) &&
+    // lextent is cached by non volatile cache
+    nv_cache->is_cached(
+      lextent->get_laddr().get_object_prefix(),
+      lextent->get_type());
+
   cache->retire_extent(t, extent);
   if (get_extent_category(lextent->get_type()) == data_category_t::METADATA) {
     auto nlextent = cache->alloc_new_extent_by_type(
@@ -545,7 +557,8 @@ TransactionManager::rewrite_logical_extent(
       lextent->get_length(),
       lextent->get_user_hint(),
       // get target rewrite generation
-      lextent->get_rewrite_generation())->cast<LogicalCachedExtent>();
+      lextent->get_rewrite_generation(),
+      is_tracked)->cast<LogicalCachedExtent>();
     nlextent->rewrite(t, *lextent, 0);
 
     DEBUGT("rewriting logical extent -- {} to {}", t, *lextent, *nlextent);
@@ -579,7 +592,8 @@ TransactionManager::rewrite_logical_extent(
       lextent->get_length(),
       lextent->get_user_hint(),
       // get target rewrite generation
-      lextent->get_rewrite_generation());
+      lextent->get_rewrite_generation(),
+      is_tracked);
     return seastar::do_with(
       std::move(extents),
       0,
@@ -726,7 +740,8 @@ TransactionManager::promote_extent(
     orig_ext->get_type(),
     orig_ext->get_length(),
     placement_hint_t::HOT,
-    INIT_GENERATION);
+    INIT_GENERATION,
+    true);
 
   std::vector<LogicalCachedExtentRef> promoted_extents;
   promoted_extents.reserve(promoted_raw_extents.size());
