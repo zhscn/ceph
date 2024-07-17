@@ -697,8 +697,74 @@ TransactionManager::promote_extent(
   Transaction &t,
   CachedExtentRef extent)
 {
-  // TODO
-  return rewrite_extent_iertr::make_ready_future();
+  LOG_PREFIX(TransactionManager::promote_extent);
+  assert(epm->get_main_backend_type() == backend_type_t::SEGMENTED);
+  assert(epm->is_cold_device(extent->get_paddr().get_device_id()));
+
+  DEBUGT("promote extent: {}", t, *extent);
+
+  if (!support_shadow_extent(extent->get_type())) {
+    auto mtime = extent->get_modify_time();
+    if (mtime == NULL_TIME) {
+      // XXX: is it appropriate?
+      mtime = seastar::lowres_system_clock::now();
+    }
+    return rewrite_extent(
+      t,
+      extent,
+      INIT_GENERATION,
+      mtime);
+  }
+  ceph_assert(extent->is_logical());
+
+  t.get_rewrite_version_stats().increment(extent->get_version());
+  cache->retire_extent(t, extent);
+
+  auto orig_ext = extent->cast<LogicalCachedExtent>();
+  auto promoted_raw_extents = cache->alloc_new_data_extents_by_type(
+    t,
+    orig_ext->get_type(),
+    orig_ext->get_length(),
+    placement_hint_t::HOT,
+    INIT_GENERATION);
+
+  std::vector<LogicalCachedExtentRef> promoted_extents;
+  promoted_extents.reserve(promoted_raw_extents.size());
+
+  extent_len_t offset = 0;
+  auto orig_laddr = orig_ext->get_laddr();
+  auto orig_paddr = orig_ext->get_paddr();
+  auto orig_length = orig_ext->get_length();
+  for (auto &extent : promoted_raw_extents) {
+    auto slice_laddr = orig_laddr + offset;
+    auto slice_length = extent->get_length();
+
+    auto lext = extent->cast<LogicalCachedExtent>();
+    lext->set_laddr(slice_laddr);
+    orig_ext->get_bptr().copy_out(
+      offset, slice_length, lext->get_bptr().c_str());
+    lext->set_last_committed_crc(lext->calc_crc32c());
+
+    promoted_extents.push_back(lext);
+
+    auto remapped_cold_extent = cache->alloc_remapped_extent_by_type(
+      t,
+      orig_ext->get_type(),
+      slice_laddr,
+      orig_paddr.add_offset(offset),
+      offset,
+      slice_length,
+      std::nullopt);
+    boost::ignore_unused(remapped_cold_extent);
+
+    offset += slice_length;
+  }
+  ceph_assert(offset == orig_length);
+
+  return lba_manager->promote_extent(
+    t,
+    orig_ext->get_laddr(),
+    std::move(promoted_extents));
 }
 
 TransactionManager::demote_region_ret

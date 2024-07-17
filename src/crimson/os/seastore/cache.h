@@ -1020,6 +1020,15 @@ public:
     return extent;
   }
 
+  CachedExtentRef alloc_remapped_extent_by_type(
+    Transaction &t,
+    extent_types_t type,
+    laddr_t remap_laddr,
+    paddr_t remap_paddr,
+    extent_len_t remap_offset,
+    extent_len_t remap_length,
+    const std::optional<ceph::bufferptr> &original_bptr);
+
   /**
    * alloc_new_extent
    *
@@ -1603,6 +1612,7 @@ private:
 
     version_stat_t committed_dirty_version;
     version_stat_t committed_reclaim_version;
+    version_stat_t committed_promote_version;
 
     uint64_t write_hit_hot;
     uint64_t write_hit_cold;
