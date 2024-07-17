@@ -1190,6 +1190,100 @@ BtreeLBAManager::update_mapping(
   );
 }
 
+BtreeLBAManager::demote_region_ret
+BtreeLBAManager::demote_region(
+  Transaction &t,
+  laddr_t laddr,
+  extent_len_t max_demote_size,
+  demote_extent_cb_t demote_cb)
+{
+  struct state_t {
+    state_t(laddr_t laddr, extent_len_t max_demote_size,
+            demote_extent_cb_t demote_cb)
+        : laddr(laddr), max_demote_size(max_demote_size),
+          demote_extent(std::move(demote_cb)) {}
+
+    laddr_t laddr;
+    extent_len_t max_demote_size;
+    demote_region_result_t res;
+    demote_extent_cb_t demote_extent;
+  };
+
+  LOG_PREFIX(BtreeLBAManager::demote_region);
+  TRACET("demote {} max_demote_size={}",
+	 t, laddr, max_demote_size);
+  assert(laddr == laddr.get_object_prefix());
+  auto c = get_context(t);
+  return with_btree_state<LBABtree, state_t>(
+    cache,
+    c,
+    state_t(laddr, max_demote_size, std::move(demote_cb)),
+    [c, FNAME](LBABtree &btree, state_t &state) {
+      return LBABtree::iterate_repeat(
+	c,
+	btree.upper_bound_right(c, state.laddr),
+	[c, &btree, &state, FNAME](LBABtree::iterator &iter) {
+	  bool completed = iter.is_end() ||
+	    iter.get_key().get_object_prefix() !=
+	    state.laddr.get_object_prefix();
+	  if (completed || state.res.demoted_size >= state.max_demote_size) {
+	    TRACET("finish demote", c.trans);
+	    state.res.completed = completed;
+	    return base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+	        seastar::stop_iteration::yes, std::nullopt);
+	  }
+	  auto val = iter.get_val();
+	  if (val.pladdr.is_laddr()) {
+	    ceph_assert(val.shadow_paddr == P_ADDR_NULL);
+	    return base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+	        seastar::stop_iteration::no, std::nullopt);
+	  } else if (val.shadow_paddr == P_ADDR_NULL) {
+	    return base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+	        seastar::stop_iteration::no, std::nullopt);
+	  }
+	  auto fut = demote_region_iertr::make_ready_future<
+	    LogicalCachedExtentRef>();
+	  if (auto ext = iter.get_pin(c)->get_logical_extent(c.trans);
+	      ext.has_child()) {
+	    fut = trans_intr::make_interruptible(
+	      std::move(ext.get_child_fut()));
+	  }
+	  return fut.si_then([c, &state, &iter, FNAME](auto extent) {
+	    auto val = iter.get_val();
+	    TRACET("demote {} {}", c.trans, iter.get_key(), val);
+	    ceph_assert(val.pladdr.get_paddr().get_device_id() !=
+			val.shadow_paddr.get_device_id());
+	    return state.demote_extent(
+	      extent.get(),
+	      iter.get_key(),
+	      val.pladdr.get_paddr(),
+	      val.shadow_paddr,
+	      val.len);
+	  }).si_then([c, &btree, &state, &iter, FNAME](auto extent) {
+	    assert(extent);
+	    auto val = iter.get_val();
+	    val.pladdr = pladdr_t(val.shadow_paddr);
+	    val.shadow_paddr = P_ADDR_NULL;
+	    TRACET("demote {} {} to {}",
+		   c.trans, iter.get_key(), iter.get_val(), val);
+	    state.res.demoted_size += val.len;
+	    return btree.update(c, iter, val, extent.get()
+	    ).si_then([&iter](auto next) {
+	      iter = next;
+	      return base_iertr::make_ready_future<
+		LBABtree::repeat_indicator_t>(
+	          seastar::stop_iteration::no, std::nullopt);
+	    });
+	  });
+	});
+    }).si_then([](auto &&state) {
+      return std::move(state.res);
+    });
+}
+
 BtreeLBAManager::get_physical_extent_if_live_ret
 BtreeLBAManager::get_physical_extent_if_live(
   Transaction &t,

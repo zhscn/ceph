@@ -752,9 +752,41 @@ TransactionManager::demote_region(
   laddr_t prefix,
   extent_len_t max_demote_size)
 {
-  // TODO
-  return demote_region_iertr::make_ready_future<demote_region_res_t>(
-    demote_region_res_t{0, false});
+  return lba_manager->demote_region(
+    t,
+    prefix,
+    max_demote_size,
+    [&t, this](LogicalCachedExtent *extent,
+	       laddr_t laddr,
+	       paddr_t paddr,
+	       paddr_t shadow_paddr,
+	       extent_len_t length) {
+      auto fut = base_iertr::make_ready_future();
+      if (extent) {
+	cache->retire_extent(t, extent);
+      } else {
+	fut = cache->retire_extent_addr(t, paddr, length);
+      }
+      return fut.si_then([&t, shadow_paddr, length, this] {
+	return cache->retire_extent_addr(t, shadow_paddr, length);
+      }).si_then([&t, laddr, shadow_paddr, length, this] {
+	auto extent = cache->alloc_remapped_extent_by_type(
+	  t,
+	  extent_types_t::OBJECT_DATA_BLOCK,
+	  laddr,
+	  shadow_paddr,
+	  0,
+	  length,
+	  std::nullopt);
+	return extent->cast<LogicalCachedExtent>();
+      });
+    }
+  ).si_then([](LBAManager::demote_region_result_t res) {
+    return demote_region_res_t{
+      res.demoted_size,
+      res.completed
+    };
+  });
 }
 
 TransactionManager::get_extents_if_live_ret
