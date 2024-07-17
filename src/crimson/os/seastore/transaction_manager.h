@@ -537,7 +537,7 @@ public:
 	  }
 	  return base_iertr::make_ready_future<TCachedExtentRef<T>>();
 	}).si_then([this, &t, &remaps, original_paddr, original_len,
-			    &extents, FNAME](auto ext) mutable {
+		    &pin, &extents, FNAME](auto ext) mutable {
 	  ceph_assert(full_extent_integrity_check
 	      ? (ext && ext->is_fully_loaded())
 	      : true);
@@ -571,11 +571,19 @@ public:
 	  } else {
 	    cache->retire_absent_extent_addr(t, original_paddr, original_len);
 	  }
+	  if (pin->has_shadow_mapping()) {
+	    cache->retire_absent_extent_addr(t, pin->get_shadow_val(), original_len);
+	  }
 	  for (auto &remap : remaps) {
 	    auto remap_offset = remap.offset;
 	    auto remap_len = remap.len;
 	    auto remap_laddr = remap.dst_laddr;
 	    auto remap_paddr = original_paddr.add_offset(remap_offset);
+	    auto shadow_paddr = P_ADDR_NULL;
+	    if (pin->has_shadow_mapping()) {
+	      assert(pin->get_shadow_val() != P_ADDR_NULL);
+	      shadow_paddr = pin->get_shadow_val().add_offset(remap_offset);
+	    }
 	    ceph_assert(remap_len < original_len);
 	    ceph_assert(remap_offset + remap_len <= original_len);
 	    ceph_assert(remap_len != 0);
@@ -600,6 +608,17 @@ public:
 	      std::move(orig_hint),
 	      std::move(orig_gen));
 	    extents.emplace_back(std::move(extent));
+	    if (shadow_paddr != P_ADDR_NULL) {
+	      SUBTRACET(seastore_tm, "remap shadow {}", t, shadow_paddr);
+	      auto cold_ext = cache->alloc_remapped_extent<T>(
+	        t,
+		remap_laddr,
+		shadow_paddr,
+		remap_offset,
+		remap_len,
+		std::nullopt);
+	      boost::ignore_unused(cold_ext);
+	    }
 	  }
 	  for (auto [off, len] : free_intervals) {
 	    // We must reclaim the paddr here, otherwise the alloc/free
@@ -608,6 +627,8 @@ public:
 	    epm->mark_space_free(paddr, len);
 	  }
 	});
+      } else { // pin->is_indirect()
+	ceph_assert(!pin->has_shadow_mapping());
       }
       return fut.si_then([this, &t, &pin, &remaps, &extents] {
 	return lba_manager->remap_mappings(
@@ -721,7 +742,7 @@ public:
 
   using remap_extent_iertr = base_iertr;
   template <typename T>
-  remap_extent_iertr::future<std::list<LogicalCachedExtentRef>>
+  remap_extent_iertr::future<LBAManager::remap_extent_ret_t>
   remap_extent(
     Transaction &t,
     LogicalCachedExtentRef extent,
@@ -730,6 +751,11 @@ public:
     auto paddr = mapping->get_val();
     std::optional<placement_hint_t> orig_hint = std::nullopt;
     std::optional<rewrite_gen_t> orig_gen = std::nullopt;
+    auto shadow_paddr = P_ADDR_NULL;
+    auto length = mapping->get_length();
+    if (mapping->has_shadow_mapping()) {
+      shadow_paddr = mapping->get_shadow_val();
+    }
     auto fut = base_iertr::make_ready_future<TCachedExtentRef<T>>();
     bool rbm_mutable_ext = false;
     interval_set<rbm_abs_addr> free_intervals;
@@ -764,13 +790,27 @@ public:
 	  TCachedExtentRef<T>>();
       });
     }
-    return fut.si_then([this, &t, paddr, orig_gen, orig_hint, rbm_mutable_ext,
-			free_intervals, remaps=std::move(remaps)]
-			(auto extent) mutable {
+    return fut.si_then([this, &t, shadow_paddr, length](auto extent) {
+      if (shadow_paddr != P_ADDR_NULL) {
+	return cache->retire_extent_addr(t, shadow_paddr, length
+	).si_then([extent=std::move(extent)] {
+	  return remap_extent_iertr::make_ready_future<
+	    TCachedExtentRef<T>>(std::move(extent));
+	});
+      } else {
+	return remap_extent_iertr::make_ready_future<
+	  TCachedExtentRef<T>>(std::move(extent));
+      }
+    }).si_then([this, &t, paddr, orig_gen, orig_hint, rbm_mutable_ext,
+		free_intervals, remaps=std::move(remaps), oext=extent,
+		shadow_paddr](auto extent) mutable {
+      LOG_PREFIX(TransactionManager::remap_extent);
       std::list<LogicalCachedExtentRef> res{};
+      std::list<LogicalCachedExtentRef> shadow_res{};
       for (auto &remap : remaps) {
 	auto remap_laddr = remap.dst_laddr;
 	auto remap_paddr = paddr.add_offset(remap.offset);
+	SUBTRACET(seastore_tm, "remap {} {} {}", t, remap_laddr, remap_paddr, remap.len);
 	auto ext = cache->alloc_remapped_extent<T>(
 	      t,
 	      remap_laddr,
@@ -788,6 +828,18 @@ public:
 	    remap_paddr.as_blk_paddr().get_device_off(),
 	    remap.len);
 	}
+	if (shadow_paddr != P_ADDR_NULL) {
+	  auto addr = shadow_paddr.add_offset(remap.offset);
+	  SUBTRACET(seastore_tm, "remap shadow {}", t, addr);
+	  auto ext = cache->alloc_remapped_extent<T>(
+	      t,
+	      remap_laddr,
+	      addr,
+	      remap.offset,
+	      remap.len,
+	      std::nullopt);
+	  shadow_res.emplace_back(std::move(ext));
+	}
       }
       for (auto [off, len] : free_intervals) {
 	// We must reclaim the paddr here, otherwise the alloc/free
@@ -796,7 +848,7 @@ public:
 	epm->mark_space_free(paddr, len);
       }
       return remap_extent_iertr::make_ready_future<
-	std::list<LogicalCachedExtentRef>>(std::move(res));
+	LBAManager::remap_extent_ret_t>(std::move(res), std::move(shadow_res));
     });
   }
 
@@ -814,7 +866,8 @@ public:
       [this, &t](LogicalCachedExtent* extent,
 		 LBAMappingRef mapping,
 		 std::vector<LBAManager::remap_entry> remaps) {
-      return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
+	ceph_assert(!mapping->is_indirect());
+	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
     });
   }
 
@@ -833,6 +886,7 @@ public:
       [this, &t](LogicalCachedExtent *extent,
 		 LBAMappingRef mapping,
 		 std::vector<LBAManager::remap_entry> remaps) {
+	ceph_assert(!mapping->is_indirect());
 	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
       });
   }
