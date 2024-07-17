@@ -113,6 +113,8 @@ Cache::retire_extent_ret Cache::retire_extent_addr(
 void Cache::retire_absent_extent_addr(
   Transaction &t, paddr_t addr, extent_len_t length)
 {
+  LOG_PREFIX(Cache::retire_absent_extent_addr);
+  TRACET("retire {}~{}", t, addr, length);
   CachedExtentRef ext;
 #ifndef NDEBUG
   auto result = t.get_extent(addr, &ext);
@@ -120,7 +122,6 @@ void Cache::retire_absent_extent_addr(
     && result != Transaction::get_extent_ret::RETIRED);
   assert(!query_cache(addr, nullptr));
 #endif
-  LOG_PREFIX(Cache::retire_absent_extent_addr);
   // add a new placeholder to Cache
   ext = CachedExtent::make_cached_extent_ref<
     RetiredExtentPlaceholder>(length);
