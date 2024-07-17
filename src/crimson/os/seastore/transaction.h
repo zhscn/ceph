@@ -455,6 +455,7 @@ public:
     backref_tree_stats = {};
     ool_write_stats = {};
     rewrite_version_stats = {};
+    obj_info.clear();
     conflicted = false;
     if (!has_reset) {
       has_reset = true;
@@ -555,6 +556,31 @@ public:
     return static_cast<T&>(*view);
   }
 
+  enum class obj_op_t : uint8_t {
+    ADD,
+    REMOVE
+  };
+
+  struct obj_info_t {
+    extent_types_t type = extent_types_t::NONE;
+    obj_op_t op = obj_op_t::ADD;
+  };
+
+  void update_obj_info(laddr_t laddr, extent_types_t type, obj_op_t op = obj_op_t::ADD) {
+    assert(laddr != L_ADDR_NULL);
+    auto p = obj_info.find(laddr);
+    if (p == obj_info.end()) {
+      obj_info[laddr] = obj_info_t{type, op};
+    } else {
+      assert(p->second.type == type);
+      p->second.op = op;
+    }
+  }
+
+  std::map<laddr_t, obj_info_t> &get_obj_info() {
+    return obj_info;
+  }
+
 private:
   friend class Cache;
   friend Ref make_test_transaction();
@@ -628,6 +654,8 @@ private:
    * Set of extents retired by *this.
    */
   pextent_set_t retired_set;
+
+  std::map<laddr_t, obj_info_t> obj_info;
 
   /// stats to collect when commit or invalidate
   tree_stats_t onode_tree_stats;
