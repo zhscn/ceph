@@ -15,6 +15,7 @@
 #include <boost/intrusive/avl_set.hpp>
 #include <optional>
 #include <vector>
+#include <seastar/core/metrics.hh>
 
 namespace crimson::os::seastore {
 
@@ -145,6 +146,8 @@ private:
   rbm_abs_addr find_block(size_t size);
   extent_len_t find_block(size_t size, rbm_abs_addr &start);
 
+  void register_metrics();
+
   using extent_tree_t = 
     boost::intrusive::avl_set<
       extent_range_t,
@@ -171,7 +174,9 @@ private:
   uint64_t base_addr = 0;
   uint64_t max_alloc_size = 4 << 20;
   bool detailed;
-  interval_set<rbm_abs_addr> reserved_extent_tracker; 
+  interval_set<rbm_abs_addr> reserved_extent_tracker;
+
+  seastar::metrics::metric_group metrics;
 };
 
 }

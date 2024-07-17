@@ -266,10 +266,7 @@ public:
 
 	  return throttler.get(1);
 	}).then([&, this] {
-	  assert(shard_stats.waiting_throttler_io_num);
-	  --(shard_stats.waiting_throttler_io_num);
-	  ++(shard_stats.processing_inlock_io_num);
-
+	  stats.inflight_io_count++;
 	  return repeat_eagain([&, this] {
 	    ++(shard_stats.repeat_io_num);
 
@@ -286,6 +283,7 @@ public:
 	      std::chrono::steady_clock::now() - ctx.begin_timestamp);
 	}).finally([this] {
 	  throttler.put();
+	  stats.inflight_io_count--;
 	});
       });
     }
@@ -299,6 +297,7 @@ public:
       op_type_t op_type,
       F &&f) const {
       auto begin_time = std::chrono::steady_clock::now();
+      stats.inflight_read_count++;
       return seastar::do_with(
         oid, Ret{}, std::forward<F>(f),
         [this, src, op_type, begin_time, tname
@@ -327,6 +326,8 @@ public:
                      std::chrono::steady_clock::now() - begin_time);
           return seastar::make_ready_future<Ret>(ret);
         });
+      }).finally([this] {
+	stats.inflight_read_count--;
       });
     }
 
@@ -484,8 +485,10 @@ public:
 
     static constexpr auto LAT_MAX = static_cast<std::size_t>(op_type_t::MAX);
 
-    struct {
+    mutable struct {
       std::array<seastar::metrics::histogram, LAT_MAX> op_lat;
+      uint64_t inflight_io_count = 0;
+      uint64_t inflight_read_count = 0;
     } stats;
 
     seastar::metrics::histogram& get_latency(
