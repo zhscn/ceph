@@ -194,3 +194,13 @@ options:
   level: dev
   desc: select write through policy when data length is greater than this value.
   default: 512_K
+- name: seastore_non_volatile_cache_capacity
+  type: size
+  level: advanced
+  desc: Size in bytes of memory used by non volatile cache
+  default: 200_M
+- name: seastore_non_volatile_cache_demote_size
+  type: size
+  level: advanced
+  desc: Size in bytes of extents to be demoted by non volatile cache
+  default: 2_M
