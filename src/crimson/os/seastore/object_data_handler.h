@@ -192,7 +192,8 @@ public:
   write_ret write(
     context_t ctx,
     objaddr_t offset,
-    const bufferlist &bl);
+    const bufferlist &bl,
+    bool dst_onode = false);
 
   using zero_iertr = base_iertr;
   using zero_ret = zero_iertr::future<>;
