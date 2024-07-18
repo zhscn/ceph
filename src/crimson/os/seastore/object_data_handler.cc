@@ -1000,10 +1000,12 @@ operate_ret operate_right(context_t ctx, LBAMappingRef &pin, const overwrite_pla
 template <typename F>
 auto with_object_data(
   ObjectDataHandler::context_t ctx,
-  F &&f)
+  F &&f,
+  bool dst = false)
 {
   return seastar::do_with(
-    ctx.onode.get_layout().object_data.get(),
+    (dst ? ctx.d_onode->get_layout().object_data.get()
+      : ctx.onode.get_layout().object_data.get()),
     std::forward<F>(f),
     [ctx](auto &object_data, auto &f) {
       return std::invoke(f, object_data
@@ -1437,7 +1439,8 @@ ObjectDataHandler::touch_ret ObjectDataHandler::touch(context_t ctx)
 ObjectDataHandler::write_ret ObjectDataHandler::write(
   context_t ctx,
   objaddr_t offset,
-  const bufferlist &bl)
+  const bufferlist &bl,
+  bool dst_onode)
 {
   return with_object_data(
     ctx,
@@ -1470,7 +1473,8 @@ ObjectDataHandler::write_ret ObjectDataHandler::write(
 	    bufferlist(bl), std::move(pins));
 	});
       });
-    });
+    },
+    dst_onode);
 }
 
 ObjectDataHandler::read_ret ObjectDataHandler::read(
@@ -1831,7 +1835,42 @@ ObjectDataHandler::clone_ret ObjectDataHandler::clone_range(
     [ctx, this, srcoff, length]
     (auto &object_data, auto &d_object_data) {
     assert(!d_object_data.is_null());
-    return _clone_range(ctx, object_data, d_object_data, srcoff, length, true);
+    auto aligned_soff = p2roundup((uint64_t)srcoff, laddr_t::UNIT_SIZE);
+    auto end = srcoff + length;
+    auto aligned_end = p2align((uint64_t)end, laddr_t::UNIT_SIZE);
+    auto fut = clone_iertr::now();
+    if (aligned_end > aligned_soff) {
+      auto aligned_len = aligned_end - aligned_soff;
+      fut = _clone_range(
+	ctx, object_data, d_object_data, aligned_soff, aligned_len, true);
+    }
+    return fut.si_then([end=std::min(aligned_soff, (uint64_t)end),
+			srcoff, this, ctx] {
+      if (!is_aligned(srcoff, ctx.tm.get_block_size())) {
+	return read(ctx, srcoff, end - srcoff
+	).si_then([this, ctx, srcoff](auto bl) {
+	  return seastar::do_with(
+	    std::move(bl),
+	    [this, ctx, srcoff](auto &bl) {
+	    return write(ctx, srcoff, bl, true);
+	  });
+	});
+      }
+      return base_iertr::now();
+    }).si_then([end, consider_copy=(end > aligned_soff),
+		aligned_end, this, ctx] {
+      if (consider_copy && !is_aligned(end, ctx.tm.get_block_size())) {
+	return read(ctx, aligned_end, end - aligned_end
+	).si_then([this, ctx, aligned_end](auto bl) {
+	  return seastar::do_with(
+	    std::move(bl),
+	    [this, ctx, aligned_end](auto &bl) {
+	    return write(ctx, aligned_end, bl, true);
+	  });
+	});
+      }
+      return base_iertr::now();
+    });
   }).handle_error_interruptible(
     ObjectDataHandler::clone_iertr::pass_further{},
     crimson::ct_error::assert_all{
@@ -1849,8 +1888,8 @@ ObjectDataHandler::clone_ret ObjectDataHandler::_clone_range(
   extent_len_t length,
   bool is_clone_range)
 {
-  srcoff = p2align((uint64_t)srcoff, laddr_t::UNIT_SIZE);
-  length = p2roundup((uint64_t)length, laddr_t::UNIT_SIZE);
+  assert(is_aligned(srcoff, ctx.tm.get_block_size()));
+  assert(is_aligned(srcoff + length, ctx.tm.get_block_size()));
   ceph_assert(!object_data.is_null());
   ceph_assert(!d_object_data.is_null());
   LOG_PREFIX(ObjectDataHandler::_clone_range);
