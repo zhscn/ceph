@@ -513,6 +513,53 @@ Context *PG::on_clean()
   return nullptr;
 }
 
+seastar::future<> PG::clear_ondisk_temp_objs()
+{
+  logger().info("{} {}", __func__, pgid);
+  return seastar::do_with(
+    ghobject_t(),
+    ceph::os::Transaction(),
+    (uint64_t)0,
+    [this](auto &_next, auto &t, auto &removed) {
+    return seastar::repeat([&_next, this, &t, &removed] {
+      return shard_services.get_store().list_objects(
+        coll_ref,
+        _next,
+        ghobject_t::get_max(),
+        local_conf()->osd_target_transaction_size
+      ).then([&_next, this, &t, &removed](auto p) {
+        auto &objs = std::get<0>(p);
+        auto &next = std::get<1>(p);
+        auto fut = seastar::now();
+        if (objs.empty()) {
+          if (!t.empty()) {
+            fut = shard_services.get_store().do_transaction(
+              coll_ref, std::move(t));
+          }
+          return fut.then([] { return seastar::stop_iteration::yes; });
+        }
+        for (auto &obj : objs) {
+          if (obj.hobj.is_temp()) {
+            t.remove(coll_ref->get_cid(), obj);
+            ++removed;
+          }
+        }
+        _next = next;
+        if (removed >= local_conf()->osd_target_transaction_size) {
+          removed = 0;
+          fut = shard_services.get_store().do_transaction(
+            coll_ref, std::move(t)
+          ).then([&t] {
+            t = ceph::os::Transaction();
+            return seastar::now();
+          });
+        }
+        return fut.then([] { return seastar::stop_iteration::no; });
+      });
+    });
+  });
+}
+
 PG::interruptible_future<seastar::stop_iteration> PG::trim_snap(
   snapid_t to_trim,
   bool needs_pause)

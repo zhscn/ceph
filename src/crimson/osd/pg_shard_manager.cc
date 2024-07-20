@@ -35,8 +35,10 @@ seastar::future<> PGShardManager::load_pgs(crimson::os::FuturizedStore& store)
 		pgid
 	      ).then([pgid, &per_shard_state](auto &&pg) {
 		logger().info("load_pgs: loaded {}", pgid);
-		per_shard_state.pg_map.pg_loaded(pgid, std::move(pg));
-		return seastar::now();
+		return pg->clear_ondisk_temp_objs(
+		).then([&per_shard_state, pg, pgid] {
+		  per_shard_state.pg_map.pg_loaded(pgid, std::move(pg));
+		});
 	      });
 	    });
           });
