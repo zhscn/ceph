@@ -257,8 +257,6 @@ protected:
     const hobject_t& target,
     eversion_t version) const;
 
-  boost::container::flat_set<hobject_t> temp_contents;
-
   void add_temp_obj(const hobject_t &oid);
   void clear_temp_obj(const hobject_t &oid);
 
