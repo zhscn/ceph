@@ -878,6 +878,9 @@ private:
     laddr_t laddr,
     extent_len_t length,
     bool determinsitic);
+  alloc_extents_ret _alloc_discrete_extents(
+    op_context_t<laddr_t> c,
+    std::vector<alloc_mapping_info_t> &alloc_infos);
 };
 using BtreeLBAManagerRef = std::unique_ptr<BtreeLBAManager>;
 
