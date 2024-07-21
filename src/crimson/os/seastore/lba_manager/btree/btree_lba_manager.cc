@@ -767,8 +767,7 @@ BtreeLBAManager::move_mappings(
 	  auto fut = alloc_extent_iertr::make_ready_future<
 	    std::vector<LBAMappingRef>>();
 	  if (!state.mappings.empty()) {
-	    auto base = state.mappings.front().key;
-	    fut = _alloc_extents(c.trans, base, state.mappings, true);
+	    fut = _alloc_discrete_extents(c, state.mappings);
 	  }
 	  return fut.si_then([&state, direct_mapping_only](auto mappings) {
 	    if (!direct_mapping_only) {
@@ -1292,6 +1291,79 @@ BtreeLBAManager::_update_mapping(
 	}
       });
     });
+}
+
+BtreeLBAManager::alloc_extents_ret
+BtreeLBAManager::_alloc_discrete_extents(
+  op_context_t<laddr_t> c,
+  std::vector<alloc_mapping_info_t> &alloc_infos)
+{
+  LOG_PREFIX(BtreeLBAManager::_alloc_discrete_extents);
+  ceph_assert(alloc_infos.front().key != L_ADDR_NULL);
+  return seastar::do_with(
+    alloc_infos.begin(),
+    [c, &alloc_infos, this, FNAME](auto &ai_iter) {
+    return with_btree_state<LBABtree, std::vector<LBAMappingRef>>(
+      cache,
+      c,
+      [c, &ai_iter, &alloc_infos, FNAME](auto &btree, auto &rets) {
+      return LBABtree::iterate_repeat(
+	c,
+	btree.upper_bound_right(c, ai_iter->key),
+	[c, &btree, &alloc_infos, &ai_iter, &rets, FNAME](auto &pos) {
+	if (ai_iter == alloc_infos.end()) {
+	  return LBABtree::base_iertr::make_ready_future<
+	    LBABtree::repeat_indicator_t>(
+	      seastar::stop_iteration::yes, std::nullopt);
+	}
+	if (pos.is_end()) {
+	  DEBUGT(
+	    "reached LBABtree end, alloc all "
+	    "the reset mappings in batch", c.trans);
+	  return trans_intr::do_for_each(
+	    ai_iter,
+	    alloc_infos.end(),
+	    [c, &btree, &pos, &rets](auto &alloc_info) {
+	    ceph_assert(alloc_info.key != L_ADDR_NULL);
+	    return btree.insert(
+	      c, pos, alloc_info.key, alloc_info.value, alloc_info.extent
+	    ).si_then([c, &rets](auto p) {
+	      assert(p.second);
+	      rets.emplace_back(p.first.get_pin(c));
+	      return p.first.next(c);
+	    }).si_then([&pos](auto it) {
+	      pos = it;
+	      return seastar::now();
+	    });
+	  }).si_then([] {
+	    return LBABtree::base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+		seastar::stop_iteration::yes, std::nullopt);
+	  });
+	} else if (pos.get_key() >= ai_iter->key + ai_iter->value.len) {
+	  DEBUGT("allocating {}~{} at {}",
+	    c.trans, ai_iter->key, ai_iter->value, pos.get_key());
+	  return btree.insert(
+	    c, pos, ai_iter->key, ai_iter->value, ai_iter->extent
+	  ).si_then([&pos, &ai_iter, c, &rets](auto p) {
+	    assert(p.second);
+	    rets.emplace_back(p.first.get_pin(c));
+	    pos = std::move(p.first);
+	    ai_iter++;
+	    return LBABtree::base_iertr::make_ready_future<
+	      LBABtree::repeat_indicator_t>(
+		seastar::stop_iteration::no, std::nullopt);
+	  });
+	} else {
+	  DEBUGT("hit stone {}~{}", c.trans, pos.get_key(), pos.get_val());
+	  ceph_assert(pos.get_key() + pos.get_val().len <= ai_iter->key);
+	  return LBABtree::base_iertr::make_ready_future<
+	    LBABtree::repeat_indicator_t>(
+	      seastar::stop_iteration::no, std::nullopt);
+	}
+      });
+    });
+  });
 }
 
 BtreeLBAManager::search_insert_pos_ret
