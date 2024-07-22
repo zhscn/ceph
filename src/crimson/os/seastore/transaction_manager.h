@@ -634,7 +634,7 @@ public:
 		remap_offset,
 		remap_len,
 		std::nullopt);
-	      boost::ignore_unused(cold_ext);
+	      cold_ext->set_shadow_extent(true);
 	    }
 	  }
 	  for (auto [off, len] : free_intervals) {
@@ -855,6 +855,7 @@ public:
 	      remap.offset,
 	      remap.len,
 	      std::nullopt);
+	  ext->set_shadow_extent(true);
 	  shadow_res.emplace_back(std::move(ext));
 	}
       }
