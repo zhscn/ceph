@@ -675,6 +675,14 @@ public:
     cache_state = state;
   }
 
+  bool is_shadow_extent() const {
+    return is_shadow;
+  }
+
+  void set_shadow_extent(bool b) {
+    is_shadow = b;
+  }
+
 private:
   template <typename T>
   friend class read_set_item_t;
@@ -683,6 +691,8 @@ private:
   friend struct ref_paddr_cmp;
   friend class ExtentIndex;
   friend struct trans_retired_extent_link_t;
+
+  bool is_shadow = false;
 
   /// Pointer to containing index (or null)
   ExtentIndex *parent_index = nullptr;

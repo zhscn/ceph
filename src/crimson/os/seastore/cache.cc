@@ -1809,8 +1809,10 @@ void Cache::complete_commit(
       } else {
 	assert(i->state == CachedExtent::extent_state_t::DIRTY);
       }
-      const auto t_src = t.get_src();
-      add_extent(i, &t_src);
+      if (!i->is_shadow_extent()) {
+	const auto t_src = t.get_src();
+	add_extent(i, &t_src);
+      }
     }
   }
   backref_batch_update(t.get_trans_id(), std::move(backref_list), start_seq);
