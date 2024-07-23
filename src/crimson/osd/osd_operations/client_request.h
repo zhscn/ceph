@@ -103,6 +103,7 @@ public:
       PGActivationBlocker::BlockingEvent,
       PGPipeline::RecoverMissing::BlockingEvent,
       scrub::PGScrubber::BlockingEvent,
+      PGPipeline::CheckAlreadyComplete::BlockingEvent,
       PGPipeline::GetOBC::BlockingEvent,
       PGPipeline::LockOBC::BlockingEvent,
       PGPipeline::Process::BlockingEvent,

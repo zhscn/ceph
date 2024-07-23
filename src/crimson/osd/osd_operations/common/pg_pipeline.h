@@ -20,6 +20,9 @@ protected:
   struct RecoverMissing : OrderedConcurrentPhaseT<RecoverMissing> {
     static constexpr auto type_name = "CommonPGPipeline::recover_missing";
   } recover_missing;
+  struct CheckAlreadyComplete : OrderedExclusivePhaseT<CheckAlreadyComplete> {
+    static constexpr auto type_name = "CommonPGPipeline::check_already_complete";
+  } check_already_complete;
   struct GetOBC : OrderedExclusivePhaseT<GetOBC> {
     static constexpr auto type_name = "CommonPGPipeline::get_obc";
   } get_obc;

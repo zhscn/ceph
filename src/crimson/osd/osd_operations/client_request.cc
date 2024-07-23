@@ -350,6 +350,8 @@ ClientRequest::process_op(
     }
   }
 
+  co_await ihref.enter_stage<interruptor>(
+    client_pp(*pg).check_already_complete, *this);
   DEBUGDPP("{}.{}: checking already_complete",
 	   *pg, *this, this_instance_id);
   auto completed = co_await pg->already_complete(m->get_reqid());
