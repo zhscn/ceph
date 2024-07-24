@@ -576,7 +576,11 @@ TransactionManager::rewrite_logical_extent(
     // lextent is from hot tier
     !epm->is_cold_device(lextent->get_paddr().get_device_id()) &&
     // lextent will be evicted to the cold tier
-    epm->is_going_to_evict(*lextent) &&
+    (
+#ifdef CRIMSON_TEST_WORKLOAD
+     crimson::common::get_conf<bool>("crimson_test_workload") ||
+#endif
+     epm->is_going_to_evict(*lextent)) &&
     // lextent is cached by non volatile cache
     nv_cache->is_cached(
       lextent->get_laddr().get_object_prefix(),

@@ -416,7 +416,8 @@ public:
 
     data_category_t category = get_extent_category(type);
     auto policy = write_policy_t::WRITE_BACK;
-    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked,
+                            is_background_transaction(t.get_src()));
 
     paddr_t addr;
 #ifdef UNIT_TESTS_BUILT
@@ -481,7 +482,8 @@ public:
     assert(gen == INIT_GENERATION || hint == placement_hint_t::REWRITE);
 
     data_category_t category = get_extent_category(type);
-    gen = adjust_generation(category, type, hint, policy, gen, is_tracked);
+    gen = adjust_generation(category, type, hint, policy, gen, is_tracked,
+                            is_background_transaction(t.get_src()));
     assert(gen != INLINE_GENERATION);
 
     // XXX: bp might be extended to point to different memory (e.g. PMem)
@@ -547,7 +549,8 @@ public:
       extent.get_user_hint(),
       extent.get_write_policy(),
       extent.get_rewrite_generation(),
-      false);
+      false,
+      true);
     return gen >= MIN_COLD_GENERATION;
   }
 
@@ -680,7 +683,8 @@ private:
       placement_hint_t hint,
       write_policy_t policy,
       rewrite_gen_t gen,
-      bool is_tracked) {
+      bool is_tracked,
+      bool is_background_transaction) {
     if (type == extent_types_t::ROOT) {
       gen = INLINE_GENERATION;
     } else if (get_main_backend_type() == backend_type_t::SEGMENTED &&
@@ -737,6 +741,20 @@ private:
     if (gen > dynamic_max_rewrite_generation) {
       gen = dynamic_max_rewrite_generation;
     }
+
+#ifdef CRIMSON_TEST_WORKLOAD
+    if (background_process.has_cold_tier() &&
+        gen < MIN_COLD_GENERATION &&
+        !is_tracked &&
+        is_background_transaction &&
+        category == data_category_t::DATA &&
+        (crimson::common::get_conf<bool>("crimson_test_workload") &&
+         (double(std::rand() % 10) / 10.0) <=
+             crimson::common::get_conf<double>(
+                 "seastore_test_workload_evict_probability"))) {
+      gen = MIN_COLD_GENERATION;
+    }
+#endif
 
     return gen;
   }
@@ -852,6 +870,18 @@ private:
       } else {
         memory_cache = nullptr;
       }
+
+#ifdef CRIMSON_TEST_WORKLOAD
+      LOG_PREFIX(BackgroundProcess::init);
+      test_workload = crimson::common::get_conf<bool>("crimson_test_workload");
+      force_process_half_life = crimson::common::get_conf<uint64_t>(
+	"seastore_test_workload_force_prcess_background_tasks_period");
+      force_background_timer.set_callback([this] { wake_half_life(); });
+      SUBINFO(seastore_epm, "crimson test workload supported, enabled: {}", test_workload);
+      if (test_workload) {
+        set_next_arm_timepoint();
+      }
+#endif
     }
 
     backend_type_t get_backend_type() const {
@@ -1261,6 +1291,43 @@ private:
     bool is_running_until_halt = false;
     state_t state = state_t::STOP;
     eviction_state_t eviction_state;
+
+#ifdef CRIMSON_TEST_WORKLOAD
+    enum class ForceProcessState {
+      STOP,
+      TRIM,
+      CLEAN,
+    };
+    bool test_workload = false;
+    ForceProcessState force_process_state = ForceProcessState::STOP;
+    ForceProcessState last_process_state = ForceProcessState::STOP;
+    seastar::timer<seastar::steady_clock_type> force_background_timer;
+    int force_process_half_life;
+
+    void set_next_arm_timepoint() {
+      assert(test_workload);
+      force_background_timer.arm(std::chrono::seconds(force_process_half_life));
+    }
+
+    void wake_half_life() {
+      assert(test_workload);
+      if (last_process_state == ForceProcessState::TRIM) {
+        force_process_state = ForceProcessState::CLEAN;
+      } else {
+        force_process_state = ForceProcessState::TRIM;
+      }
+
+      do_wake_background();
+    }
+#endif
+
+    bool force_run_background() const {
+#ifdef CRIMSON_TEST_WORKLOAD
+      return test_workload && force_process_state != ForceProcessState::STOP;
+#else
+      return false;
+#endif
+    }
 
     friend class ::transaction_manager_test_t;
   };
