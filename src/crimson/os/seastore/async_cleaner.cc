@@ -564,15 +564,15 @@ std::size_t JournalTrimmerImpl::get_alloc_journal_size() const
   return static_cast<std::size_t>(ret);
 }
 
-seastar::future<> JournalTrimmerImpl::trim() {
+seastar::future<> JournalTrimmerImpl::trim(bool force_trim) {
   auto point = timepoint_to_mod(seastar::lowres_system_clock::now());
   if (stats.trim_point != 0) {
     stats.trim_wait_time += point - stats.trim_point;
   }
   stats.trim_point = point;
   return seastar::when_all(
-    [this] {
-      if (should_trim_alloc()) {
+    [this, force_trim] {
+      if (force_trim || should_trim_alloc()) {
         return trim_alloc(
         ).handle_error(
           crimson::ct_error::assert_all{
@@ -583,8 +583,8 @@ seastar::future<> JournalTrimmerImpl::trim() {
         return seastar::now();
       }
     },
-    [this] {
-      if (should_trim_dirty()) {
+    [this, force_trim] {
+      if (force_trim || should_trim_dirty()) {
         return trim_dirty(
         ).handle_error(
           crimson::ct_error::assert_all{
