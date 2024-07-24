@@ -92,6 +92,7 @@
 %endif
 %endif
 %bcond_with seastar
+%bcond_with crimson_test_workload
 %if 0%{?suse_version} || 0%{?openEuler}
 %bcond_with jaeger
 %else
@@ -1520,6 +1521,9 @@ cmake .. \
 %if 0%{with seastar}
     -DWITH_SEASTAR:BOOL=ON \
     -DWITH_JAEGER:BOOL=OFF \
+%endif
+%if 0%{with crimson_test_workload}
+    -DENABLE_CRIMSON_TEST_WORKLOAD:BOOL=ON \
 %endif
     -DWITH_GRAFANA:BOOL=ON \
 %if 0%{with cephadm_bundling}
