@@ -1374,16 +1374,20 @@ SegmentCleaner::mount_ret SegmentCleaner::mount()
         segment_id
       ).safe_then([this, FNAME, segment_id, header](auto tail)
         -> scan_extents_ertr::future<> {
-        if (tail.segment_nonce != header.segment_nonce) {
+	bool tail_valid = (tail.segment_nonce == header.segment_nonce);
+        if (!tail_valid && header.type == segment_type_t::JOURNAL) {
           return scan_no_tail_segment(header, segment_id);
         }
-        ceph_assert(header.get_type() == tail.get_type());
+        ceph_assert(header.get_type() == tail.get_type() || !tail_valid);
 
-        sea_time_point modify_time = mod_to_timepoint(tail.modify_time);
-        std::size_t num_extents = tail.num_extents;
+        sea_time_point modify_time = mod_to_timepoint(
+	  tail_valid ? tail.modify_time : header.modify_time);
+        std::size_t num_extents = tail_valid ? tail.num_extents : 0;
         if ((modify_time == NULL_TIME && num_extents == 0) ||
-            (modify_time != NULL_TIME && num_extents != 0)) {
-          segments.update_modify_time(segment_id, modify_time, num_extents);
+	    modify_time != NULL_TIME) {
+	  DEBUG("updating modify time for segment {}, mod time {}, num_extents {}",
+	    segment_id, modify_time, num_extents);
+          segments.init_modify_time(segment_id, modify_time, num_extents);
         } else {
           ERROR("illegal modify time {}", tail);
           return crimson::ct_error::input_output_error::make();
@@ -1398,8 +1402,22 @@ SegmentCleaner::mount_ret SegmentCleaner::mount()
         return seastar::now();
       }).handle_error(
         crimson::ct_error::enodata::handle(
-          [this, header, segment_id](auto) {
-          return scan_no_tail_segment(header, segment_id);
+          [this, header, segment_id, FNAME](auto) {
+	  if (header.type == segment_type_t::JOURNAL) {
+	    return scan_no_tail_segment(header, segment_id);
+	  } else {
+	    sea_time_point modify_time = mod_to_timepoint(header.modify_time);
+	    DEBUG("updating modify time for segment {}, mod time {}",
+	      segment_id, modify_time);
+	    segments.init_modify_time(segment_id, modify_time, 0);
+	    init_mark_segment_closed(
+	      segment_id,
+	      header.segment_seq,
+	      header.type,
+	      header.category,
+	      header.generation);
+	    return scan_extents_ertr::now();
+	  }
         }),
         crimson::ct_error::pass_further_all{}
       );
