@@ -70,6 +70,11 @@ class LRUMemoryCache : public MemoryCache {
 
   seastar::metrics::metric_group metrics;
 
+#ifdef CRIMSON_TEST_WORKLOAD
+  bool test_workload = false;
+  size_t test_promote_count = 0;
+#endif
+
   void trim_to_capacity() {
     while (contents > capacity) {
       assert(lru.size() > 0);
@@ -184,6 +189,11 @@ public:
     LOG_PREFIX(LRUMemoryCache::LRUMemoryCache);
     INFO("memory_cache_capacity={}", capacity);
     register_metrics();
+#ifdef CRIMSON_TEST_WORKLOAD
+  test_workload = crimson::common::get_conf<bool>("crimson_test_workload");
+  test_promote_count = crimson::common::get_conf<
+    uint64_t>("seastore_test_workload_promote_extent_count");
+#endif
   }
 
   void remove_from_cache(CachedExtent &extent) final {
@@ -225,7 +235,12 @@ public:
   }
 
   bool should_promote() const final {
-    return promote_contents >= promotion_size / 2;
+    return promote_contents >= promotion_size / 2 ||
+#ifdef CRIMSON_TEST_WORKLOAD
+      (test_workload && promotion_list.size() >= test_promote_count);
+#else
+    false;
+#endif
   }
 
   seastar::future<> promote() {
