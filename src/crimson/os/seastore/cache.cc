@@ -51,6 +51,11 @@ Cache::Cache(
   INFO("created");
   register_metrics();
   segment_providers_by_device_id.resize(DEVICE_ID_MAX, nullptr);
+#ifdef CRIMSON_TEST_WORKLOAD
+  test_workload = crimson::common::get_conf<bool>("crimson_test_workload");
+  write_through_probability = crimson::common::get_conf<double>(
+    "seastore_test_workload_write_through_probability");
+#endif
 }
 
 Cache::~Cache()

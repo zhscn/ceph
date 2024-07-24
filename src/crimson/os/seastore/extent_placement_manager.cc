@@ -791,9 +791,19 @@ ExtentPlacementManager::BackgroundProcess::run()
           seastar::stop_iteration::yes);
     }
     return seastar::futurize_invoke([this] {
-      if (background_should_run()) {
+      if (background_should_run() || force_run_background()) {
         log_state("run(background)");
-        return do_background_cycle();
+        return do_background_cycle()
+#ifdef CRIMSON_TEST_WORKLOAD
+            .then([this] {
+          if (test_workload && force_process_state != ForceProcessState::STOP) {
+            last_process_state = force_process_state;
+            force_process_state = ForceProcessState::STOP;
+            set_next_arm_timepoint();
+          }
+        })
+#endif
+            ;
       } else {
         log_state("run(block)");
         ceph_assert(!blocking_background);
@@ -934,17 +944,32 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
     }
   }
 
+  bool force_trim = false;
+  bool should_abort_cleaner_usage = true;
+#ifdef CRIMSON_TEST_WORKLOAD
+  if (force_process_state == ForceProcessState::TRIM) {
+    if (!proceed_trim) {
+      should_abort_cleaner_usage = false;
+    }
+    proceed_trim = true;
+    force_trim = true;
+  }
+#endif
+
   if (proceed_trim) {
     DEBUG("started trimming...");
-    return trimmer->trim(
-    ).finally([this, trim_usage, FNAME] {
+    return trimmer->trim(force_trim
+    ).finally([this, trim_usage, should_abort_cleaner_usage, FNAME] {
       DEBUG("finished trimming");
-      abort_cleaner_usage(trim_usage, {true, true});
+      if (should_abort_cleaner_usage) {
+        abort_cleaner_usage(trim_usage, {true, true});
+      }
     });
   } else {
     assert(!proceed_trim);
     bool should_clean_main_for_trim =
       should_trim && !trim_reserve_res.reserve_main_success;
+    assert(main_cleaner->can_clean_space());
     bool should_clean_main =
       main_cleaner_should_run() || should_clean_main_for_trim;
     bool proceed_clean_main = false;
@@ -977,11 +1002,27 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
       proceed_demote = true;
     }
 
+    bool abort_cold_cleaner_usage = true;
+#ifdef CRIMSON_TEST_WORKLOAD
+    if (force_process_state == ForceProcessState::CLEAN) {
+      if (!proceed_clean_main) {
+        abort_cold_cleaner_usage = false;
+      }
+      proceed_clean_main = main_cleaner->can_clean_space();
+      if (has_cold_tier()) {
+        proceed_clean_cold = cold_cleaner->can_clean_space();
+      }
+      if (nv_cache) {
+        proceed_demote = nv_cache->could_demote();
+      }
+    }
+#endif
+
     if (!proceed_clean_main && !proceed_clean_cold && !proceed_demote) {
       ceph_abort("no background process will start");
     }
     return seastar::when_all(
-      [this, FNAME, proceed_clean_main,
+      [this, FNAME, proceed_clean_main, abort_cold_cleaner_usage,
        should_clean_main_for_trim, main_cold_usage] {
         if (!proceed_clean_main) {
           return seastar::now();
@@ -996,9 +1037,11 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
           crimson::ct_error::assert_all{
             "do_background_cycle encountered invalid error in main clean_space"
           }
-        ).finally([this, main_cold_usage, FNAME] {
+        ).finally([this, main_cold_usage, abort_cold_cleaner_usage, FNAME] {
           DEBUG("finished clean main");
-          abort_cold_usage(main_cold_usage, true);
+          if (abort_cold_cleaner_usage) {
+            abort_cold_usage(main_cold_usage, true);
+          }
         });
       },
       [this, FNAME, proceed_clean_cold,

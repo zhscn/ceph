@@ -917,6 +917,18 @@ public:
     if (length >= write_through_size && T::TYPE == extent_types_t::OBJECT_DATA_BLOCK) {
       policy = write_policy_t::WRITE_THROUGH;
     }
+
+#ifdef CRIMSON_TEST_WORKLOAD
+    if (test_workload &&
+	epm.has_cold_tier() &&
+	T::TYPE == extent_types_t::OBJECT_DATA_BLOCK &&
+	policy != write_policy_t::WRITE_THROUGH &&
+	!is_background_transaction(t.get_src()) && // random write through in test workload
+	(double(std::rand() % 100) / 100.0) <= write_through_probability) {
+      policy = write_policy_t::WRITE_THROUGH;
+    }
+#endif
+
 #ifdef UNIT_TESTS_BUILT
     auto results = epm.alloc_new_data_extents(t, T::TYPE, length, hint, policy, gen, epaddr, is_tracked);
 #else
@@ -1632,6 +1644,11 @@ private:
     tracer_t write_alloced{};
     tracer_t submit_record{};
   } stats;
+
+#ifdef CRIMSON_TEST_WORKLOAD
+  bool test_workload = false;
+  double write_through_probability = 0;
+#endif
 
   template <typename CounterT>
   CounterT& get_by_ext(
