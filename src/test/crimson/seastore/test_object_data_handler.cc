@@ -639,9 +639,9 @@ TEST_P(object_data_handler_test_t, remap_left) {
     write_right();
 
     auto pins = get_mappings(0, 128<<10);
-    EXPECT_EQ(pins.size(), 2);
+    EXPECT_EQ(pins.size(), 3);
 
-    size_t res[2] = {0, 64<<10};
+    size_t res[3] = {0, 64<<10, 124<<10};
     auto base = pins.front()->get_key();
     int i = 0;
     for (auto &pin : pins) {
@@ -673,9 +673,9 @@ TEST_P(object_data_handler_test_t, remap_right) {
     write_left();
 
     auto pins = get_mappings(0, 128<<10);
-    EXPECT_EQ(pins.size(), 2);
+    EXPECT_EQ(pins.size(), 3);
 
-    size_t res[2] = {0, 64<<10};
+    size_t res[3] = {0, 4<<10, 64<<10};
     auto base = pins.front()->get_key();
     int i = 0;
     for (auto &pin : pins) {
