@@ -311,16 +311,17 @@ FLTreeOnodeManager::get_latest_snap_and_head(
     ghobj,
     OnodeRef(nullptr),
     OnodeRef(nullptr),
-    [this, &trans, &ghobj, FNAME](ghobject_t &start, OnodeRef &snap, OnodeRef &head) {
+    L_ADDR_NULL,
+    [this, &trans, &ghobj, FNAME](ghobject_t &start, OnodeRef &snap, OnodeRef &head, laddr_t &prefix) {
       start.hobj.snap = 0;
       // FIXME: implement get_prev to avoid linear scanning
       return tree.lower_bound(trans, start
-      ).si_then([this, &trans, &ghobj, &snap, &head, FNAME](auto &&cursor) {
+      ).si_then([this, &trans, &ghobj, &snap, &head, &prefix, FNAME](auto &&cursor) {
         return seastar::do_with(
           std::move(cursor),
-          [this, &trans, &ghobj, &snap, &head, FNAME](auto &cursor) {
+          [this, &trans, &ghobj, &snap, &head, &prefix, FNAME](auto &cursor) {
             return trans_intr::repeat(
-	      [this, &trans, &ghobj, &snap, &head, &cursor, FNAME] {
+	      [this, &trans, &ghobj, &snap, &head, &cursor, &prefix, FNAME] {
               if (cursor.is_end()) {
 		TRACET("reached tree end, return", trans);
                 return get_latest_snap_and_head_iertr::make_ready_future<
@@ -332,6 +333,10 @@ FLTreeOnodeManager::get_latest_snap_and_head(
 		    default_metadata_range,
 		    ghobj.hobj,
 		    cursor.value()));
+                  auto obj_data = head->get_layout().object_data.get();
+                  if (prefix != L_ADDR_NULL && !obj_data.is_null()) {
+                    assert(prefix == obj_data.get_reserved_data_base().get_object_prefix());
+                  }
                 }
                 TRACET("reached ghobj, cursor {}, return", trans, cursor.get_ghobj());
                 return get_latest_snap_and_head_iertr::make_ready_future<
@@ -344,6 +349,14 @@ FLTreeOnodeManager::get_latest_snap_and_head(
 	      if (onode.is_fully_initialized()) {
 		DEBUGT("found onode {}", trans, (Onode&)onode);
 		snap.reset(new FLTreeOnode(std::move(onode)));
+                auto obj_data = snap->get_layout().object_data.get();
+                if (!obj_data.is_null()) {
+                  if (prefix == L_ADDR_NULL) {
+                    prefix = obj_data.get_reserved_data_base().get_object_prefix();
+                  } else {
+                    assert(prefix == obj_data.get_reserved_data_base().get_object_prefix());
+                  }
+                }
 	      } else {
 		DEBUGT("skipping invalid onode {}", trans, cursor.get_ghobj());
 	      }

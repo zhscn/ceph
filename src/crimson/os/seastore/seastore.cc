@@ -1848,11 +1848,33 @@ SeaStore::Shard::_do_transaction_step(
 	  *ctx.transaction,
 	  i.get_oid(op->oid),
 	  i.get_oid(op->dest_oid));
-	return _rename(
-	  ctx, onodes[op->oid], d_onodes[op->dest_oid]
-	).si_then([&onodes, &d_onodes, op] {
-	  onodes[op->oid].reset();
-	  d_onodes[op->oid].reset();
+	// TODO: only src is a recover onode needs to look up the
+	// prefix of dest onode
+	return seastar::do_with(i.get_oid(op->dest_oid), [&, this](auto &hobj) {
+	  hobj.hobj.snap = CEPH_NOSNAP;
+	  return onode_manager->get_latest_snap_and_head(
+	    *ctx.transaction, hobj
+	  ).si_then([&, op, this](auto res) {
+	    auto [latest, head] = std::move(res);
+	    auto get_onode_base = [](const OnodeRef &onode) {
+	      auto obj_data = onode->get_layout().object_data.get();
+	      return obj_data.is_null()
+		? L_ADDR_NULL
+		: obj_data.get_reserved_data_base();
+	    };
+
+	    auto hint = L_ADDR_NULL;
+	    if (head && get_onode_base(head).has_valid_prefix()) {
+	      hint = get_onode_base(head).get_object_prefix();
+	    } else if (latest && get_onode_base(latest).has_valid_prefix()) {
+	      hint = get_onode_base(latest).get_object_prefix();
+	    }
+	    return _rename(ctx, onodes[op->oid], d_onodes[op->dest_oid], hint
+	    ).si_then([&onodes, &d_onodes, op] {
+	      onodes[op->oid].reset();
+	      d_onodes[op->oid].reset();
+	    });
+	  });
 	});
       }
       default:
@@ -1892,7 +1914,8 @@ SeaStore::Shard::tm_ret
 SeaStore::Shard::_rename(
   internal_context_t &ctx,
   OnodeRef &onode,
-  OnodeRef &d_onode)
+  OnodeRef &d_onode,
+  laddr_t d_prefix)
 {
   LOG_PREFIX(SeaStore::_rename);
   DEBUGT("{} => {}", *ctx.transaction, *onode, *d_onode);
@@ -1927,7 +1950,11 @@ SeaStore::Shard::_rename(
       auto d_object_data = dlayout.object_data.get();
       assert(d_object_data.get_reserved_data_base() == L_ADDR_NULL);
 #endif
-      obase = d_onode->get_data_hint();
+      if (d_prefix == L_ADDR_NULL) {
+	obase = d_onode->get_data_hint();
+      } else {
+	obase = d_prefix.with_local_clone_id(olayout.local_clone_id);
+      }
       if (d_onode->get_hobj().is_head()) {
 	obase = obase.with_local_clone_id(0);
       }
