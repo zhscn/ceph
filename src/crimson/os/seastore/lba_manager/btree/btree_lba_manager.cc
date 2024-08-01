@@ -349,6 +349,8 @@ std::vector<LBAManager::remap_entry> build_remaps(
   const lba_map_val_t &pin_val)
 {
   LOG_PREFIX(build_remap_entries);
+  TRACET("src {} {} dst {} pin {} {}",
+	 t, src_base, length, dst_base, pin_key, pin_val);
   bool split_left = pin_key < src_base;
   bool split_right = src_base + length < pin_key + pin_val.len;
   std::vector<LBAManager::remap_entry> remaps;
@@ -414,6 +416,8 @@ BtreeLBAManager::_move_mapping_without_remap(
   lba_map_val_t &map_val,
   LBABtree &btree)
 {
+  LOG_PREFIX(BtreeLBAManager::_move_mapping_without_remap);
+  DEBUGT("{} {}", c.trans, laddr, map_val);
   auto fut = base_iertr::make_ready_future<remap_extent_ret_t>();
   if (map_val.pladdr.is_paddr() &&
       !map_val.pladdr.get_paddr().is_zero()) {
@@ -431,10 +435,11 @@ BtreeLBAManager::_move_mapping_without_remap(
 	  map_val));
     });
   }
-  return fut.si_then([c, &iter, &btree, &state, laddr, map_val](auto res) {
+  return fut.si_then([c, &iter, &btree, &state, laddr, map_val, FNAME](auto res) {
+    TRACET("remove mapping {}", c.trans, iter.get_key());
     return btree.remove(c, iter
-    ).si_then([&state, laddr, res=std::move(res),
-	      map_val](auto iter) mutable {
+    ).si_then([c, &state, laddr, res=std::move(res),
+	      map_val, FNAME](auto iter) mutable {
       auto nladdr = state.dst_base + (laddr - state.src_base);
       if (!res.extents.empty()) {
 	ceph_assert(res.extents.size() == 1);
@@ -446,8 +451,10 @@ BtreeLBAManager::_move_mapping_without_remap(
 	  auto &shadow_ext = res.shadow_extents.front();
 	  map_val.shadow_paddr = shadow_ext->get_paddr();
 	}
+	TRACET("construct mapping {} {} {}", c.trans, nladdr, map_val, (void*)ext.get());
 	state.mappings.emplace_back(nladdr, map_val, ext.get());
       } else {
+	TRACET("construct mapping {} {}", c.trans, nladdr, map_val);
 	state.mappings.emplace_back(nladdr, map_val, nullptr);
       }
       return move_mappings_iertr::make_ready_future<
@@ -514,6 +521,7 @@ BtreeLBAManager::_move_mapping_with_remap(
   bool split_right = laddr + map_val.len > state.get_src_end();
 
   LOG_PREFIX(BtreeLBAManager::_move_mapping_with_remap);
+  DEBUGT("{} {}", c.trans, laddr, map_val);
   return load_child_ext(c.trans, iter
   ).si_then([c, &state, &iter, laddr, map_val](auto ext) {
     return state.remap_extent(
