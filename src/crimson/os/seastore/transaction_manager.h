@@ -768,6 +768,7 @@ public:
     LogicalCachedExtentRef extent,
     LBAMappingRef mapping,
     std::vector<LBAManager::remap_entry> remaps) {
+    LOG_PREFIX(TransactionManager::remap_extent);
     auto paddr = mapping->get_val();
     std::optional<placement_hint_t> orig_hint = std::nullopt;
     std::optional<rewrite_gen_t> orig_gen = std::nullopt;
@@ -776,6 +777,8 @@ public:
     if (mapping->has_shadow_mapping()) {
       shadow_paddr = mapping->get_shadow_val();
     }
+    SUBDEBUGT(seastore_tm, "laddr: {}, paddr: {}, length: {}, shadow_paddr: {}, remaps: {}",
+	      t, mapping->get_key(), paddr, length, shadow_paddr, remaps.size());
     auto fut = base_iertr::make_ready_future<TCachedExtentRef<T>>();
     bool rbm_mutable_ext = false;
     interval_set<rbm_abs_addr> free_intervals;
@@ -823,14 +826,14 @@ public:
       }
     }).si_then([this, &t, paddr, orig_gen, orig_hint, rbm_mutable_ext,
 		free_intervals, remaps=std::move(remaps), oext=extent,
-		shadow_paddr](auto extent) mutable {
-      LOG_PREFIX(TransactionManager::remap_extent);
+		shadow_paddr, FNAME](auto extent) mutable {
       std::list<LogicalCachedExtentRef> res{};
       std::list<LogicalCachedExtentRef> shadow_res{};
       for (auto &remap : remaps) {
 	auto remap_laddr = remap.dst_laddr;
 	auto remap_paddr = paddr.add_offset(remap.offset);
-	SUBTRACET(seastore_tm, "remap {} {} {}", t, remap_laddr, remap_paddr, remap.len);
+	SUBTRACET(seastore_tm, "remap laddr {} paddr {} leng {}",
+		  t, remap_laddr, remap_paddr, remap.len);
 	auto ext = cache->alloc_remapped_extent<T>(
 	      t,
 	      remap_laddr,
