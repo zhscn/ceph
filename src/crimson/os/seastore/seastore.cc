@@ -1822,6 +1822,10 @@ SeaStore::Shard::_do_transaction_step(
 	  obj_data.update_reserved(r.removed_laddr, length);
 	  dest_onode->update_local_clone_id(*ctx.transaction, r.clone_id);
 	  dest_onode->update_object_data(*ctx.transaction, obj_data);
+	  auto id = local_clone_id_t(src_layout.local_clone_id);
+	  assert(id > 0 && id % 2 == 0);
+	  data_hint = obj_data.get_reserved_data_base()
+	    .with_local_clone_id(id - 1);
 	}
 	return _clone(ctx, onodes[op->oid], d_onodes[op->dest_oid], data_hint);
       }
@@ -2823,6 +2827,11 @@ SeaStore::Shard::process_touch_hint(
     }
   } else {
     // issued from other OSD
+    local_clone_id_t local_id = layout.local_clone_id;
+    DEBUGT("lock clone id: {}", *ctx.transaction, local_id);
+    if (local_id != LOCAL_CLONE_ID_NULL) {
+      assert(local_id >= input_id);
+    }
     onode->update_local_clone_id(*ctx.transaction, input_id);
     bool is_temp_obj =
       ghobj.hobj.oid.name.starts_with(TEMP_RECOVERING_OBJ_PREFIX);

@@ -432,7 +432,8 @@ BtreeLBAManager::_move_mapping_without_remap(
 	  state.length,
 	  state.dst_base,
 	  laddr,
-	  map_val));
+	  map_val),
+	true);
     });
   }
   return fut.si_then([c, &iter, &btree, &state, laddr, map_val, FNAME](auto res) {
@@ -533,7 +534,8 @@ BtreeLBAManager::_move_mapping_with_remap(
 	state.length,
 	state.dst_base,
 	laddr,
-	map_val));
+	map_val),
+      true);
   }).si_then([c, &btree, &state, &iter, FNAME](auto res) {
     std::swap(state.remapped_extents, res.extents);
     std::swap(state.remapped_shadow_extents, res.shadow_extents);
@@ -699,11 +701,16 @@ BtreeLBAManager::_merge_mapping(
     intermediate_key + val.len <= s_pin->get_key() + s_pin->get_length());
   extent_len_t offset = intermediate_key - s_pin->get_key();
   std::vector<LBAManager::remap_entry> remaps = {{key, offset, val.len}};
-  return load_child_ext(c.trans, iter
-  ).si_then([c, iter=std::move(iter), remaps=std::move(remaps), &state,
-	    offset, key, &btree, val, &s_pin](auto ext) mutable {
+  bool retire = state.retire_it(s_pin->get_val());
+  auto fut = merge_mappings_iertr::make_ready_future<LogicalCachedExtentRef>();
+  if (retire) {
+    fut = load_child_ext(c.trans, iter);
+  }
+  return fut.si_then([c, iter=std::move(iter), remaps=std::move(remaps),
+		      &state, offset, key, &btree, val, &s_pin, retire]
+		     (auto ext) mutable {
     return state.remap_extent(
-      ext.get(), s_pin->duplicate(), std::move(remaps)
+      ext.get(), s_pin->duplicate(), std::move(remaps), retire
     ).si_then([c, iter=std::move(iter), key, val, &s_pin,
 	      offset, &btree](auto res) mutable {
       assert(res.extents.size() == 1);

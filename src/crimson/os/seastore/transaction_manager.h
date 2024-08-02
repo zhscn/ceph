@@ -776,7 +776,8 @@ public:
     Transaction &t,
     LogicalCachedExtentRef extent,
     LBAMappingRef mapping,
-    std::vector<LBAManager::remap_entry> remaps) {
+    std::vector<LBAManager::remap_entry> remaps,
+    bool retire) {
     LOG_PREFIX(TransactionManager::remap_extent);
     auto paddr = mapping->get_val();
     std::optional<placement_hint_t> orig_hint = std::nullopt;
@@ -804,17 +805,21 @@ public:
 	  rbm_mutable_ext = true;
 	}
       }
-      cache->retire_extent(t, extent);
+      if (retire) {
+	cache->retire_extent(t, extent);
+      }
       fut = remap_extent_iertr::make_ready_future<
 	TCachedExtentRef<T>>(extent->template cast<T>());
     } else if (full_extent_integrity_check) {
-      fut =  read_pin<T>(t, std::move(mapping)
-      ).si_then([this, &t](auto ext) {
-	cache->retire_extent(t, ext);
+      fut = read_pin<T>(t, std::move(mapping)
+      ).si_then([this, &t, retire](auto ext) {
+	if (retire) {
+	  cache->retire_extent(t, ext);
+	}
 	return remap_extent_iertr::make_ready_future<
 	  TCachedExtentRef<T>>(ext);
       });
-    } else {
+    } else if (retire) {
       fut = cache->retire_extent_addr(
 	t, mapping->get_val(), mapping->get_length()
       ).si_then([] {
@@ -822,8 +827,8 @@ public:
 	  TCachedExtentRef<T>>();
       });
     }
-    return fut.si_then([this, &t, shadow_paddr, length](auto extent) {
-      if (shadow_paddr != P_ADDR_NULL) {
+    return fut.si_then([this, &t, shadow_paddr, length, retire](auto extent) {
+      if (retire && shadow_paddr != P_ADDR_NULL) {
 	return cache->retire_extent_addr(t, shadow_paddr, length
 	).si_then([extent=std::move(extent)] {
 	  return remap_extent_iertr::make_ready_future<
@@ -898,9 +903,10 @@ public:
       t, src_base, dst_base, length,
       [this, &t](LogicalCachedExtent* extent,
 		 LBAMappingRef mapping,
-		 std::vector<LBAManager::remap_entry> remaps) {
+		 std::vector<LBAManager::remap_entry> remaps,
+		 bool retire) {
 	ceph_assert(!mapping->is_indirect());
-	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
+	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps), retire);
     });
   }
 
@@ -918,9 +924,10 @@ public:
       t, src_base, dst_base, length, data_only,
       [this, &t](LogicalCachedExtent *extent,
 		 LBAMappingRef mapping,
-		 std::vector<LBAManager::remap_entry> remaps) {
+		 std::vector<LBAManager::remap_entry> remaps,
+		 bool retire) {
 	ceph_assert(!mapping->is_indirect());
-	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps));
+	return remap_extent<T>(t, extent, std::move(mapping), std::move(remaps), retire);
       });
   }
 
