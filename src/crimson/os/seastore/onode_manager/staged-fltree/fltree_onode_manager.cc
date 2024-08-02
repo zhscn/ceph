@@ -152,12 +152,16 @@ FLTreeOnodeManager::contains_onode_ret FLTreeOnodeManager::contains_onode(
   const ghobject_t &end)
 {
   return tree.lower_bound(trans, start
-  ).si_then([&start, &end](auto cursor) {
+  ).si_then([&trans, &start, &end](auto cursor) {
     if (cursor.is_end()) {
       return false;
     }
+    LOG_PREFIX(FLTreeOnodeManager::contains_onode);
     const auto &hobj = cursor.get_ghobj();
-    return hobj >= start && hobj <= end;
+    auto ret = (hobj >= start && hobj <= end);
+    DEBUGT("hit: {}, start: {}, end: {}, ret: {}",
+           trans, hobj, start, end, ret);
+    return ret;
   });
 }
 

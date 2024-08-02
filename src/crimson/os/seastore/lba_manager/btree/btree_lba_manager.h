@@ -752,9 +752,18 @@ private:
     lba_pin_list_t res;
     lba_pin_list_t::const_iterator src_it;
     std::list<LogicalCachedExtentRef> remapped_extents;
+    paddr_t retired_addr = P_ADDR_NULL;
 
     laddr_t get_src_end() const { return src_base + length; }
     laddr_t get_dst_end() const { return dst_base + length; }
+    bool retire_it(paddr_t addr) {
+      if (retired_addr != addr) {
+	retired_addr = addr;
+	return true;
+      } else {
+	return false;
+      }
+    }
 
     merge_mapping_state_t(
       laddr_t src_base, laddr_t dst_base, extent_len_t length,
