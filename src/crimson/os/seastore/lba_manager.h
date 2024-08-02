@@ -221,7 +221,7 @@ public:
   };
   using remap_extent_func_t = std::function<
     base_iertr::future<remap_extent_ret_t>(
-      LogicalCachedExtent *, LBAMappingRef, std::vector<remap_entry>)>;
+      LogicalCachedExtent *, LBAMappingRef, std::vector<remap_entry>, bool)>;
   using move_mappings_iertr = base_iertr;
   using move_mappings_ret = move_mappings_iertr::future<lba_pin_list_t>;
   virtual move_mappings_ret move_mappings(
