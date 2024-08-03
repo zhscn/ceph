@@ -506,7 +506,8 @@ public:
      }
 
     using process_touch_hint_iertr = tm_iertr;
-    using process_touch_hint_ret = process_touch_hint_iertr::future<laddr_t>;
+    using process_touch_hint_ret =
+      process_touch_hint_iertr::future<std::optional<laddr_t>>;
     process_touch_hint_ret process_touch_hint(
       internal_context_t &ctx,
       std::vector<OnodeRef> &onodes,

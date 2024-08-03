@@ -1701,7 +1701,10 @@ SeaStore::Shard::_do_transaction_step(
       {
 	return process_touch_hint(ctx, onodes, d_onodes, removed_info, i, op
 	).si_then([&ctx, &onodes, op, this](auto hint) {
-	  return _touch(ctx, onodes[op->oid], hint);
+	  if (hint) {
+	    return _touch(ctx, onodes[op->oid], *hint);
+	  }
+	  return tm_iertr::now();
 	});
       }
       case Transaction::OP_WRITE:
@@ -2823,23 +2826,29 @@ SeaStore::Shard::process_touch_hint(
     if (local_clone_id_t(layout.local_clone_id) != LOCAL_CLONE_ID_NULL) {
       assert(!layout.object_data.get().is_null());
       // onode extents, return directly
-      return tm_iertr::make_ready_future<laddr_t>(L_ADDR_NULL);
+      return tm_iertr::make_ready_future<
+	std::optional<laddr_t>>(L_ADDR_NULL);
     } else if (auto iter = removed_info.find(ghobj);
 	       iter != removed_info.end()) {
       auto &info = iter->second;
       onode->update_local_clone_id(*ctx.transaction, info.clone_id);
       ceph_assert(info.removed_laddr != L_ADDR_NULL);
-      return tm_iertr::make_ready_future<laddr_t>(info.removed_laddr);
+      return tm_iertr::make_ready_future<
+	std::optional<laddr_t>>(info.removed_laddr);
     } else {
       onode->update_local_clone_id(*ctx.transaction, 0);
-      return tm_iertr::make_ready_future<laddr_t>(L_ADDR_NULL);
+      return tm_iertr::make_ready_future<
+	std::optional<laddr_t>>(L_ADDR_NULL);
     }
   } else {
     // issued from other OSD
     local_clone_id_t local_id = layout.local_clone_id;
     DEBUGT("lock clone id: {}", *ctx.transaction, local_id);
-    if (local_id != LOCAL_CLONE_ID_NULL) {
-      assert(local_id >= input_id);
+    if (local_id != LOCAL_CLONE_ID_NULL && local_id > input_id) {
+      DEBUGT("local local_clone_id is larger, no need to recover",
+	*ctx.transaction);
+      return tm_iertr::make_ready_future<
+	std::optional<laddr_t>>(std::nullopt);
     }
     onode->update_local_clone_id(*ctx.transaction, input_id);
     bool is_temp_obj =
@@ -2861,7 +2870,8 @@ SeaStore::Shard::process_touch_hint(
 	if (target_is_head) {
 	  hint = hint.with_local_clone_id(0);
 	}
-	return tm_iertr::make_ready_future<laddr_t>(hint);
+	return tm_iertr::make_ready_future<
+	  std::optional<laddr_t>>(hint);
       }
     }
     return seastar::do_with(
@@ -2900,7 +2910,8 @@ SeaStore::Shard::process_touch_hint(
 	    hint = hint.with_recover();
 	  }
 	  ceph_assert(hint.without_local_clone_id() != L_ADDR_NULL);
-	  return tm_iertr::make_ready_future<laddr_t>(hint);
+	  return tm_iertr::make_ready_future<
+	    std::optional<laddr_t>>(hint);
 	});
       });
   }
