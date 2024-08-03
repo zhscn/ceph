@@ -1792,6 +1792,15 @@ SeaStore::Shard::_do_transaction_step(
 	auto &src_onode = onodes[op->oid];
 	auto &dest_onode = d_onodes[op->dest_oid];
 	TRACET("cloning {} to {}", *ctx.transaction, src_ghobj, dest_ghobj);
+	{
+	  auto dlayout = dest_onode->get_layout();
+	  auto d_obj_data = dlayout.object_data.get();
+	  if (d_obj_data.get_reserved_data_base() != L_ADDR_NULL) {
+	    DEBUGT("clone {} already existed, no further operation needed",
+	      *ctx.transaction, dest_ghobj);
+	    return tm_iertr::now();
+	  }
+	}
 	bool is_rollback = dest_ghobj.hobj.is_head();
 
 	auto data_hint = L_ADDR_NULL;
