@@ -510,7 +510,7 @@ TransactionManager::do_submit_transaction(
 	for (auto &p : tref.get_obj_info()) {
 	  if (p.second.op == Transaction::obj_op_t::ADD) {
 	    nv_cache->move_to_top(p.first, p.second.type, /*create_if_absent=*/true);
-	  } else {
+	  } else if (p.second.op == Transaction::obj_op_t::REMOVE) {
 	    nv_cache->remove(p.first, p.second.type);
 	  }
 	}
