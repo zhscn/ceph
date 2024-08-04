@@ -524,7 +524,8 @@ public:
 
   enum class obj_op_t : uint8_t {
     ADD,
-    REMOVE
+    REMOVE,
+    NOOP,
   };
 
   struct obj_info_t {
