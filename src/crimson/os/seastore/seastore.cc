@@ -1984,7 +1984,13 @@ SeaStore::Shard::_rename(
   } else {
     d_onode->update_object_data(*ctx.transaction, object_data);
   }
-  return fut.si_then([&ctx, &onode, this] {
+  return fut.si_then([&ctx, &onode, &d_onode, this] {
+    auto obj = d_onode->get_layout().object_data.get();
+    assert(!obj.is_null());
+    auto prefix = obj.get_reserved_data_base().get_object_prefix();
+    ctx.transaction->update_obj_info(
+      prefix, extent_types_t::OBJECT_DATA_BLOCK,
+      Transaction::obj_op_t::NOOP);
     return onode_manager->erase_onode(*ctx.transaction, onode);
   }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
@@ -2109,6 +2115,13 @@ SeaStore::Shard::_touch(
 	  hint,
 	  determinsitic
 	});
+    }).si_then([&ctx, &onode] {
+      auto obj = onode->get_layout().object_data.get();
+      assert(!obj.is_null());
+      auto prefix = obj.get_reserved_data_base().get_object_prefix();
+      ctx.transaction->update_obj_info(
+        prefix, extent_types_t::OBJECT_DATA_BLOCK,
+	Transaction::obj_op_t::NOOP);
     });
 }
 
@@ -2157,7 +2170,14 @@ SeaStore::Shard::_write(
 	  determinsitic
         },
         offset,
-        bl);
+        bl).si_then([&ctx, &onode] {
+	  auto obj = onode->get_layout().object_data.get();
+	  assert(!obj.is_null());
+	  auto prefix = obj.get_reserved_data_base().get_object_prefix();
+	  ctx.transaction->update_obj_info(
+	    prefix, extent_types_t::OBJECT_DATA_BLOCK,
+	    Transaction::obj_op_t::NOOP);
+	});
     });
 }
 
