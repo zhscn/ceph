@@ -2059,24 +2059,30 @@ SeaStore::Shard::_remove(
   }).si_then([this, &ctx, &hobj, onode, prefix]() mutable {
     return onode_manager->erase_onode(*ctx.transaction, onode
     ).si_then([this, &ctx, &hobj, prefix] {
-      return seastar::do_with(
-        hobj, hobj,
-	[this, &ctx, prefix](auto &start, auto &end) {
-	  start.hobj.snap = 0;
-	  end.hobj.snap = CEPH_SNAPDIR;
-	  return onode_manager->contains_onode(
-	    *ctx.transaction,
-	    start,
-	    end
-	  ).si_then([&ctx, prefix](auto result) {
-	    if (!result) {
-	      ctx.transaction->update_obj_info(
-	        prefix,
-		extent_types_t::OBJECT_DATA_BLOCK,
-		Transaction::obj_op_t::REMOVE);
-	    }
+      bool is_temp_obj =
+	hobj.hobj.oid.name.starts_with(TEMP_RECOVERING_OBJ_PREFIX);
+      if (!is_temp_obj) {
+	return seastar::do_with(
+          hobj, hobj,
+	  [this, &ctx, prefix](auto &start, auto &end) {
+	    start.hobj.snap = 0;
+	    end.hobj.snap = CEPH_SNAPDIR;
+	    return onode_manager->contains_onode(
+	      *ctx.transaction,
+	      start,
+	      end
+	    ).si_then([&ctx, prefix](auto result) {
+	      if (!result) {
+		ctx.transaction->update_obj_info(
+	          prefix,
+		  extent_types_t::OBJECT_DATA_BLOCK,
+		  Transaction::obj_op_t::REMOVE);
+	      }
+	    });
 	  });
-	});
+      } else {
+	return tm_iertr::make_ready_future();
+      }
     });
   }).handle_error_interruptible(
     crimson::ct_error::input_output_error::pass_further(),
