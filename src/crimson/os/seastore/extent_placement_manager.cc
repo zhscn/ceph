@@ -969,7 +969,6 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
     assert(!proceed_trim);
     bool should_clean_main_for_trim =
       should_trim && !trim_reserve_res.reserve_main_success;
-    assert(main_cleaner->can_clean_space());
     bool should_clean_main =
       main_cleaner_should_run() || should_clean_main_for_trim;
     bool proceed_clean_main = false;
@@ -1020,6 +1019,15 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
 
     if (!proceed_clean_main && !proceed_clean_cold && !proceed_demote) {
       ceph_abort("no background process will start");
+    }
+    if (proceed_clean_main) {
+      ceph_assert(main_cleaner->can_clean_space());
+    }
+    if (proceed_clean_cold) {
+      ceph_assert(cold_cleaner->can_clean_space());
+    }
+    if (proceed_demote) {
+      ceph_assert(nv_cache->could_demote());
     }
     return seastar::when_all(
       [this, FNAME, proceed_clean_main, abort_cold_cleaner_usage,
