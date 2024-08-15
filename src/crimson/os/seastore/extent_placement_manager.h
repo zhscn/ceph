@@ -1309,8 +1309,18 @@ private:
       force_background_timer.arm(std::chrono::seconds(force_process_half_life));
     }
 
+    bool could_force_start() const {
+      return main_cleaner->can_clean_space()
+        || (cold_cleaner && cold_cleaner->can_clean_space())
+        || (nv_cache && nv_cache->could_demote());
+    }
+
     void wake_half_life() {
       assert(test_workload);
+      if (!could_force_start()) {
+        set_next_arm_timepoint();
+        return;
+      }
       if (last_process_state == ForceProcessState::TRIM) {
         force_process_state = ForceProcessState::CLEAN;
       } else {
