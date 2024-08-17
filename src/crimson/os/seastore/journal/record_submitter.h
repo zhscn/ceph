@@ -36,10 +36,9 @@ public:
 
   virtual segment_nonce_t get_nonce() const  = 0;
 
-  virtual journal_seq_t get_written_to() const = 0;
-
   using write_ertr = base_ertr;
-  virtual write_ertr::future<> write(ceph::bufferlist&& to_write) = 0;
+  using write_ret = write_ertr::future<write_result_t>;
+  virtual write_ret write(ceph::bufferlist&& to_write) = 0;
 
   virtual bool can_write() const = 0;
   
@@ -102,10 +101,6 @@ public:
     return pending.size;
   }
 
-  std::optional<journal_seq_t> get_write_base() const {
-    return write_base;
-  }
-
   bool needs_flush() const {
     assert(state != state_t::SUBMITTING);
     assert(pending.get_size() <= batch_capacity);
@@ -149,33 +144,23 @@ public:
   // Add to the batch, the future will be resolved after the batch is
   // written.
   //
-  // write_base must be assigned when the state is empty
+  // Set write_result_t::write_length to 0 if the record is not the first one
+  // in the batch.
   using add_pending_ertr = JournalAllocator::write_ertr;
-  using add_pending_fut = add_pending_ertr::future<record_locator_t>;
-  struct add_pending_ret_t {
-    // The supposed record base if no metadata,
-    // only useful in case of ool.
-    journal_seq_t record_base_regardless_md;
-    add_pending_fut future;
-  };
-  add_pending_ret_t add_pending(
+  using add_pending_ret = add_pending_ertr::future<record_locator_t>;
+  add_pending_ret add_pending(
       const std::string& name,
       record_t&&,
-      extent_len_t block_size,
-      std::optional<journal_seq_t> maybe_write_base);
+      extent_len_t block_size);
 
   // Encode the batched records for write.
-  struct encode_ret_t {
-    journal_seq_t write_base;
-    ceph::bufferlist bl;
-  };
-  encode_ret_t encode_batch(
+  ceph::bufferlist encode_batch(
       const journal_seq_t& committed_to,
       segment_nonce_t segment_nonce);
 
   // Set the write result and reset for reuse
-  using maybe_result_t = std::optional<extent_len_t>;
-  void set_result(maybe_result_t maybe_write_length);
+  using maybe_result_t = std::optional<write_result_t>;
+  void set_result(maybe_result_t maybe_write_end_seq);
 
   // The fast path that is equivalent to submit a single record as a batch.
   //
@@ -202,8 +187,6 @@ private:
   std::size_t index = 0;
   std::size_t batch_capacity = 0;
   std::size_t batch_flush_size = 0;
-  // Valid at state_t::PENDING
-  std::optional<journal_seq_t> write_base;
 
   record_group_t pending;
   std::size_t submitting_size = 0;
@@ -211,7 +194,7 @@ private:
   extent_len_t submitting_mdlength = 0;
 
   struct promise_result_t {
-    extent_len_t write_length;
+    write_result_t write_result;
     extent_len_t mdlength;
   };
   using maybe_promise_result_t = std::optional<promise_result_t>;
@@ -281,7 +264,8 @@ public:
   roll_segment_ertr::future<> roll_segment();
 
   // when available, submit the record if possible
-  using submit_ret = RecordBatch::add_pending_ret_t;
+  using submit_ertr = base_ertr;
+  using submit_ret = submit_ertr::future<record_locator_t>;
   submit_ret submit(record_t&&, bool with_atomic_roll_segment=false);
 
   void update_committed_to(const journal_seq_t& new_committed_to) {

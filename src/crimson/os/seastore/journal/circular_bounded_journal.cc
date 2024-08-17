@@ -94,12 +94,9 @@ CircularBoundedJournal::do_submit_record(
 	(void*)&handle,
 	action == RecordSubmitter::action_t::SUBMIT_FULL ?
 	"FULL" : "NOT_FULL");
-  auto submit_ret = record_submitter.submit(std::move(record));
-  // submit_ret.record_base_regardless_md is wrong for journaling
+  auto submit_fut = record_submitter.submit(std::move(record));
   return handle.enter(write_pipeline->device_submission
-  ).then([&handle] {
-    return handle.take_write_future();
-  }).safe_then([submit_fut=std::move(submit_ret.future)]() mutable {
+  ).then([submit_fut=std::move(submit_fut)]() mutable {
     return std::move(submit_fut);
   }).safe_then([FNAME, this, &handle](record_locator_t result) {
     return handle.enter(write_pipeline->finalize

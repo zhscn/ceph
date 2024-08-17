@@ -115,7 +115,7 @@ private:
     Transaction& t,
     std::list<CachedExtentRef> &extent);
 
-  void write_record(
+  alloc_write_ertr::future<> write_record(
     Transaction& t,
     record_t&& record,
     std::list<LogicalCachedExtentRef> &&extents,
@@ -190,12 +190,7 @@ public:
   }
 #endif
 private:
-  struct write_info_t {
-    paddr_t offset;
-    ceph::bufferptr bp;
-    RandomBlockManager* rbm;
-  };
-  void do_write(
+  alloc_write_iertr::future<> do_write(
     Transaction& t,
     std::list<CachedExtentRef> &extent);
 
