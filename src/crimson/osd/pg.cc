@@ -1789,6 +1789,12 @@ void PG::remove_object_maybe_snapmapped(
   }
 }
 
+void PG::PGLogEntryHandler::remove(const hobject_t &soid) {
+  LOG_PREFIX(PG::PGLogEntryHandler::remove);
+  DEBUGDPP("remove {} on pglog rollback", *pg, soid);
+  pg->remove_object_maybe_snapmapped(*t, soid);
+}
+
 void PG::set_pglog_based_recovery_op(PglogBasedRecovery *op) {
   ceph_assert(!pglog_based_recovery_op);
   pglog_based_recovery_op = op;
