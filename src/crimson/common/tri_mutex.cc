@@ -75,7 +75,7 @@ void tri_mutex::unlock_for_read()
   DEBUGDPP("", *this);
   assert(readers > 0);
   if (--readers == 0) {
-    wake();
+    wake(type_t::none);
   }
 }
 
@@ -86,6 +86,7 @@ void tri_mutex::demote_to_read()
   assert(exclusively_used);
   exclusively_used = false;
   ++readers;
+  wake(type_t::read);
 }
 
 seastar::future<> tri_mutex::lock_for_write()
@@ -118,7 +119,7 @@ void tri_mutex::unlock_for_write()
   DEBUGDPP("", *this);
   assert(writers > 0);
   if (--writers == 0) {
-    wake();
+    wake(type_t::none);
   }
 }
 
@@ -129,6 +130,7 @@ void tri_mutex::demote_to_write()
   assert(exclusively_used);
   exclusively_used = false;
   ++writers;
+  wake(type_t::write);
 }
 
 // for exclusive users
@@ -163,7 +165,7 @@ void tri_mutex::unlock_for_excl()
   DEBUGDPP("", *this);
   assert(exclusively_used);
   exclusively_used = false;
-  wake();
+  wake(type_t::none);
 }
 
 bool tri_mutex::is_acquired() const
@@ -181,12 +183,11 @@ bool tri_mutex::is_acquired() const
   }
 }
 
-void tri_mutex::wake()
+void tri_mutex::wake(type_t type)
 {
   LOG_PREFIX(tri_mutex::wake());
   DEBUGDPP("", *this);
-  assert(!readers && !writers && !exclusively_used);
-  type_t type = type_t::none;
+  assert(!exclusively_used);
   while (!waiters.empty()) {
     auto& waiter = waiters.front();
     if (type == type_t::exclusive) {
