@@ -1110,7 +1110,7 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
 	ctx.t,
 	laddr,
 	length
-      ).si_then([ctx, size, &pins, &object_data, &to_write](auto _pins) {
+      ).si_then([ctx, size, &pins, &object_data, &to_write, FNAME](auto _pins) {
 	_pins.swap(pins);
 	ceph_assert(pins.size());
 	if (!size) {
@@ -1137,24 +1137,27 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
 	   * if aligned or rewrite it if not aligned to size */
           auto roundup_size = p2roundup(size, ctx.tm.get_block_size());
           auto append_len = roundup_size - size;
-          if (append_len == 0) {
-            LOG_PREFIX(ObjectDataHandler::trim_data_reservation);
-            TRACET("First pin overlaps the boundary and has aligned data"
+          if (append_len == 0 ||
+	      (pin.is_indirect() &&
+	       roundup_size - pin_offset < pin.get_length())) {
+	    // TODO: might be a security flaw if append_len is
+	    //       non-zero and the pin is indirect.
+            TRACET("First pin overlaps the boundary and has aligned data "
               "create existing at addr:{}, len:{}",
-              ctx.t, pin.get_key(), size - pin_offset);
+              ctx.t, pin.get_key(), roundup_size - pin_offset);
             to_write.push_back(extent_to_write_t::create_existing(
               pin.duplicate(),
               pin.get_key(),
-              size - pin_offset));
+              roundup_size - pin_offset));
 	    to_write.push_back(extent_to_write_t::create_zero(
 	      object_data.get_reserved_data_base() + roundup_size,
 	      object_data.get_reserved_data_len() - roundup_size));
             return clear_iertr::now();
-          } else {
+          } else if (!pin.is_indirect()) {
             return ctx.tm.read_pin<ObjectDataBlock>(
               ctx.t,
               pin.duplicate()
-            ).si_then([ctx, size, pin_offset, append_len, roundup_size,
+            ).si_then([ctx, size, pin_offset, append_len, roundup_size, FNAME,
                       &pin, &object_data, &to_write](auto extent) {
               bufferlist bl;
 	      bl.append(
@@ -1164,8 +1167,7 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
 	          size - pin_offset
 	      ));
               bl.append_zero(append_len);
-              LOG_PREFIX(ObjectDataHandler::trim_data_reservation);
-              TRACET("First pin overlaps the boundary and has unaligned data"
+              TRACET("First pin overlaps the boundary and has unaligned data "
                 "create data at addr:{}, len:{}",
                 ctx.t, pin.get_key(), bl.length());
 	      to_write.push_back(extent_to_write_t::create_data(
@@ -1176,7 +1178,20 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
 	        object_data.get_reserved_data_len() - roundup_size));
               return clear_iertr::now();
             });
-          }
+          } else {
+	    TRACET(
+	      "First pin {}~{}~{} overlaps the boundary but is "
+	      "indirect and adjustment needed, skipping",
+	      ctx.t,
+	      pin.get_key(),
+	      pin.get_intermediate_key(),
+	      pin.get_length());
+	    pins.pop_front();
+	    to_write.push_back(extent_to_write_t::create_zero(
+	      object_data.get_reserved_data_base() + roundup_size,
+	      object_data.get_reserved_data_len() - roundup_size));
+	    return clear_iertr::now();
+	  }
 	}
       }).si_then([ctx, size, &to_write, &object_data, &pins, this] {
         return seastar::do_with(
