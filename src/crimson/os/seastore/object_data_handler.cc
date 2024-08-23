@@ -1137,15 +1137,17 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
 	   * if aligned or rewrite it if not aligned to size */
           auto roundup_size = p2roundup(size, ctx.tm.get_block_size());
           auto append_len = roundup_size - size;
-          if (append_len == 0) {
+          if (append_len == 0 || pin.is_indirect()) {
+	    // TODO: might be a security flaw if append_len is
+	    //       non-zero and the pin is indirect.
             LOG_PREFIX(ObjectDataHandler::trim_data_reservation);
-            TRACET("First pin overlaps the boundary and has aligned data"
+            TRACET("First pin overlaps the boundary and has aligned data "
               "create existing at addr:{}, len:{}",
-              ctx.t, pin.get_key(), size - pin_offset);
+              ctx.t, pin.get_key(), roundup_size - pin_offset);
             to_write.push_back(extent_to_write_t::create_existing(
               pin.duplicate(),
               pin.get_key(),
-              size - pin_offset));
+              roundup_size - pin_offset));
 	    to_write.push_back(extent_to_write_t::create_zero(
 	      object_data.get_reserved_data_base() + roundup_size,
 	      object_data.get_reserved_data_len() - roundup_size));
@@ -1165,7 +1167,7 @@ ObjectDataHandler::clear_ret ObjectDataHandler::trim_data_reservation(
 	      ));
               bl.append_zero(append_len);
               LOG_PREFIX(ObjectDataHandler::trim_data_reservation);
-              TRACET("First pin overlaps the boundary and has unaligned data"
+              TRACET("First pin overlaps the boundary and has unaligned data "
                 "create data at addr:{}, len:{}",
                 ctx.t, pin.get_key(), bl.length());
 	      to_write.push_back(extent_to_write_t::create_data(
