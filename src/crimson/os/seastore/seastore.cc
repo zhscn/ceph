@@ -2558,6 +2558,10 @@ SeaStore::Shard::_truncate(
 {
   LOG_PREFIX(SeaStore::_truncate);
   DEBUGT("onode={} size={}", *ctx.transaction, *onode, size);
+  auto &layout = onode->get_layout();
+  if (layout.size == size) {
+    return tm_iertr::now();
+  }
   onode->update_onode_size(*ctx.transaction, size);
   return seastar::do_with(
     ObjectDataHandler(max_object_size),
