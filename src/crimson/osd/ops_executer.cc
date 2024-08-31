@@ -463,12 +463,18 @@ auto OpsExecuter::do_const_op(Func&& f) {
 // Defined here because there is a circular dependency between OpsExecuter and PG
 template <class Func>
 auto OpsExecuter::do_write_op(Func&& f, OpsExecuter::modified_by m) {
-  ++num_write;
   if (!osd_op_params) {
     osd_op_params.emplace();
     fill_op_params(m);
   }
-  return std::forward<Func>(f)(pg->get_backend(), obc->obs, txn);
+  using osd_op_iertr = interruptible_errorated_future<
+    OpsExecuter::osd_op_errorator>;
+  return ((osd_op_iertr)std::forward<Func>(f)(
+    pg->get_backend(), obc->obs, txn
+  )).si_then([this] {
+    ++num_write;
+    return seastar::now();
+  });
 }
 OpsExecuter::call_errorator::future<> OpsExecuter::do_assert_ver(
   OSDOp& osd_op,
@@ -1077,12 +1083,13 @@ OpsExecuter::OpsExecuter(Ref<PG> pg,
     snapc(_snapc)
 {
   if (op_info.may_write() && should_clone(*obc, snapc)) {
-    do_write_op([this](auto& backend, auto& os, auto& txn) {
+    std::ignore = do_write_op([this](auto& backend, auto& os, auto& txn) {
       cloning_ctx = execute_clone(std::as_const(snapc),
                                   std::as_const(obc->obs),
                                   std::as_const(obc->ssc->snapset),
                                   backend,
                                   txn);
+      return seastar::now();
     });
   }
 }
