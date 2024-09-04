@@ -127,6 +127,13 @@ private:
     }
   };
 
+  enum pre_cancel_state_t : uint8_t {
+    NONE,
+    INITIAL,
+    PRIMARY_SCANNING,
+    REPLICA_SCANNING,
+    WAITING
+  };
 public:
 
   // states
@@ -142,32 +149,29 @@ public:
       sc::custom_reaction<PrimaryScanned>,
       sc::custom_reaction<ReplicaScanned>,
       sc::custom_reaction<ObjectPushed>,
+      sc::custom_reaction<RequestDone>,
       sc::transition<sc::event_base, Crashed>>;
     explicit Cancelled(my_context);
     // resume after triggering backfill by on_activate_complete().
     // transit to Enqueuing.
     sc::result react(const Triggered&);
-    sc::result react(const PrimaryScanned&) {
-      return discard_event();
-    }
-    sc::result react(const ReplicaScanned&) {
-      return discard_event();
-    }
-    sc::result react(const ObjectPushed&) {
-      return discard_event();
-    }
+    sc::result react(const PrimaryScanned&);
+    sc::result react(const ReplicaScanned&);
+    sc::result react(const ObjectPushed&);
+    sc::result react(const RequestDone&);
   };
 
   struct Initial : sc::state<Initial, BackfillMachine>,
                    StateHelper<Initial> {
     using reactions = boost::mpl::list<
       sc::custom_reaction<Triggered>,
-      sc::transition<CancelBackfill, Cancelled>,
+      sc::custom_reaction<CancelBackfill>,
       sc::transition<sc::event_base, Crashed>>;
     explicit Initial(my_context);
     // initialize after triggering backfill by on_activate_complete().
     // transit to Enqueuing.
     sc::result react(const Triggered&);
+    sc::result react(CancelBackfill);
   };
 
   struct Enqueuing : sc::state<Enqueuing, BackfillMachine>,
@@ -233,12 +237,13 @@ public:
       sc::custom_reaction<ObjectPushed>,
       sc::custom_reaction<PrimaryScanned>,
       sc::transition<RequestDone, Done>,
-      sc::transition<CancelBackfill, Cancelled>,
+      sc::custom_reaction<CancelBackfill>,
       sc::transition<sc::event_base, Crashed>>;
     explicit PrimaryScanning(my_context);
     sc::result react(ObjectPushed);
     // collect scanning result and transit to Enqueuing.
     sc::result react(PrimaryScanned);
+    sc::result react(CancelBackfill);
   };
 
   struct ReplicasScanning : sc::state<ReplicasScanning, BackfillMachine>,
@@ -263,9 +268,6 @@ public:
     static bool replica_needs_scan(
       const BackfillInterval& replica_backfill_info,
       const BackfillInterval& local_backfill_info);
-
-  private:
-    std::set<pg_shard_t> waiting_on_backfill;
   };
 
   struct Waiting : sc::state<Waiting, BackfillMachine>,
@@ -273,10 +275,11 @@ public:
     using reactions = boost::mpl::list<
       sc::custom_reaction<ObjectPushed>,
       sc::transition<RequestDone, Done>,
-      sc::transition<CancelBackfill, Cancelled>,
+      sc::custom_reaction<CancelBackfill>,
       sc::transition<sc::event_base, Crashed>>;
     explicit Waiting(my_context);
     sc::result react(ObjectPushed);
+    sc::result react(CancelBackfill);
   };
 
   struct Done : sc::state<Done, BackfillMachine>,
@@ -313,7 +316,12 @@ private:
   std::map<pg_shard_t, BackfillInterval> peer_backfill_info;
   BackfillMachine backfill_machine;
   std::unique_ptr<ProgressTracker> progress_tracker;
+  std::set<pg_shard_t> waiting_on_backfill;
   size_t replicas_in_backfill = 0;
+  pre_cancel_state_t pre_cancel_state = pre_cancel_state_t::NONE;
+  bool resume_cancel_progress = false;
+  bool resume_cancel_done = false;
+  bool cancel_immediate_done = false;
 };
 
 // BackfillListener -- an interface used by the backfill FSM to request
@@ -377,6 +385,7 @@ struct BackfillState::PeeringFacade {
     const hobject_t &soid,
     const eversion_t &v,
     const std::vector<pg_shard_t> &peers) = 0;
+  virtual bool needs_backfill() const = 0;
   virtual ~PeeringFacade() {}
 };
 

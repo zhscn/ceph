@@ -63,18 +63,24 @@ BackfillState::BackfillMachine::~BackfillMachine() = default;
 BackfillState::Initial::Initial(my_context ctx)
   : my_base(ctx)
 {
-  backfill_state().last_backfill_started = peering_state().earliest_backfill();
-  logger().debug("{}: bft={} from {}",
-                 __func__, peering_state().get_backfill_targets(),
-                 backfill_state().last_backfill_started);
-  for (const auto& bt : peering_state().get_backfill_targets()) {
-    logger().debug("{}: target shard {} from {}",
-                   __func__, bt, peering_state().get_peer_last_backfill(bt));
+  if (backfill_state().pre_cancel_state == pre_cancel_state_t::NONE) {
+    backfill_state().last_backfill_started = peering_state().earliest_backfill();
+    logger().debug("{}: bft={} from {}",
+		   __func__, peering_state().get_backfill_targets(),
+		   backfill_state().last_backfill_started);
+    for (const auto& bt : peering_state().get_backfill_targets()) {
+      logger().debug("{}: target shard {} from {}",
+		     __func__, bt, peering_state().get_peer_last_backfill(bt));
+    }
+    ceph_assert(peering_state().get_backfill_targets().size());
+    ceph_assert(!backfill_state().last_backfill_started.is_max());
+    backfill_state().replicas_in_backfill =
+      peering_state().get_backfill_targets().size();
+  } else {
+    ceph_assert(backfill_state().pre_cancel_state ==
+      pre_cancel_state_t::INITIAL);
+    backfill_state().pre_cancel_state = pre_cancel_state_t::NONE;
   }
-  ceph_assert(peering_state().get_backfill_targets().size());
-  ceph_assert(!backfill_state().last_backfill_started.is_max());
-  backfill_state().replicas_in_backfill =
-    peering_state().get_backfill_targets().size();
 }
 
 boost::statechart::result
@@ -102,18 +108,92 @@ BackfillState::Initial::react(const BackfillState::Triggered& evt)
 }
 
 boost::statechart::result
+BackfillState::Initial::react(CancelBackfill evt)
+{
+  logger().debug("{}: cancelled within Initial", __func__);
+  backfill_state().pre_cancel_state = pre_cancel_state_t::INITIAL;
+  return transit<Cancelled>();
+}
+
+boost::statechart::result
 BackfillState::Cancelled::react(const BackfillState::Triggered& evt)
 {
   logger().debug("{}: backfill re-triggered", __func__);
   ceph_assert(peering_state().is_backfilling());
-  if (Enqueuing::all_enqueued(peering_state(),
-                              backfill_state().backfill_info,
-                              backfill_state().peer_backfill_info)) {
-    logger().debug("{}: switching to Done state", __func__);
+  auto &bs = backfill_state();
+  if (bs.resume_cancel_done) {
+    bs.resume_cancel_done = false;
+    bs.resume_cancel_progress = false;
+    bs.pre_cancel_state = pre_cancel_state_t::NONE;
+    return transit<BackfillState::Done>();
+  } else if (bs.resume_cancel_progress) {
+    bs.resume_cancel_progress = false;
+    bs.pre_cancel_state = pre_cancel_state_t::NONE;
+    return transit<BackfillState::Enqueuing>();
+  } else {
+    switch (bs.pre_cancel_state) {
+    case pre_cancel_state_t::INITIAL:
+      return transit<BackfillState::Initial>();
+    case pre_cancel_state_t::PRIMARY_SCANNING:
+      return transit<BackfillState::PrimaryScanning>();
+    case pre_cancel_state_t::REPLICA_SCANNING:
+      return transit<BackfillState::ReplicasScanning>();
+    case pre_cancel_state_t::WAITING:
+      return transit<BackfillState::Waiting>();
+    default:
+      ceph_abort("impossible");
+    }
+  }
+}
+
+boost::statechart::result
+BackfillState::Cancelled::react(const PrimaryScanned &evt)
+{
+  logger().debug("{} result={}", __func__, evt.result);
+  auto &bs = backfill_state();
+  ceph_assert(bs.pre_cancel_state == pre_cancel_state_t::PRIMARY_SCANNING);
+  bs.backfill_info = std::move(evt.result);
+  bs.resume_cancel_progress = true;
+  return discard_event();
+}
+
+boost::statechart::result
+BackfillState::Cancelled::react(const ReplicaScanned &evt)
+{
+  logger().debug("{}: got scan result from osd={}, result={}",
+                 __func__, evt.from, evt.result);
+  auto &bs = backfill_state();
+  ceph_assert(bs.pre_cancel_state == pre_cancel_state_t::REPLICA_SCANNING);
+  ceph_assert(peering_state().is_backfill_target(evt.from));
+  ceph_assert(bs.waiting_on_backfill.erase(evt.from));
+  bs.peer_backfill_info[evt.from] = std::move(evt.result);
+  if (bs.waiting_on_backfill.empty()) {
+    ceph_assert(bs.peer_backfill_info.size() == \
+		peering_state().get_backfill_targets().size());
+    bs.resume_cancel_progress = true;
+  }
+  return discard_event();
+}
+
+boost::statechart::result
+BackfillState::Cancelled::react(const ObjectPushed &evt)
+{
+  auto &bs = backfill_state();
+  ceph_assert(bs.pre_cancel_state > pre_cancel_state_t::INITIAL);
+  logger().debug("Cancelled::react() on ObjectPushed; evt.object={}",
+                 evt.object);
+  bs.progress_tracker->complete_to(evt.object, evt.stat);
+  bs.resume_cancel_progress = true;
+  return discard_event();
+}
+
+boost::statechart::result
+BackfillState::Cancelled::react(const RequestDone &) {
+  if (backfill_state().cancel_immediate_done) {
     return transit<BackfillState::Done>();
   } else {
-    logger().debug("{}: switching to Enqueuing state", __func__);
-    return transit<BackfillState::Enqueuing>();
+    backfill_state().resume_cancel_done = true;
+    return discard_event();
   }
 }
 
@@ -400,9 +480,15 @@ BackfillState::Enqueuing::Enqueuing(my_context ctx)
 BackfillState::PrimaryScanning::PrimaryScanning(my_context ctx)
   : my_base(ctx)
 {
-  backfill_state().backfill_info.version = peering_state().get_last_update();
-  backfill_listener().request_primary_scan(
-    backfill_state().backfill_info.begin);
+  auto &bs = backfill_state();
+  if (bs.pre_cancel_state == pre_cancel_state_t::NONE) {
+    backfill_state().backfill_info.version = peering_state().get_last_update();
+    backfill_listener().request_primary_scan(
+      backfill_state().backfill_info.begin);
+  } else {
+    ceph_assert(bs.pre_cancel_state == pre_cancel_state_t::PRIMARY_SCANNING);
+    bs.pre_cancel_state = pre_cancel_state_t::NONE;
+  }
 }
 
 boost::statechart::result
@@ -422,6 +508,15 @@ BackfillState::PrimaryScanning::react(ObjectPushed evt)
   return discard_event();
 }
 
+boost::statechart::result
+BackfillState::PrimaryScanning::react(CancelBackfill evt)
+{
+  logger().debug("{}: cancelled within PrimaryScanning",
+                 __func__);
+  backfill_state().pre_cancel_state = pre_cancel_state_t::PRIMARY_SCANNING;
+  return transit<Cancelled>();
+}
+
 // -- ReplicasScanning
 bool BackfillState::ReplicasScanning::replica_needs_scan(
   const BackfillInterval& replica_backfill_info,
@@ -435,20 +530,27 @@ bool BackfillState::ReplicasScanning::replica_needs_scan(
 BackfillState::ReplicasScanning::ReplicasScanning(my_context ctx)
   : my_base(ctx)
 {
-  for (const auto& bt : peering_state().get_backfill_targets()) {
-    if (const auto& pbi = backfill_state().peer_backfill_info.at(bt);
-        replica_needs_scan(pbi, backfill_state().backfill_info)) {
-      logger().debug("{}: scanning peer osd.{} from {}",
-                     __func__, bt, pbi.end);
-      backfill_listener().request_replica_scan(bt, pbi.end, hobject_t{});
+  auto &bs = backfill_state();
+  if (bs.pre_cancel_state == pre_cancel_state_t::NONE) {
+    for (const auto& bt : peering_state().get_backfill_targets()) {
+      if (const auto& pbi = bs.peer_backfill_info.at(bt);
+	  replica_needs_scan(pbi, backfill_state().backfill_info)) {
+	logger().debug("{}: scanning peer osd.{} from {}",
+		       __func__, bt, pbi.end);
+	backfill_listener().request_replica_scan(bt, pbi.end, hobject_t{});
 
-      ceph_assert(waiting_on_backfill.find(bt) == \
-                  waiting_on_backfill.end());
-      waiting_on_backfill.insert(bt);
+	ceph_assert(bs.waiting_on_backfill.find(bt) == \
+		    bs.waiting_on_backfill.end());
+	bs.waiting_on_backfill.insert(bt);
+      }
     }
+    ceph_assert(!bs.waiting_on_backfill.empty());
+    // TODO: start_recovery_op(hobject_t::get_max()); // XXX: was pbi.end
+  } else {
+    ceph_assert(bs.pre_cancel_state == pre_cancel_state_t::REPLICA_SCANNING);
+    bs.pre_cancel_state = pre_cancel_state_t::NONE;
   }
-  ceph_assert(!waiting_on_backfill.empty());
-  // TODO: start_recovery_op(hobject_t::get_max()); // XXX: was pbi.end
+
 }
 
 #if 0
@@ -463,13 +565,12 @@ BackfillState::ReplicasScanning::react(ReplicaScanned evt)
 {
   logger().debug("{}: got scan result from osd={}, result={}",
                  __func__, evt.from, evt.result);
-  // TODO: maybe we'll be able to move waiting_on_backfill from
-  // the machine to the state.
+  auto &bs = backfill_state();
   ceph_assert(peering_state().is_backfill_target(evt.from));
-  if (waiting_on_backfill.erase(evt.from)) {
-    backfill_state().peer_backfill_info[evt.from] = std::move(evt.result);
-    if (waiting_on_backfill.empty()) {
-      ceph_assert(backfill_state().peer_backfill_info.size() == \
+  if (bs.waiting_on_backfill.erase(evt.from)) {
+    bs.peer_backfill_info[evt.from] = std::move(evt.result);
+    if (bs.waiting_on_backfill.empty()) {
+      ceph_assert(bs.peer_backfill_info.size() == \
                   peering_state().get_backfill_targets().size());
       return transit<Enqueuing>();
     }
@@ -486,7 +587,7 @@ BackfillState::ReplicasScanning::react(CancelBackfill evt)
 {
   logger().debug("{}: cancelled within ReplicasScanning",
                  __func__);
-  waiting_on_backfill.clear();
+  backfill_state().pre_cancel_state = pre_cancel_state_t::REPLICA_SCANNING;
   return transit<Cancelled>();
 }
 
@@ -521,6 +622,17 @@ BackfillState::Waiting::react(ObjectPushed evt)
     logger().debug("Waiting::react() on ObjectPushed; still waiting");
     return discard_event();
   }
+}
+
+boost::statechart::result
+BackfillState::Waiting::react(CancelBackfill evt)
+{
+  logger().debug("{}: cancelled within Waiting", __func__);
+  backfill_state().pre_cancel_state = pre_cancel_state_t::WAITING;
+  if (!peering_state().needs_backfill()) {
+    backfill_state().cancel_immediate_done = true;
+  }
+  return transit<Cancelled>();
 }
 
 // -- Done

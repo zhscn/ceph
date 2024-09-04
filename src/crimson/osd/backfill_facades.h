@@ -58,6 +58,11 @@ struct PeeringFacade final : BackfillState::PeeringFacade {
     const std::vector<pg_shard_t> &peers) override {
     return peering_state.prepare_backfill_for_missing(soid, v, peers);
   }
+
+  bool needs_backfill() const override {
+    return peering_state.needs_backfill();
+  }
+
   PeeringFacade(PeeringState& peering_state)
     : peering_state(peering_state) {
   }
