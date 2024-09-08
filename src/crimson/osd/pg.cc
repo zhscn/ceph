@@ -975,9 +975,9 @@ PG::do_osd_ops_execute(
   FailureFunc&& failure_func)
 {
   assert(ox);
-  auto rollbacker = ox->create_rollbacker([this] (auto& obc) {
-    return obc_loader.reload_obc(obc).handle_error_interruptible(
-      load_obc_ertr::assert_all{"can't live with object state messed up"});
+  auto rollbacker = ox->create_rollbacker([object_context=*obc] (auto& obc) {
+    obc = object_context;
+    return interruptor::now();
   });
   auto failure_func_ptr = seastar::make_lw_shared(std::move(failure_func));
   return interruptor::do_for_each(ops, [ox](OSDOp& osd_op) {

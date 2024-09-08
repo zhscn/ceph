@@ -75,6 +75,16 @@ public:
 
   ObjectContext(hobject_t hoid) : lock(hoid),
                                   obs(std::move(hoid)) {}
+  ObjectContext(const ObjectContext &other)
+    : obs(other.obs),
+      ssc(new SnapSetContext(*other.ssc))
+  {}
+
+  ObjectContext& operator=(const ObjectContext &other) {
+    obs = other.obs;
+    ssc = new SnapSetContext(*other.ssc);
+    return *this;
+  }
 
   const hobject_t &get_oid() const {
     return obs.oi.soid;
