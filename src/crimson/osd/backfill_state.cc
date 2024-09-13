@@ -613,15 +613,7 @@ BackfillState::Waiting::react(ObjectPushed evt)
   logger().debug("Waiting::react() on ObjectPushed; evt.object={}",
                  evt.object);
   backfill_state().progress_tracker->complete_to(evt.object, evt.stat);
-  if (!Enqueuing::all_enqueued(peering_state(),
-                               backfill_state().backfill_info,
-                               backfill_state().peer_backfill_info)) {
-    return transit<Enqueuing>();
-  } else {
-    // we still have something to wait on
-    logger().debug("Waiting::react() on ObjectPushed; still waiting");
-    return discard_event();
-  }
+  return transit<Enqueuing>();;
 }
 
 boost::statechart::result
