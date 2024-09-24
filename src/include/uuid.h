@@ -60,7 +60,7 @@ struct uuid_d {
   }
 
   const char *bytes() const {
-    return (const char*)uuid.data;
+    return (const char*)(uuid.data());
   }
 
   void encode(::ceph::buffer::list::contiguous_appender& p) const {

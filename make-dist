@@ -191,10 +191,10 @@ ln -s . $outfile
 tar cvf $outfile.version.tar $outfile/src/.git_version $outfile/ceph.spec
 # NOTE: If you change this version number make sure the package is available
 # at the three URLs referenced below (may involve uploading to download.ceph.com)
-boost_version=1.85.0
-download_boost $boost_version 7009fe1faa1697476bdc7027703a2badb84e849b7b0baad5086b087b971f8617 \
-               https://download.ceph.com/qa \
-               https://archives.boost.io/release/$boost_version/source
+boost_version=1.86.0
+download_boost $boost_version 1bed88e40401b2cb7a1f76d4bab499e352fa4d0c5f31c0dbae64e24d34d7513b \
+               https://archives.boost.io/release/$boost_version/source \
+               https://download.ceph.com/qa
 download_liburing 2.5 456f5f882165630f0dc7b75e8fd53bd01a955d5d4720729b4323097e6e9f2a98 \
                   https://github.com/axboe/liburing/archive \
                   https://git.kernel.dk/cgit/liburing/snapshot

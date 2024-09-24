@@ -14,6 +14,8 @@
 #include "include/Context.h"
 #include "os/bluestore/Allocator.h"
 
+#include <boost/random/mersenne_twister.hpp>
+
 using namespace std;
 
 typedef boost::mt11213b gen_type;
