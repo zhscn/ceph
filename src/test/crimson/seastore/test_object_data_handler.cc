@@ -61,6 +61,22 @@ public:
     with_mutable_layout(t, [&odata](onode_layout_t &mlayout) {
       mlayout.object_data.update(odata);
     });
+    auto base = odata.get_reserved_data_base();
+    update_local_object_id(t, base.get_local_object_id());
+    update_local_clone_id(t, base.get_local_clone_id());
+  }
+
+  void update_local_object_id(Transaction &t, local_object_id_t id) final {
+    with_mutable_layout(t, [id](onode_layout_t &mlayout) {
+      ceph_assert(id != LOCAL_OBJECT_ID_ZERO);
+      mlayout.local_object_id = id;
+    });
+  }
+
+  void update_local_clone_id(Transaction &t, local_clone_id_t id) final {
+    with_mutable_layout(t, [id](onode_layout_t &mlayout) {
+      mlayout.local_clone_id = id;
+    });
   }
 
   void update_object_info(Transaction &t, ceph::bufferlist &oi_bl) final {
