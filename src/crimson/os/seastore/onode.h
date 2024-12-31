@@ -56,6 +56,57 @@ class Onode : public boost::intrusive_ref_counter<
 protected:
   virtual laddr_t get_hint() const = 0;
   const hobject_t hobj;
+
+#define DEF_ONODE_GET_ID(type)                                          \
+  std::optional<local_##type##_id_t> get_local_##type##_id() const {    \
+    std::optional<local_##type##_id_t> ret = std::nullopt;              \
+    bool check = false;                                                 \
+                                                                        \
+    const auto &layout = get_layout();                                  \
+    auto omap_root = layout.omap_root.get(L_ADDR_NULL);                 \
+    if (!omap_root.is_null()) {                                         \
+      check = true;                                                     \
+      ret.emplace(omap_root.addr.get_local_##type##_id());              \
+    }                                                                   \
+                                                                        \
+    auto xattr_root = layout.xattr_root.get(L_ADDR_NULL);               \
+    if (!xattr_root.is_null()) {                                        \
+      if (check) {                                                      \
+        ceph_assert(xattr_root.addr.get_local_##type##_id() == *ret);   \
+      } else {                                                          \
+        check = true;                                                   \
+        ret.emplace(xattr_root.addr.get_local_##type##_id());           \
+      }                                                                 \
+    }                                                                   \
+                                                                        \
+    if (auto o = layout.object_data.get(); !o.is_null()) {              \
+      auto addr = o.get_reserved_data_base();                           \
+      if (check) {                                                      \
+        ceph_assert(addr.get_local_##type##_id() == *ret);              \
+      } else {                                                          \
+        ret.emplace(addr.get_local_##type##_id());                      \
+      }                                                                 \
+    }                                                                   \
+                                                                        \
+    return ret;                                                         \
+  }
+
+  DEF_ONODE_GET_ID(object)
+  DEF_ONODE_GET_ID(clone)
+
+#undef DEF_ONODE_GET_ID
+
+  void validate_root_laddr(laddr_t laddr) const {
+    auto object_id = get_local_object_id();
+    if (object_id) {
+      ceph_assert(laddr.get_local_object_id() == *object_id);
+    }
+    auto clone_id = get_local_clone_id();
+    if (clone_id) {
+      ceph_assert(laddr.get_local_clone_id() == *clone_id);
+    }
+  }
+
 public:
   explicit Onode(const hobject_t &hobj) : hobj(hobj) {}
 
