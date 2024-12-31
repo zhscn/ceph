@@ -76,13 +76,13 @@ protected:
     bool check = false;                                                 \
                                                                         \
     const auto &layout = get_layout();                                  \
-    auto omap_root = layout.omap_root.get(L_ADDR_NULL);                 \
+    auto omap_root = layout.omap_root.get(LADDR_HINT_NULL);             \
     if (!omap_root.is_null()) {                                         \
       check = true;                                                     \
       ret.emplace(omap_root.addr.get_local_##type##_id());              \
     }                                                                   \
                                                                         \
-    auto xattr_root = layout.xattr_root.get(L_ADDR_NULL);               \
+    auto xattr_root = layout.xattr_root.get(LADDR_HINT_NULL);           \
     if (!xattr_root.is_null()) {                                        \
       if (check) {                                                      \
         ceph_assert(xattr_root.addr.get_local_##type##_id() == *ret);   \
