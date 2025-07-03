@@ -1070,6 +1070,7 @@ protected:
   friend class ExtentQueue;
   friend class ExtentPinboardLRU;
   friend class ExtentPinboardTwoQ;
+  friend class ExtentPromoter;
   template <typename T, typename... Args>
   static TCachedExtentRef<T> make_cached_extent_ref(
     Args&&... args) {

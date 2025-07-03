@@ -3,6 +3,7 @@
 
 #include "crimson/os/seastore/extent_pinboard.h"
 #include "crimson/os/seastore/transaction.h"
+#include "crimson/os/seastore/transaction_manager.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
 
@@ -270,8 +271,124 @@ void ExtentQueue::get_stats(
   last_overall_io = overall_io;
 }
 
+class ExtentPromoter {
+public:
+  ExtentPromoter(size_t promotion_size, ExtentPlacementManager &epm)
+      : promotion_size(promotion_size), epm(epm) {}
+
+  ~ExtentPromoter() {
+    clear();
+  }
+
+  bool enabled() const {
+    return promotion_size != 0;
+  }
+
+  bool should_promote_extent(const CachedExtent &extent) {
+    assert(enabled());
+    return epm.is_cold_device(extent.get_paddr().get_device_id());
+  }
+
+  size_t get_promotion_size() const {
+    return current_contents;
+  }
+
+  void set_background_callback(BackgroundListener *l) {
+    listener = l;
+  }
+
+  void set_extent_callback(ExtentCallbackInterface *cb) {
+    ecb = cb;
+  }
+
+  bool should_run_promote() const {
+    return enabled() && current_contents >= promotion_size;
+  }
+
+  void add_extent(CachedExtent &extent) {
+    assert(!extent.is_linked_to_list());
+    extent.set_pin_state(extent_pin_state_t::PendingPromote);
+    list.push_back(extent);
+    intrusive_ptr_add_ref(&extent);
+    while (current_contents > promotion_size) {
+      remove_extent(list.front());
+    }
+    if (should_run_promote()) {
+      listener->maybe_wake_background();
+    }
+  }
+
+  void remove_extent(CachedExtent &extent) {
+    assert(extent.is_linked_to_list());
+    assert(current_contents >= extent.get_length());
+    extent.set_pin_state(extent_pin_state_t::Fresh);
+    list.erase(list.s_iterator_to(extent));
+    intrusive_ptr_release(&extent);
+  }
+
+  void clear() {
+    for (auto iter = list.begin(); iter != list.end();) {
+      remove_extent(*(iter++));
+    }
+  }
+
+  seastar::future<> promote() {
+    LOG_PREFIX(ExtentPromoter::promote);
+    assert(enabled());
+    assert(epm.has_cold_tier());
+    return repeat_eagain([this, FNAME] {
+      return ecb->with_transaction_intr(
+        Transaction::src_t::PROMOTE,
+	"promote", cache_hint_t::get_nocache(),
+        [this, FNAME](auto &t) {
+          std::list<CachedExtentRef> extents;
+	  std::size_t promote_count = 0;
+	  std::size_t promote_size = 0;
+          for (auto &e : list) {
+	    DEBUG("promote {} {} to the hot tier", e, e.get_pin_state());
+	    promote_count++;
+	    promote_size += e.get_length();
+            t.add_to_read_set(&e);
+            extents.emplace_back(&e);
+          }
+          return seastar::do_with(
+            std::move(extents),
+            [this, promote_count, promote_size, &t, FNAME](auto &extents) {
+              return trans_intr::do_for_each(extents, [this, &t](auto &extent) {
+                ceph_assert(extent->is_stable_clean());
+		return trans_intr::make_interruptible(
+		  extent->wait_io()
+		).then_interruptible([this, &t, extent] {
+		  return ecb->promote_extent(t, extent);
+		});
+              }).si_then([this, &t] {
+                return ecb->submit_transaction_direct(t);
+              }).si_then([this, promote_count, promote_size, FNAME] {
+		promoted_count += promote_count,
+		promoted_size += promote_size;
+		TRACE("finished promoting {} {}B extents",
+		      promote_count, promote_size);
+	      });
+            });
+        });
+    }).handle_error(crimson::ct_error::assert_all{"error occupied during promotion"});
+  }
+
+private:
+  const size_t promotion_size;
+  ExtentPlacementManager &epm;
+  ExtentCallbackInterface *ecb;
+  BackgroundListener *listener;
+  CachedExtent::primary_ref_list list;
+  size_t current_contents;
+
+  size_t promoted_count;
+  size_t promoted_size;
+};
+
 class ExtentPinboardLRU : public ExtentPinboard {
   ExtentQueue lru;
+  ExtentPromoter promoter;
   seastar::metrics::metric_group metrics;
 
   // hit and miss indicates if an extent is linked when touching it
@@ -279,9 +396,11 @@ class ExtentPinboardLRU : public ExtentPinboard {
   uint64_t miss = 0;
 
 public:
-  ExtentPinboardLRU(std::size_t capacity) : lru(capacity) {
+  ExtentPinboardLRU(std::size_t capacity, size_t promotion_size, ExtentPlacementManager &epm)
+      : lru(capacity), promoter(promotion_size, epm) {
     LOG_PREFIX(ExtentPinboardLRU::ExtentPinboardLRU);
-    INFO("created, lru_capacity=0x{:x}B", capacity);
+    INFO("created, lru_capacity=0x{:x}B, promotion_size=0x{:x}B",
+	 capacity, promotion_size);
   }
 
   std::size_t get_capacity_bytes() const {
@@ -335,8 +454,18 @@ public:
   }
 
   void remove(CachedExtent &extent) final {
+    auto s = extent.get_pin_state();
     if (extent.is_linked_to_list()) {
-      lru.remove(extent);
+      if (s == extent_pin_state_t::Fresh) {
+	lru.remove(extent);
+      } else {
+	ceph_assert(s == extent_pin_state_t::PendingPromote);
+	ceph_assert(promoter.enabled());
+	promoter.remove_extent(extent);
+	extent.set_pin_state(extent_pin_state_t::Fresh);
+      }
+    } else {
+      ceph_assert(s == extent_pin_state_t::Fresh);
     }
   }
 
@@ -349,7 +478,12 @@ public:
       lru.move_to_top(extent, p_src);
       hit++;
     } else {
-      lru.add_to_top(extent, p_src);
+      auto trimmed = lru.add_to_top(extent, p_src);
+      if (promoter.enabled()) {
+	for (auto &extent : trimmed) {
+	  promoter.add_extent(*extent);
+	}
+      }
       miss++;
     }
   }
@@ -365,6 +499,27 @@ public:
 
   void clear() final {
     lru.clear();
+    promoter.clear();
+  }
+
+  void set_background_callback(BackgroundListener *listener) final {
+    promoter.set_background_callback(listener);
+  }
+
+  void set_extent_callback(ExtentCallbackInterface *cb) final {
+    promoter.set_extent_callback(cb);
+  }
+
+  std::size_t get_promotion_size() const final {
+    return promoter.get_promotion_size();
+  }
+
+  bool should_promote() const final {
+    return promoter.should_run_promote();
+  }
+
+  seastar::future<> promote() final {
+    return promoter.promote();
   }
 
   ~ExtentPinboardLRU() {
@@ -482,15 +637,18 @@ public:
   ExtentPinboardTwoQ(
     std::size_t warm_in_capacity,
     std::size_t warm_out_capacity,
-    std::size_t hot_capacity)
+    std::size_t hot_capacity,
+    std::size_t promotion_size,
+    ExtentPlacementManager &epm)
       : warm_in(warm_in_capacity),
 	warm_out(warm_out_capacity),
-	hot(hot_capacity)
+	hot(hot_capacity),
+	promoter(promotion_size, epm)
   {
     LOG_PREFIX(ExtentPinboardTwoQ::ExtentPinboardTwoQ);
-    INFO("created, warm_in_capacity=0x{:x}B, "
-	 "warm_out_capacity=0x{:x}B, hot_capacity=0x{:x}B",
-	 warm_in_capacity, warm_out_capacity, hot_capacity);
+    INFO("created, warm_in_capacity=0x{:x}B, warm_out_capacity=0x{:x}B, "
+	 "hot_capacity=0x{:x}B, promotion_size=0x{:x}B",
+	 warm_in_capacity, warm_out_capacity, hot_capacity, promotion_size);
   }
 
   std::size_t get_capacity_bytes() const {
@@ -517,6 +675,8 @@ public:
     if (extent.is_linked_to_list()) {
       if (s == extent_pin_state_t::WarmIn) {
 	warm_in.remove(extent);
+      } else if (s == extent_pin_state_t::PendingPromote) {
+	promoter.remove_extent(extent);
       } else {
 	ceph_assert(s == extent_pin_state_t::Hot);
 	hot.remove(extent);
@@ -536,6 +696,12 @@ public:
     if (extent.is_linked_to_list()) {
       if (state == extent_pin_state_t::Hot) {
 	hot.move_to_top(extent, p_src);
+	hit_queue(overall_hits.hot_hits, p_src, type);
+      } else if (state == extent_pin_state_t::PendingPromote) {
+	promoter.remove_extent(extent);
+	extent.set_pin_state(extent_pin_state_t::Hot);
+	auto trimmed_extents = hot.add_to_top(extent, p_src);
+	on_update_hot(trimmed_extents);
 	hit_queue(overall_hits.hot_hits, p_src, type);
       } else {
 	ceph_assert(state == extent_pin_state_t::WarmIn);
@@ -597,7 +763,7 @@ public:
 	auto trimmed_extents = warm_in.increase_cached_size(
 	  extent, increased_length, p_src);
 	on_update_warm_in(trimmed_extents);
-      } else {
+      } else if (state != extent_pin_state_t::PendingPromote) {
 	ceph_assert(state == extent_pin_state_t::Hot);
 	auto trimmed_extents = hot.increase_cached_size(
 	  extent, increased_length, p_src);
@@ -615,6 +781,23 @@ public:
     warm_in.clear();
     warm_out.clear();
     hot.clear();
+    promoter.clear();
+  }
+
+  void set_background_callback(BackgroundListener *listener) final {
+    promoter.set_background_callback(listener);
+  }
+  void set_extent_callback(ExtentCallbackInterface *cb) final {
+    promoter.set_extent_callback(cb);
+  }
+  std::size_t get_promotion_size() const final {
+    return promoter.get_promotion_size();
+  }
+  bool should_promote() const final {
+    return promoter.should_run_promote();
+  }
+  seastar::future<> promote() final {
+    return promoter.promote();
   }
 
   ~ExtentPinboardTwoQ() {
@@ -656,6 +839,7 @@ private:
   ExtentQueue warm_in;
   IndexedFifoQueue warm_out;
   ExtentQueue hot;
+  ExtentPromoter promoter;
   seastar::metrics::metric_group metrics;
 
   struct QueueCounter {
@@ -841,11 +1025,15 @@ void ExtentPinboardTwoQ::register_metrics() {
   );
 }
 
-ExtentPinboardRef create_extent_pinboard(std::size_t capacity) {
+ExtentPinboardRef create_extent_pinboard(std::size_t capacity, ExtentPlacementManager *epm) {
   using crimson::common::get_conf;
+  size_t promotion_size = 0;
+  if (epm->has_cold_tier()) {
+    promotion_size = get_conf<Option::size_t>("seastore_cache_promotion_size");
+  }
   auto algorithm = get_conf<std::string>("seastore_cachepin_type");
   if (algorithm == "LRU") {
-    return std::make_unique<ExtentPinboardLRU>(capacity);
+    return std::make_unique<ExtentPinboardLRU>(capacity, promotion_size, *epm);
   } else if (algorithm == "2Q") {
     auto warm_in_ratio = get_conf<double>("seastore_cachepin_2q_in_ratio");
     auto warm_out_ratio = get_conf<double>("seastore_cachepin_2q_out_ratio");
@@ -854,7 +1042,8 @@ ExtentPinboardRef create_extent_pinboard(std::size_t capacity) {
     return std::make_unique<ExtentPinboardTwoQ>(
       capacity * warm_in_ratio,
       capacity * warm_out_ratio,
-      capacity * (1 - warm_in_ratio));
+      capacity * (1 - warm_in_ratio),
+      promotion_size, *epm);
   } else {
     ceph_abort("invalid seastore_cachepin_type(LRU or 2Q)");
     return nullptr;
