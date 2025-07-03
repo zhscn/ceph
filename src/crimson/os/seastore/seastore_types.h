@@ -1676,7 +1676,12 @@ public:
 
   struct laddr_hash_t {
     std::size_t operator()(const laddr_t &laddr) const {
-      return static_cast<std::size_t>(laddr.value);
+      auto h = laddr.get_high64();
+      auto l = laddr.get_low64();
+      std::size_t seed = h ^ l;
+      boost::hash_combine(seed, h);
+      boost::hash_combine(seed, l);
+      return seed;
     }
   };
 private:
