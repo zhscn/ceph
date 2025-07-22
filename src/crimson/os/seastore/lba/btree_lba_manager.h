@@ -116,6 +116,7 @@ public:
     laddr_t dest_laddr,
     LBAMapping dest) final {
     assert(src.is_indirect());
+    assert(!src.indirect_cursor->has_shadow_paddr());
     return _move_mapping(
       t, std::move(src), dest_laddr, std::move(dest), nullptr);
   }
@@ -349,6 +350,7 @@ private:
 	{
 	  len,
 	  pladdr_t(P_ADDR_ZERO),
+	  P_ADDR_NULL,
 	  EXTENT_DEFAULT_REF_COUNT,
 	  0,
 	  type
@@ -363,6 +365,7 @@ private:
 	{
 	  len,
 	  pladdr_t(intermediate_key.get_local_clone_id()),
+	  P_ADDR_NULL,
 	  EXTENT_DEFAULT_REF_COUNT,
 	  0,	// crc will only be used and checked with LBA direct mappings
 		// also see pin_to_extent(_by_type)
@@ -379,7 +382,7 @@ private:
       LogicalChildNode& extent) {
       return {
 	laddr,
-	{len, pladdr_t(paddr), refcount, checksum, extent.get_type()},
+	{len, pladdr_t(paddr), P_ADDR_NULL, refcount, checksum, extent.get_type()},
 	&extent
       };
     }
@@ -452,6 +455,7 @@ private:
       return {v.laddr,
 	      val.refcount,
 	      val.pladdr,
+	      val.shadow_paddr,
 	      val.len,
 	      v.next->is_indirect()
 		? LBAMapping::create_indirect(nullptr, std::move(v.next))
@@ -462,7 +466,7 @@ private:
       assert(c.val);
       ceph_assert(!c.is_indirect());
       return {c.get_laddr(), c.val->refcount, 
-	c.val->pladdr, c.val->len,
+	c.val->pladdr, c.val->shadow_paddr, c.val->len,
 	LBAMapping::create_direct(result.take_cursor())};
     }
   }
