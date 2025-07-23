@@ -75,6 +75,11 @@ public:
     Transaction &t,
     LogicalChildNode &extent) final;
 
+  promote_extent_ret promote_extent(
+    Transaction &t,
+    laddr_t laddr,
+    std::vector<LogicalChildNodeRef> extents) final;
+
   alloc_extent_ret reserve_region(
     Transaction &t,
     LBAMapping pos,
@@ -390,6 +395,12 @@ private:
 
   op_context_t get_context(Transaction &t) {
     return op_context_t{cache, t};
+  }
+
+  base_iertr::future<LBABtree> get_btree(Transaction &t) {
+    return cache.get_root(t).si_then([](RootBlockRef croot) {
+      return LBABtree(croot);
+    });
   }
 
   seastar::metrics::metric_group metrics;
