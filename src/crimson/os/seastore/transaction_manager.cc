@@ -353,6 +353,33 @@ TransactionManager::relocate_logical_extent(
   )->cast<LogicalChildNode>();
 }
 
+TransactionManager::base_iertr::future<LogicalChildNodeRef>
+TransactionManager::relocate_shadow_extent(
+  Transaction &t, LBAMapping mapping)
+{
+  LOG_PREFIX(TransactionManager::relocate_shadow_extent);
+  SUBDEBUGT(seastore_tm, "relocate {}", t, mapping);
+  assert(mapping.has_shadow_val());
+  assert(!mapping.is_zero_reserved());
+  assert(mapping.is_viewable());
+  auto v = mapping.get_logical_extent(t);
+  if (!v.has_child()) {
+    cache->retire_absent_extent_addr(
+      t, mapping.get_val(), mapping.get_length());
+  } else {
+    auto extent = co_await v.get_child_fut().si_then([](auto ext) {
+      return ext;
+    });
+    cache->retire_extent(t, extent);
+  }
+  cache->retire_absent_extent_addr(
+    t, mapping.get_shadow_val(), mapping.get_length());
+  co_return cache->alloc_remapped_extent_by_type(
+    t, mapping.get_extent_type(), mapping.get_key(),
+    mapping.get_shadow_val(), 0, mapping.get_length(), std::nullopt
+  )->cast<LogicalChildNode>();
+}
+
 TransactionManager::move_region_ret
 TransactionManager::move_region(
   Transaction &t,
@@ -911,9 +938,31 @@ TransactionManager::demote_region(
   laddr_t start,
   loffset_t max_demote_size)
 {
-  // TODO
-  return demote_region_iertr::make_ready_future<demote_region_res_t>(
-    demote_region_res_t{0, false});
+  auto prefix = start.get_clone_prefix();
+  auto it = co_await lba_manager->upper_bound_right(
+    t, start
+  ).handle_error_interruptible(
+    demote_region_iertr::pass_further{},
+    crimson::ct_error::assert_all("unexpected enoent"));
+  demote_region_res_t ret{0, false};
+  while (ret.demote_size < max_demote_size) {
+    if (it.get_key().get_clone_prefix() == prefix) {
+      ret.completed = true;
+      break;
+    }
+    if (it.has_shadow_val()) {
+      auto extent = co_await relocate_shadow_extent(t, it);
+      LBAMapping nit = co_await lba_manager->demote_extent(t, it, *extent);
+      it = co_await nit.next();
+    } else {
+      auto extent = co_await read_pin_by_type(t, it, it.get_extent_type());
+      co_await rewrite_logical_extent(t, extent);
+      ret.demote_size += extent->get_length();
+      it = co_await it.next();
+    }
+  }
+
+  co_return ret;
 }
 
 TransactionManager::get_extents_if_live_ret
