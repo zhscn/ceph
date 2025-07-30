@@ -1612,6 +1612,9 @@ private:
       extent_len_t load_length)
   {
     assert(ext.get_paddr().is_absolute());
+    if (ext.is_shadow_extent()) {
+      return;
+    }
     if (hint == CACHE_HINT_NOCACHE && is_logical_type(ext.get_type())) {
       return;
     }
