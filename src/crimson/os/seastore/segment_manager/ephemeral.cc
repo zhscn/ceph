@@ -61,6 +61,7 @@ device_config_t get_ephemeral_device_config(
 	device_spec_t{
 	  magic,
 	  get_sec_dtype(secondary_index),
+	  backend_type_t::SEGMENTED,
 	  secondary_id
 	}
       });
@@ -75,6 +76,7 @@ device_config_t get_ephemeral_device_config(
           device_spec_t{
             magic,
 	    get_sec_dtype(index),
+	    backend_type_t::SEGMENTED,
             id
           },
           meta,
