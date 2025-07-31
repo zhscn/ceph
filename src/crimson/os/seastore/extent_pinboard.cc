@@ -314,7 +314,8 @@ public:
       remove_extent(list.front());
     }
     if (should_run_promote()) {
-      listener->maybe_wake_background();
+      assert(listener);
+      listener->maybe_wake_promote();
     }
   }
 
