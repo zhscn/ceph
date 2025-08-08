@@ -173,6 +173,10 @@ TransactionManager::mount()
 	    assert(backref_key == P_ADDR_NULL);
             cache->update_tree_extents_num(type, 1);
             epm->mark_space_used(paddr, len);
+	    if (support_logical_bucket() &&
+	      !epm->is_cold_device(paddr.get_device_id())) {
+	      logical_bucket->move_to_top(laddr.get_object_prefix(), true);
+	    }
           }
         });
       });
@@ -723,6 +727,12 @@ TransactionManager::do_submit_transaction(
     journal->get_trimmer().get_journal_head(),
     journal->get_trimmer().get_dirty_tail());
 
+  if (support_logical_bucket()) {
+    for (auto &prefix : tref.get_touched_laddr_prefix()) {
+      logical_bucket->move_to_top(prefix.get_object_prefix(), true);
+    }
+  }
+
   tref.get_handle().maybe_release_collection_lock();
   if (tref.get_src() == Transaction::src_t::MUTATE) {
     --(shard_stats.processing_inlock_io_num);
@@ -745,6 +755,7 @@ TransactionManager::do_submit_transaction(
     journal->get_trimmer().update_journal_tails(
       cache->get_oldest_dirty_from().value_or(start_seq),
       cache->get_oldest_backref_dirty_from().value_or(start_seq));
+
     }).handle_error(
       submit_transaction_iertr::pass_further{},
       crimson::ct_error::assert_all{"Hit error submitting to journal"}
@@ -1025,6 +1036,7 @@ TransactionManager::promote_extent(
     placement_hint_t::HOT,
     INIT_GENERATION,
     true);
+  t.touch_laddr_prefix(orig_ext->get_laddr().get_object_prefix());
 
   std::vector<LogicalChildNodeRef> promoted_extents;
   promoted_extents.reserve(promoted_raw_extents.size());
