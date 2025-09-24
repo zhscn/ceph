@@ -1793,7 +1793,10 @@ public:
   void release_projected_usage(size_t) final;
 
   bool should_block_io_on_clean() const final {
-    return false;
+    auto total = get_total_bytes();
+    auto jnl = get_journal_bytes();
+    auto used = stats.projected_used_bytes + stats.used_bytes;
+    return ((double)used / (double)(total - jnl)) > 0.95;
   }
 
   bool can_clean_space() const final {

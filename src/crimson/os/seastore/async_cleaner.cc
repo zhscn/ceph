@@ -1834,7 +1834,12 @@ bool RBMCleaner::try_reserve_projected_usage(std::size_t projected_usage)
 {
   assert(background_callback->is_ready());
   stats.projected_used_bytes += projected_usage;
-  return true;
+  if (should_block_io_on_clean()) {
+    stats.projected_used_bytes -= projected_usage;
+    return false;
+  } else {
+    return true;
+  }
 }
 
 void RBMCleaner::release_projected_usage(std::size_t projected_usage)
